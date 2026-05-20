@@ -83,6 +83,7 @@ import {
   updateMemoryEntry,
   writeBootstrapFile,
 } from './libs/openclawMemoryFile';
+import { collectReferencedEnvVarNames, pickReferencedSecretEnvVars } from './libs/openclawSecretEnv';
 import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
@@ -1325,18 +1326,31 @@ const syncOpenClawConfig = async (
 
   const nextSecretEnvVars = getOpenClawConfigSync().collectSecretEnvVars();
   const prevSecretEnvVars = getOpenClawEngineManager().getSecretEnvVars();
-  const secretEnvVarsChanged = JSON.stringify(nextSecretEnvVars) !== JSON.stringify(prevSecretEnvVars);
+  let referencedSecretEnvVarNames: Set<string> | null = null;
+  try {
+    const configText = fs.readFileSync(getOpenClawEngineManager().getConfigPath(), 'utf8');
+    referencedSecretEnvVarNames = collectReferencedEnvVarNames(configText);
+  } catch (error) {
+    console.warn('[OpenClawConfigSync] failed to inspect referenced secret env vars, comparing all secrets:', error);
+  }
+  const effectiveNextSecretEnvVars = referencedSecretEnvVarNames
+    ? pickReferencedSecretEnvVars(nextSecretEnvVars, referencedSecretEnvVarNames)
+    : nextSecretEnvVars;
+  const effectivePrevSecretEnvVars = referencedSecretEnvVarNames
+    ? pickReferencedSecretEnvVars(prevSecretEnvVars, referencedSecretEnvVarNames)
+    : prevSecretEnvVars;
+  const secretEnvVarsChanged = JSON.stringify(effectiveNextSecretEnvVars) !== JSON.stringify(effectivePrevSecretEnvVars);
   getOpenClawEngineManager().setSecretEnvVars(nextSecretEnvVars);
 
   // Diagnostic: print which env vars changed
   if (secretEnvVarsChanged) {
-    const allKeys = new Set([...Object.keys(prevSecretEnvVars), ...Object.keys(nextSecretEnvVars)]);
+    const allKeys = new Set([...Object.keys(effectivePrevSecretEnvVars), ...Object.keys(effectiveNextSecretEnvVars)]);
     const added: string[] = [];
     const removed: string[] = [];
     const modified: string[] = [];
     for (const k of allKeys) {
-      const prev = prevSecretEnvVars[k];
-      const next = nextSecretEnvVars[k];
+      const prev = effectivePrevSecretEnvVars[k];
+      const next = effectiveNextSecretEnvVars[k];
       if (prev === next) continue;
       if (prev === undefined) { added.push(k); }
       else if (next === undefined) { removed.push(k); }
@@ -1346,12 +1360,12 @@ const syncOpenClawConfig = async (
     if (added.length) console.log(`${D()}   added: ${added.join(', ')}`);
     if (removed.length) console.log(`${D()}   removed: ${removed.join(', ')}`);
     for (const k of modified) {
-      const p = (prevSecretEnvVars[k] || '').slice(0, 12);
-      const n = (nextSecretEnvVars[k] || '').slice(0, 12);
+      const p = (effectivePrevSecretEnvVars[k] || '').slice(0, 12);
+      const n = (effectiveNextSecretEnvVars[k] || '').slice(0, 12);
       console.log(`${D()}   modified: ${k} prev=${p}… next=${n}…`);
     }
   } else {
-    console.log(`${D()} secretEnvVars unchanged (${Object.keys(nextSecretEnvVars).length} keys)`);
+    console.log(`${D()} secretEnvVars unchanged (${Object.keys(effectiveNextSecretEnvVars).length}/${Object.keys(nextSecretEnvVars).length} referenced keys)`);
   }
 
   // Force a hard restart when env/bindings changed, or when the caller explicitly
@@ -2436,6 +2450,50 @@ if (!gotTheLock) {
     return parsed.toString();
   };
 
+  // refreshOnce() is the single entry-point for all token refresh paths
+  // (proactive, proxy 401/403 retry, and main-process authenticated API 401s).
+  // It deduplicates concurrent calls via pendingTokenRefresh so that rolling
+  // refresh tokens are never consumed twice.
+  const refreshOnce = async (reason: string): Promise<string | null> => {
+    if (pendingTokenRefresh) {
+      return pendingTokenRefresh;
+    }
+    let resolvedToken: string | null = null;
+    pendingTokenRefresh = (async () => {
+      try {
+        const tokens = getAuthTokens();
+        if (!tokens?.refreshToken) return null;
+        const serverBaseUrl = getServerApiBaseUrl();
+        const refreshUrl = `${serverBaseUrl}/api/auth/refresh`;
+        console.log(`[Auth] requesting token refresh (reason: ${reason}) at ${refreshUrl}`);
+        const resp = await net.fetch(refreshUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(withKeyfromBody({ refreshToken: tokens.refreshToken })),
+        });
+        if (resp.ok) {
+          const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
+          if (body.code === 0 && body.data) {
+            saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
+            console.log(`[Auth] token refresh succeeded (reason: ${reason})`);
+            resolvedToken = body.data.accessToken;
+            // Token proxy handles fresh tokens dynamically — no need
+            // to restart the gateway on token refresh.
+            syncOpenClawConfig({ reason: `token-refresh:${reason}`, restartGatewayIfRunning: false }).catch((err) => {
+              console.warn('[Auth] post-refresh OpenClaw config sync failed:', err);
+            });
+          }
+        }
+      } catch (err) {
+        console.warn(`[Auth] token refresh failed (reason: ${reason}):`, err);
+      } finally {
+        pendingTokenRefresh = null;
+      }
+      return resolvedToken;
+    })();
+    return pendingTokenRefresh;
+  };
+
   /**
    * Helper: Fetch with Bearer token, auto-refresh on 401 and retry once.
    */
@@ -2452,20 +2510,9 @@ if (!gotTheLock) {
     let resp = await doFetch(tokens.accessToken);
 
     if (resp.status === 401 && tokens.refreshToken) {
-      const serverBaseUrl = getServerApiBaseUrl();
-      const refreshUrl = `${serverBaseUrl}/api/auth/refresh`;
-      console.log(`[Auth] requesting token refresh after unauthorized response at ${refreshUrl}`);
-      const refreshResp = await net.fetch(refreshUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(withKeyfromBody({ refreshToken: tokens.refreshToken })),
-      });
-      if (refreshResp.ok) {
-        const refreshBody = await refreshResp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
-        if (refreshBody.code === 0 && refreshBody.data) {
-          saveAuthTokens(refreshBody.data.accessToken, refreshBody.data.refreshToken || tokens.refreshToken);
-          resp = await doFetch(refreshBody.data.accessToken);
-        }
+      const refreshedAccessToken = await refreshOnce('passive');
+      if (refreshedAccessToken) {
+        resp = await doFetch(refreshedAccessToken);
       }
     }
 
@@ -2647,21 +2694,8 @@ if (!gotTheLock) {
 
   ipcMain.handle('auth:refreshToken', async () => {
     try {
-      const tokens = getAuthTokens();
-      if (!tokens?.refreshToken) return { success: false };
-      const serverBaseUrl = getServerApiBaseUrl();
-      const refreshUrl = `${serverBaseUrl}/api/auth/refresh`;
-      console.log(`[Auth] requesting manual token refresh at ${refreshUrl}`);
-      const resp = await net.fetch(refreshUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(withKeyfromBody({ refreshToken: tokens.refreshToken })),
-      });
-      if (!resp.ok) return { success: false };
-      const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
-      if (body.code !== 0 || !body.data) return { success: false };
-      saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
-      return { success: true, accessToken: body.data.accessToken };
+      const accessToken = await refreshOnce('manual');
+      return accessToken ? { success: true, accessToken } : { success: false };
     } catch {
       return { success: false };
     }
@@ -6480,50 +6514,6 @@ end tell'`, { timeout: 5000 });
     // The getter proactively triggers a background token refresh when the
     // accessToken is within 5 minutes of expiry, so that the SDK always
     // gets a fresh token without blocking.
-    //
-    // refreshOnce() is the single entry-point for all token refresh paths
-    // (proactive, proxy 401/403 retry). It deduplicates concurrent calls via
-    // pendingTokenRefresh so that rolling refresh tokens are never consumed twice.
-    const refreshOnce = async (reason: string): Promise<string | null> => {
-      if (pendingTokenRefresh) {
-        return pendingTokenRefresh;
-      }
-      let resolvedToken: string | null = null;
-      pendingTokenRefresh = (async () => {
-        try {
-          const tokens = getAuthTokens();
-          if (!tokens?.refreshToken) return null;
-          const serverBaseUrl = getServerApiBaseUrl();
-          const refreshUrl = `${serverBaseUrl}/api/auth/refresh`;
-          console.log(`[Auth] requesting token refresh (reason: ${reason}) at ${refreshUrl}`);
-          const resp = await net.fetch(refreshUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(withKeyfromBody({ refreshToken: tokens.refreshToken })),
-          });
-          if (resp.ok) {
-            const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
-            if (body.code === 0 && body.data) {
-              saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
-              console.log(`[Auth] token refresh succeeded (reason: ${reason})`);
-              resolvedToken = body.data.accessToken;
-              // Token proxy handles fresh tokens dynamically — no need
-              // to restart the gateway on token refresh.
-              syncOpenClawConfig({ reason: `token-refresh:${reason}`, restartGatewayIfRunning: false }).catch((err) => {
-                console.warn('[Auth] post-refresh OpenClaw config sync failed:', err);
-              });
-            }
-          }
-        } catch (err) {
-          console.warn(`[Auth] token refresh failed (reason: ${reason}):`, err);
-        } finally {
-          pendingTokenRefresh = null;
-        }
-        return resolvedToken;
-      })();
-      return pendingTokenRefresh;
-    };
-
     setAuthTokensGetter(() => {
       const tokens = getAuthTokens();
       if (!tokens) return null;

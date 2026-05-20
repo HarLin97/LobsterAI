@@ -378,6 +378,8 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const provider = config.models.providers['lobsterai-server'];
     expect(provider.baseUrl).toBe('http://127.0.0.1:56646/v1');
+    expect(provider.apiKey).toBe('${LOBSTER_PROXY_TOKEN}');
+    expect(JSON.stringify(config)).not.toContain('LOBSTER_APIKEY_SERVER');
     expect(provider.models).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'qwen3.5-plus-YoudaoInner',
