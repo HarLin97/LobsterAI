@@ -16,7 +16,12 @@ import {
   ContextCompactionStatus,
   CoworkSystemMessageKind,
 } from '../../../common/coworkSystemMessages';
-import { OpenClawRuntimeAdapter, pickPersistedAssistantSegment, resolveToolEventIsError } from './openclawRuntimeAdapter';
+import {
+  normalizeOpenClawRuntimeErrorMessage,
+  OpenClawRuntimeAdapter,
+  pickPersistedAssistantSegment,
+  resolveToolEventIsError,
+} from './openclawRuntimeAdapter';
 
 test('pickPersistedAssistantSegment: stream authority keeps previous when same length or longer', () => {
   expect(pickPersistedAssistantSegment('aa', 'a', true)).toEqual({
@@ -56,6 +61,21 @@ test('pickPersistedAssistantSegment: empty branches', () => {
     content: 'prev',
     reason: 'previous_only',
   });
+});
+
+test('normalizeOpenClawRuntimeErrorMessage maps empty SSE parser errors', () => {
+  expect(normalizeOpenClawRuntimeErrorMessage('Unexpected end of JSON input')).toContain(
+    '空的 SSE data 帧',
+  );
+  expect(
+    normalizeOpenClawRuntimeErrorMessage(
+      'Provider stream emitted too many empty SSE data frames.',
+    ),
+  ).toContain('连续返回空的 SSE data 帧');
+});
+
+test('normalizeOpenClawRuntimeErrorMessage keeps unrelated errors unchanged', () => {
+  expect(normalizeOpenClawRuntimeErrorMessage('upstream 502')).toBe('upstream 502');
 });
 
 test('context usage ignores non-checkpoint compactionCount', () => {
