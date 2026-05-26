@@ -9,6 +9,9 @@ export interface MediaModel {
   pricing: Record<string, unknown>;
   pricingDescription?: string;
   capabilities?: string;
+  description?: string;
+  unitCredits?: number;
+  unitLabel?: string;
 }
 
 export interface MediaQuotaStatus {

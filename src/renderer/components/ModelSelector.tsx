@@ -354,7 +354,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       <div style={hoverCardStyle} className="w-[220px] rounded-xl border border-border bg-surface shadow-popover p-3 pointer-events-none">
         <div className="text-[13px] font-semibold text-foreground leading-5">{hoveredModel.name}</div>
         {hoveredModel.description && (
-          <div className="mt-1 text-[11px] text-secondary leading-4 line-clamp-3">{hoveredModel.description}</div>
+          <div className="mt-1 text-[11px] text-secondary leading-4">{hoveredModel.description}</div>
         )}
         {hoveredModel.costMultiplier != null && hoveredModel.costMultiplier > 0 && (
           <div className="mt-2 text-[11px] text-secondary">

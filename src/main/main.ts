@@ -3550,6 +3550,7 @@ if (!gotTheLock) {
       creditsLimit,
       creditsUsed,
       creditsRemaining: Math.max(0, creditsLimit - creditsUsed),
+      hasPaidCredits: raw.hasPaidCredits === true || subscriptionStatus === 'active',
     };
   };
 
@@ -3765,12 +3766,9 @@ if (!gotTheLock) {
       }
       const serverBaseUrl = getServerApiBaseUrl();
       const endpoint = type === 'image' ? '/api/media/images/models' : '/api/media/videos/models';
-      console.log('[Media:getModels] Fetching:', `${serverBaseUrl}${endpoint}`);
       const resp = await fetchWithAuth(`${serverBaseUrl}${endpoint}`);
-      console.log('[Media:getModels] Response status:', resp.status);
       if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
       const body = await resp.json() as { code: number; data?: unknown[]; message?: string };
-      console.log('[Media:getModels] Response body:', JSON.stringify(body));
       if (body.code !== 0) return { success: false, error: body.message };
       return { success: true, models: body.data || [] };
     } catch (e) {

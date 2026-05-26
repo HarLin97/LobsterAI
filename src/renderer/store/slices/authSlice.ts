@@ -16,6 +16,7 @@ export interface UserQuota {
   creditsLimit: number;       // total credits limit
   creditsUsed: number;        // credits used
   creditsRemaining: number;   // credits remaining
+  hasPaidCredits?: boolean;   // true if user has subscription, boost, or invitation credits
 }
 
 export interface CreditItem {

@@ -494,6 +494,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelSupportsImageInputBadge: '可读图',
     modelSupportsThinkingBadge: '深度思考',
     modelCostMultiplierLabel: '积分消耗倍率：',
+    mediaTierSpecLabel: '规格',
     modelSelectorNoModels: '请先在设置中配置模型',
     coworkApiConfigTitle: 'API 配置',
     coworkApiConfigHint:
@@ -1026,10 +1027,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mediaNoModels: '暂无可用模型',
     mediaLoadingModels: '加载模型中...',
     mediaLoginTitle: '图片/视频生成服务',
-    mediaLoginDesc: '套餐模型用户的专属权益，登录并订阅或购买加油包即可使用',
+    mediaLoginDesc: '付费用户的专属权益，登录并订阅或购买加油包即可使用',
     mediaLoginBtn: '去登录',
     mediaSubscribeTitle: '图片/视频生成服务',
-    mediaSubscribeDesc: '套餐模型用户的专属权益，订阅或购买加油包即可使用',
+    mediaSubscribeDesc: '付费用户的专属权益，订阅或购买加油包即可使用',
     mediaSubscribeBtn: '去购买',
     mediaLearnMore: '了解订阅权益',
     mediaGenerating: '生成中...',
@@ -2646,6 +2647,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelSupportsImageInputBadge: 'Reads images',
     modelSupportsThinkingBadge: 'Deep thinking',
     modelCostMultiplierLabel: 'Cost multiplier: ',
+    mediaTierSpecLabel: 'Spec',
     modelSelectorNoModels: 'Please configure models in settings first',
     coworkApiConfigTitle: 'API Configuration',
     coworkApiConfigHint:

@@ -1,5 +1,6 @@
 import Lottie from 'lottie-react';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { CheckIcon } from '@heroicons/react/24/outline';
 
@@ -44,10 +45,13 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
   const [isLoading, setIsLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const [hoveredModel, setHoveredModel] = useState<MediaModel | null>(null);
+  const [hoverCardStyle, setHoverCardStyle] = useState<React.CSSProperties>({});
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
   const authQuota = useSelector((state: RootState) => state.auth.quota);
-  const isSubscribed = isLoggedIn && authQuota?.subscriptionStatus === 'active';
+  const isSubscribed = isLoggedIn && (authQuota?.subscriptionStatus === 'active' || authQuota?.hasPaidCredits === true);
 
   const mediaModels = useSelector((state: RootState) => state.cowork.mediaModels);
   const selection = useSelector((state: RootState) => state.cowork.mediaSelection[draftKey]);
@@ -227,12 +231,180 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     await window.electron.shell.openExternal(getPortalPricingUrl());
   };
 
+  const handleModelHover = (model: MediaModel, event: React.MouseEvent<HTMLButtonElement>) => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    const itemRect = event.currentTarget.getBoundingClientRect();
+    hoverTimerRef.current = setTimeout(() => {
+      const desc = model.description || model.capabilities || model.pricingDescription;
+      if (!desc && !model.unitCredits) {
+        setHoveredModel(null);
+        return;
+      }
+      const dropdownEl = dropdownRef.current;
+      if (!dropdownEl) return;
+      const dropdownRect = dropdownEl.getBoundingClientRect();
+      const spaceRight = window.innerWidth - dropdownRect.right;
+      const cardWidth = 280;
+      const style: React.CSSProperties = {
+        position: 'fixed',
+        zIndex: 10001,
+      };
+      const cardHeight = 300;
+      if (itemRect.top + cardHeight > window.innerHeight) {
+        style.bottom = 8;
+      } else {
+        style.top = itemRect.top;
+      }
+      if (spaceRight >= cardWidth + 8) {
+        style.left = dropdownRect.right + 8;
+      } else {
+        style.right = window.innerWidth - dropdownRect.left + 8;
+      }
+      setHoverCardStyle(style);
+      setHoveredModel(model);
+    }, 200);
+  };
+
+  const handleModelHoverEnd = () => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setHoveredModel(null);
+  };
+
+  useEffect(() => {
+    if (!isOpen) setHoveredModel(null);
+  }, [isOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    };
+  }, []);
+
+  const renderHoverCard = () => {
+    if (!hoveredModel) return null;
+    const desc = hoveredModel.description || hoveredModel.capabilities || hoveredModel.pricingDescription;
+    const unitLabel = hoveredModel.unitLabel || (hoveredModel.mediaType === 'image' ? '张' : '个');
+    const pricing = hoveredModel.pricing as {
+      billingUnit?: string;
+      tiers?: Array<{
+        resolution?: string;
+        duration?: number;
+        audio?: boolean;
+        hasVideoInput?: boolean;
+        costYuan?: number;
+        pricePerMillionTokens?: number;
+      }>;
+    } | undefined;
+    const tiers = pricing?.tiers;
+    const billingUnit = pricing?.billingUnit;
+
+    const formatTierLabel = (tier: { resolution?: string; duration?: number; audio?: boolean; hasVideoInput?: boolean }) => {
+      const parts: string[] = [];
+      if (tier.resolution) parts.push(tier.resolution);
+      if (tier.duration) parts.push(`${tier.duration}秒`);
+      if (tier.audio) parts.push('有声音');
+      if (tier.hasVideoInput === true) parts.push('含视频输入');
+      if (tier.hasVideoInput === false) parts.push('不含视频输入');
+      return parts.join(' ') || '-';
+    };
+
+    const tierCredits = (tier: { costYuan?: number; pricePerMillionTokens?: number }) => {
+      if (tier.pricePerMillionTokens != null) return Math.round(tier.pricePerMillionTokens * 100);
+      if (tier.costYuan != null) return Math.round(tier.costYuan * 100);
+      return 0;
+    };
+
+    const tierUnitSuffix = billingUnit === 'per_second' ? '秒'
+      : billingUnit === 'per_video' ? '个'
+      : billingUnit === 'per_token' ? '百万tokens'
+      : unitLabel;
+
+    const hasVideoInputTiers = tiers && tiers.some(t => t.hasVideoInput !== undefined);
+    const tierRows = (() => {
+      if (!tiers || tiers.length <= 1) return null;
+      if (!hasVideoInputTiers) return null;
+      const resolutions = [...new Set(tiers.map(t => t.resolution).filter(Boolean))] as string[];
+      return resolutions.map(res => {
+        const withVideo = tiers.find(t => t.resolution === res && t.hasVideoInput === true);
+        const withoutVideo = tiers.find(t => t.resolution === res && t.hasVideoInput === false);
+        return { resolution: res, withVideo, withoutVideo };
+      });
+    })();
+
+    const card = (
+      <div style={hoverCardStyle} className="w-[280px] rounded-xl border border-border bg-surface shadow-popover p-3 pointer-events-none">
+        <div className="text-[13px] font-semibold text-foreground leading-5">
+          {hoveredModel.displayName}
+        </div>
+        {desc && (
+          <div className="mt-1 text-[11px] text-secondary leading-4">
+            {desc}
+          </div>
+        )}
+        {tiers && tiers.length > 1 ? (
+          tierRows ? (
+            <table className="mt-2 w-full text-[10px] text-secondary border-collapse">
+              <thead>
+                <tr className="border-b border-border/50">
+                  <th className="text-left font-medium py-0.5 pr-1"></th>
+                  <th className="text-right font-medium py-0.5 px-1">含视频输入</th>
+                  <th className="text-right font-medium py-0.5">不含视频输入</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tierRows.map((row) => (
+                  <tr key={row.resolution}>
+                    <td className="py-0.5 pr-1">{row.resolution}</td>
+                    <td className="text-right py-0.5 px-1">{row.withVideo ? tierCredits(row.withVideo) : '-'}</td>
+                    <td className="text-right py-0.5">{row.withoutVideo ? tierCredits(row.withoutVideo) : '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-border/50">
+                  <td colSpan={3} className="text-right pt-0.5 text-[9px] text-tertiary">
+                    {i18nService.t('authCreditsUnit')}/{tierUnitSuffix}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          ) : (
+            <table className="mt-2 w-full text-[10px] text-secondary border-collapse">
+              <thead>
+                <tr className="border-b border-border/50">
+                  <th className="text-left font-medium py-0.5 pr-2">{i18nService.t('mediaTierSpecLabel')}</th>
+                  <th className="text-right font-medium py-0.5">{i18nService.t('authCreditsUnit')}/{tierUnitSuffix}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tiers.map((tier, i) => (
+                  <tr key={i}>
+                    <td className="py-0.5 pr-2">{formatTierLabel(tier)}</td>
+                    <td className="text-right py-0.5">{tierCredits(tier)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        ) : hoveredModel.unitCredits != null && hoveredModel.unitCredits > 0 ? (
+          <div className="mt-2 text-[11px] text-secondary">
+            ({i18nService.t('modelCostMultiplierLabel')} {hoveredModel.unitCredits} {i18nService.t('authCreditsUnit')}/{unitLabel})
+          </div>
+        ) : null}
+      </div>
+    );
+    return createPortal(card, document.body);
+  };
+
   const currentModels = activeTab === 'image' ? mediaModels.image : mediaModels.video;
 
   const isMediaActive = selection != null && selection.mode !== 'none';
 
   const triggerIcon = (
-    <MagicIcon className="h-5 w-5" style={{ opacity: isMediaActive ? 1 : 0.5 }} />
+    <MagicIcon className="h-5 w-5" />
   );
 
   const renderPromptPanel = (title: string, desc: string, btnLabel: string, onBtn: () => void, secondaryLabel?: string, onSecondary?: () => void) => (
@@ -345,17 +517,20 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
                   key={model.modelId}
                   type="button"
                   onClick={() => handleSelect(activeTab, model)}
-                  className={`flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs transition-colors hover:bg-background/80 ${isSelected ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''}`}
+                  onMouseEnter={(e) => handleModelHover(model, e)}
+                  onMouseLeave={handleModelHoverEnd}
+                  className={`flex w-full items-center gap-2.5 rounded px-2 py-2 text-left text-xs transition-colors hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover ${isSelected ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''}`}
                 >
                   <span className="shrink-0 h-4 w-4 [&_svg]:h-4 [&_svg]:w-4">{resolveMediaModelIcon(model)}</span>
-                  <div className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{model.displayName}</span>
-                    {model.pricingDescription && (
-                      <span className="block truncate text-[10px] text-secondary leading-tight mt-0.5">{model.pricingDescription}</span>
-                    )}
-                  </div>
+                  <span className="min-w-0 truncate text-[13px] font-normal leading-5">{model.displayName}</span>
+                  {activeTab === 'image' && model.unitCredits != null && model.unitCredits > 0 && (
+                    <span className="shrink-0 text-[11px] text-secondary whitespace-nowrap">
+                      x{model.unitCredits} {i18nService.t('authCreditsUnit')}/{model.unitLabel || '张'}
+                    </span>
+                  )}
+                  <span className="flex-1" />
                   {isSelected && (
-                    <CheckIcon className="h-4 w-4 shrink-0 text-emerald-500 ml-auto" />
+                    <CheckIcon className="h-4 w-4 shrink-0 text-emerald-500" />
                   )}
                 </button>
               );
@@ -390,6 +565,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
           {renderDropdownContent()}
         </div>
       )}
+      {renderHoverCard()}
     </div>
   );
 };
