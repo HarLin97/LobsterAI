@@ -16,7 +16,12 @@ import {
   ContextCompactionStatus,
   CoworkSystemMessageKind,
 } from '../../../common/coworkSystemMessages';
-import { OpenClawRuntimeAdapter, pickPersistedAssistantSegment } from './openclawRuntimeAdapter';
+import {
+  normalizeOpenClawRuntimeErrorMessage,
+  OpenClawRuntimeAdapter,
+  pickPersistedAssistantSegment,
+  resolveToolEventIsError,
+} from './openclawRuntimeAdapter';
 
 test('pickPersistedAssistantSegment: stream authority keeps previous when same length or longer', () => {
   expect(pickPersistedAssistantSegment('aa', 'a', true)).toEqual({
@@ -56,6 +61,21 @@ test('pickPersistedAssistantSegment: empty branches', () => {
     content: 'prev',
     reason: 'previous_only',
   });
+});
+
+test('normalizeOpenClawRuntimeErrorMessage maps empty SSE parser errors', () => {
+  expect(normalizeOpenClawRuntimeErrorMessage('Unexpected end of JSON input')).toContain(
+    '空的 SSE data 帧',
+  );
+  expect(
+    normalizeOpenClawRuntimeErrorMessage(
+      'Provider stream emitted too many empty SSE data frames.',
+    ),
+  ).toContain('连续返回空的 SSE data 帧');
+});
+
+test('normalizeOpenClawRuntimeErrorMessage keeps unrelated errors unchanged', () => {
+  expect(normalizeOpenClawRuntimeErrorMessage('upstream 502')).toBe('upstream 502');
 });
 
 test('context usage ignores non-checkpoint compactionCount', () => {
@@ -145,6 +165,100 @@ test('context usage resolves historical sessions with targeted lookup', async ()
   expect(requests[0].params).not.toHaveProperty('activeMinutes');
 });
 
+test('context usage does not fall back to recent session lookup when targeted lookup misses', async () => {
+  const session = {
+    id: 'missing-session',
+    title: 'Missing Session',
+    claudeSessionId: null,
+    status: 'completed',
+    pinned: false,
+    cwd: '',
+    systemPrompt: '',
+    modelOverride: '',
+    executionMode: 'local',
+    activeSkillIds: [],
+    agentId: 'main',
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const adapter = new OpenClawRuntimeAdapter({
+    getSession: (sessionId: string) => (sessionId === session.id ? session : null),
+  } as never, {} as never);
+  adapter.gatewayClient = {
+    request: async (method: string, params?: unknown) => {
+      requests.push({ method, params: params as Record<string, unknown> });
+      return { sessions: [] };
+    },
+  } as never;
+
+  const usage = await adapter.getContextUsage(session.id);
+
+  expect(usage).toBeNull();
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    method: 'sessions.list',
+    params: { search: sessionKey, limit: 5 },
+  });
+  expect(requests[0].params).not.toHaveProperty('activeMinutes');
+});
+
+test('context usage coalesces concurrent refreshes for the same session', async () => {
+  const session = {
+    id: 'session-1',
+    title: 'Historical Session',
+    claudeSessionId: null,
+    status: 'completed',
+    pinned: false,
+    cwd: '',
+    systemPrompt: '',
+    modelOverride: '',
+    executionMode: 'local',
+    activeSkillIds: [],
+    agentId: 'main',
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  let releaseRequest: (() => void) | null = null;
+  const requestBlocked = new Promise<void>((resolve) => {
+    releaseRequest = resolve;
+  });
+  const adapter = new OpenClawRuntimeAdapter({
+    getSession: (sessionId: string) => (sessionId === session.id ? session : null),
+  } as never, {} as never);
+  adapter.gatewayClient = {
+    request: async (method: string, params?: unknown) => {
+      requests.push({ method, params: params as Record<string, unknown> });
+      await requestBlocked;
+      return {
+        sessions: [{
+          key: sessionKey,
+          totalTokens: 42_000,
+          contextTokens: 60_000,
+        }],
+      };
+    },
+  } as never;
+
+  const first = adapter.getContextUsage(session.id);
+  const second = adapter.getContextUsage(session.id);
+  await Promise.resolve();
+
+  expect(requests).toHaveLength(1);
+
+  releaseRequest?.();
+  const [firstUsage, secondUsage] = await Promise.all([first, second]);
+
+  expect(firstUsage?.usedTokens).toBe(42_000);
+  expect(secondUsage?.usedTokens).toBe(42_000);
+  expect(requests).toHaveLength(1);
+});
+
 test('usage metadata falls back to latest assistant when preferred id was replaced', async () => {
   const { session, store } = createReconcileStore([
     { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1, metadata: {} },
@@ -180,6 +294,12 @@ test('usage metadata falls back to latest assistant when preferred id was replac
     model: 'qwen-portal/qwen3.6-plus',
     agentName: 'main',
   });
+});
+
+test('resolveToolEventIsError reads nested tool result errors', () => {
+  expect(resolveToolEventIsError({ isError: true })).toBe(true);
+  expect(resolveToolEventIsError({ isError: false, result: { isError: true } })).toBe(true);
+  expect(resolveToolEventIsError({ isError: false, result: { isError: false } })).toBe(false);
 });
 
 // ==================== Session patch tests ====================
@@ -293,6 +413,7 @@ function createRunTurnAdapter(options: {
   sessionModelOverride?: string;
   agentModel?: string;
   cachedModel?: string;
+  modelPatchError?: Error;
   holdFirstModelPatch?: boolean;
   sessionCwd?: string;
 } = {}) {
@@ -379,6 +500,9 @@ function createRunTurnAdapter(options: {
           firstModelPatchStartedResolve?.();
           await firstModelPatchBlocked;
         }
+        if (options.modelPatchError) {
+          throw options.modelPatchError;
+        }
         return {};
       }
       if (method === 'chat.history') {
@@ -412,7 +536,12 @@ function createRunTurnAdapter(options: {
   adapter.reconcileWithHistory = async () => {};
 
   if (options.cachedModel) {
-    adapter.lastPatchedModelBySession.set(session.id, options.cachedModel);
+    adapter.sessionModelPatchStateBySession.set(session.id, {
+      model: options.cachedModel,
+      sessionKey: 'agent:main:lobsterai:session-1',
+      source: options.sessionModelOverride ? 'sessionOverride' : 'agentModel',
+      confirmedAt: Date.now(),
+    });
   }
 
   return {
@@ -441,6 +570,37 @@ test('continueSession patches a session override before chat.send even when the 
     key: 'agent:main:lobsterai:session-1',
     model,
   });
+});
+
+test('continueSession continues after a redundant session override patch times out', async () => {
+  const model = 'lobsterai-server/qwen3.6-plus-YoudaoInner';
+  const { adapter, requests } = createRunTurnAdapter({
+    sessionModelOverride: model,
+    cachedModel: model,
+    modelPatchError: new Error('gateway request timeout for sessions.patch'),
+  });
+
+  await adapter.continueSession('session-1', 'hello');
+
+  expect(requests.map((request) => request.method).slice(0, 3)).toEqual([
+    'sessions.patch',
+    'chat.history',
+    'chat.send',
+  ]);
+});
+
+test('continueSession rejects an unconfirmed session override patch timeout before chat.send', async () => {
+  const model = 'lobsterai-server/qwen3.6-plus-YoudaoInner';
+  const { adapter, requests } = createRunTurnAdapter({
+    sessionModelOverride: model,
+    modelPatchError: new Error('gateway request timeout for sessions.patch'),
+  });
+  adapter.on('error', () => undefined);
+
+  await expect(adapter.continueSession('session-1', 'hello'))
+    .rejects.toThrow('gateway request timeout for sessions.patch');
+
+  expect(requests.map((request) => request.method)).toEqual(['sessions.patch']);
 });
 
 test('continueSession waits for an in-flight model patch before chat.send', async () => {
@@ -581,6 +741,9 @@ function createActiveTurn(sessionId: string, sessionKey: string, runId: string) 
     toolUseMessageIdByToolCallId: new Map(),
     toolResultMessageIdByToolCallId: new Map(),
     toolResultTextByToolCallId: new Map(),
+    mediaStatusPollCountByToolCallId: new Map(),
+    mediaStatusPollCountByTaskId: new Map(),
+    mediaStatusPollBaseByToolCallId: new Map(),
     contextMaintenanceToolCallIds: new Set(),
     stopRequested: false,
     pendingUserSync: false,
@@ -835,6 +998,9 @@ test('lifecycle fallback repairs managed session assistant text from history', a
     toolUseMessageIdByToolCallId: new Map(),
     toolResultMessageIdByToolCallId: new Map(),
     toolResultTextByToolCallId: new Map(),
+    mediaStatusPollCountByToolCallId: new Map(),
+    mediaStatusPollCountByTaskId: new Map(),
+    mediaStatusPollBaseByToolCallId: new Map(),
     contextMaintenanceToolCallIds: new Set(),
     stopRequested: false,
     pendingUserSync: false,
@@ -1959,7 +2125,7 @@ test('empty final with local tool messages waits when history only has interim a
   }
 });
 
-test('visible short tool final waits under large tool results and accepts same-run continuation', async () => {
+test('visible short tool final waits with retry signal and accepts same-run continuation', async () => {
   vi.useFakeTimers();
   try {
     const shortAnswer = 'I will inspect the logs and then summarize the restart timeline.';
@@ -2004,6 +2170,7 @@ test('visible short tool final waits under large tool results and accepts same-r
     const turn = createActiveTurn(session.id, sessionKey, 'run-visible-retry');
     turn.toolUseMessageIdByToolCallId.set('call-1', 'msg-2');
     turn.toolResultMessageIdByToolCallId.set('call-1', 'msg-3');
+    turn.pendingOpenClawRetry = true;
     adapter.activeTurns.set(session.id, turn);
     adapter.sessionIdByRunId.set('run-visible-retry', session.id);
     adapter.rememberSessionKey(session.id, sessionKey);
@@ -2062,12 +2229,12 @@ test('visible short tool final waits under large tool results and accepts same-r
   }
 });
 
-test('visible short tool final completes with existing text when no continuation arrives', async () => {
+test('visible short tool final uses short confirmation when only large tool results are present', async () => {
   vi.useFakeTimers();
   try {
-    const shortAnswer = 'I checked the logs and did not find a restart.';
+    const shortAnswer = 'A'.repeat(514);
     const lateAnswer = 'This late continuation should not be accepted.';
-    const largeToolResult = 'main log line\n'.repeat(1600);
+    const largeToolResult = 'T'.repeat(41_758);
     const { session, store } = createReconcileStore([
       { id: 'msg-1', type: 'user', content: 'check the logs', timestamp: 1, metadata: {} },
       { id: 'msg-2', type: 'tool_use', content: 'Using exec', timestamp: 2, metadata: { toolUseId: 'call-1' } },
@@ -2115,14 +2282,14 @@ test('visible short tool final completes with existing text when no continuation
       message: { role: 'assistant', content: shortAnswer },
     }, 1);
 
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(7_999);
     await Promise.resolve();
     await Promise.resolve();
 
     expect(completeSpy).not.toHaveBeenCalled();
     expect(session.messages.some((message) => message.type === 'system')).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.advanceTimersByTimeAsync(1);
     await Promise.resolve();
     await Promise.resolve();
 

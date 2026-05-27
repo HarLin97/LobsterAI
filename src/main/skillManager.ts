@@ -330,6 +330,17 @@ type SkillsConfig = {
   defaults: Record<string, SkillDefaultConfig>;
 };
 
+export interface OpenClawSkillStatusEntry {
+  name: string;
+  description: string;
+  source: string;
+  bundled: boolean;
+  filePath: string;
+  baseDir: string;
+  skillKey: string;
+  disabled?: boolean;
+}
+
 const SKILLS_DIR_NAME = 'SKILLs';
 const SKILL_FILE_NAME = 'SKILL.md';
 const SKILLS_CONFIG_FILE = 'skills.config.json';
@@ -1325,8 +1336,21 @@ export class SkillManager {
   }>();
   private upgradingSkillIds = new Set<string>();
   private deletingSkillIds = new Set<string>();
+  private pluginSkillIds = new Set<string>();
 
   constructor(private getStore: () => SqliteStore) {}
+
+  /**
+   * Update the cached set of plugin-provided skill IDs (from OpenClaw plugins).
+   * These skills are treated as built-in and cannot be deleted by the user.
+   */
+  setPluginSkillIds(ids: Set<string>): void {
+    this.pluginSkillIds = ids;
+  }
+
+  getPluginSkillIds(): Set<string> {
+    return this.pluginSkillIds;
+  }
 
   getSkillsRoot(): string {
     return path.resolve(app.getPath('userData'), SKILLS_DIR_NAME);
@@ -1570,7 +1594,7 @@ export class SkillManager {
       if (!fs.existsSync(root)) return;
       const skillDirs = listSkillDirs(root);
       skillDirs.forEach(dir => {
-        const skill = this.parseSkillDir(dir, state, defaults, builtInSkillIds.has(path.basename(dir)));
+        const skill = this.parseSkillDir(dir, state, defaults, builtInSkillIds.has(path.basename(dir)) || this.pluginSkillIds.has(path.basename(dir)));
         if (!skill) return;
         skillMap.set(skill.id, skill);
       });
@@ -1611,6 +1635,100 @@ export class SkillManager {
       skillEntries,
       '</available_skills>',
     ].join('\n');
+  }
+
+  detectSkillsFromOpenClaw(report: {
+    skills: Array<{
+      name: string;
+      description: string;
+      source: string;
+      bundled: boolean;
+      filePath: string;
+      baseDir: string;
+      skillKey: string;
+      disabled?: boolean;
+    }>;
+  }): { skills: Array<{ name: string; description: string; skillKey: string; baseDir: string; disabled?: boolean }>; error?: string } {
+    try {
+      const existing = this.listSkills();
+      const existingIds = new Set(existing.map(s => s.id));
+      const skillsRoot = this.getSkillsRoot();
+
+      const newSkills = report.skills.filter(entry => {
+        // Skip bundled skills and plugin-provided skills (e.g. moltbot/POPO plugins)
+        if (entry.bundled || entry.source === 'openclaw-extra') return false;
+        const normalizedBaseDir = path.resolve(entry.baseDir);
+        const normalizedRoot = path.resolve(skillsRoot);
+        if (normalizedBaseDir.startsWith(normalizedRoot)) return false;
+        const id = entry.skillKey || path.basename(entry.baseDir);
+        if (existingIds.has(id)) return false;
+        return true;
+      });
+
+      return {
+        skills: newSkills.map(s => ({
+          name: s.name,
+          description: s.description,
+          skillKey: s.skillKey || path.basename(s.baseDir),
+          baseDir: s.baseDir,
+          disabled: s.disabled,
+        })),
+      };
+    } catch (error) {
+      return { skills: [], error: error instanceof Error ? error.message : 'Detection failed' };
+    }
+  }
+
+  syncSkillsFromOpenClaw(report: {
+    skills: Array<{
+      name: string;
+      description: string;
+      source: string;
+      bundled: boolean;
+      filePath: string;
+      baseDir: string;
+      skillKey: string;
+      disabled?: boolean;
+    }>;
+  }): { synced: string[]; error?: string } {
+    try {
+      const { skills } = this.detectSkillsFromOpenClaw(report);
+      if (skills.length === 0) return { synced: [] };
+
+      const root = this.ensureSkillsRoot();
+      const synced: string[] = [];
+
+      for (const entry of skills) {
+        const srcDir = path.resolve(entry.baseDir);
+        if (!fs.existsSync(srcDir)) continue;
+        const targetDir = path.join(root, entry.skillKey);
+        if (fs.existsSync(targetDir)) continue;
+        cpRecursiveSync(srcDir, targetDir);
+        // Record OpenClaw source path so we can remove it on delete
+        try {
+          const metaPath = path.join(targetDir, '_meta.json');
+          const meta = fs.existsSync(metaPath)
+            ? JSON.parse(fs.readFileSync(metaPath, 'utf8'))
+            : {};
+          meta.openclawSourceDir = srcDir;
+          fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n', 'utf8');
+        } catch { /* best-effort */ }
+        // Respect disabled state from OpenClaw
+        if (entry.disabled) {
+          const state = this.loadSkillStateMap();
+          state[entry.skillKey] = { enabled: false };
+          this.saveSkillStateMap(state);
+        }
+        synced.push(entry.skillKey);
+      }
+
+      if (synced.length > 0) {
+        this.notifySkillsChanged();
+      }
+      return { synced };
+    } catch (error) {
+      return { synced: [], error: error instanceof Error ? error.message : 'Sync failed' };
+    }
   }
 
   setSkillEnabled(id: string, enabled: boolean): SkillRecord[] {
@@ -2351,7 +2469,7 @@ export class SkillManager {
   }
 
   private isBuiltInSkillId(id: string): boolean {
-    return this.listBuiltInSkillIds().has(id);
+    return this.listBuiltInSkillIds().has(id) || this.pluginSkillIds.has(id);
   }
 
   private loadSkillStateMap(): SkillStateMap {

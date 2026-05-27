@@ -59,6 +59,27 @@ export type CoworkImageAttachment = {
   base64Data: string;
 };
 
+export type CoworkMediaAttachmentRef = {
+  token: string;
+  mediaType: 'image' | 'video' | 'audio';
+  index: number;
+  fileId: string;
+  fileName: string;
+  mimeType: string;
+  localPath?: string;
+  remoteUrl?: string;
+  dataUrl?: string;
+  role?: 'first_frame' | 'last_frame' | 'reference_image' | 'reference_video' | 'reference_audio';
+};
+
+export type CoworkMediaSelection = {
+  mode: 'auto' | 'image' | 'video' | 'none';
+  modelId?: string;
+  modelName?: string;
+  imageModelId?: string;
+  videoModelId?: string;
+};
+
 export type CoworkStartOptions = {
   skipInitialUserMessage?: boolean;
   skillIds?: string[];
@@ -68,12 +89,16 @@ export type CoworkStartOptions = {
   confirmationMode?: 'modal' | 'text';
   imageAttachments?: CoworkImageAttachment[];
   agentId?: string;
+  mediaSelection?: CoworkMediaSelection;
+  mediaReferences?: CoworkMediaAttachmentRef[];
 };
 
 export type CoworkContinueOptions = {
   systemPrompt?: string;
   skillIds?: string[];
   imageAttachments?: CoworkImageAttachment[];
+  mediaSelection?: CoworkMediaSelection;
+  mediaReferences?: CoworkMediaAttachmentRef[];
 };
 
 export interface CoworkRuntime {

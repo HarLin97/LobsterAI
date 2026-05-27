@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
 import type { SkillSecurityReport as SkillSecurityReportData } from '../../../main/libs/skillSecurity/skillSecurityTypes';
+import { ENABLE_OPENCLAW_SKILL_SYNC } from '../../../shared/featureFlags';
 import { i18nService } from '../../services/i18n';
 import { compareVersions,resolveLocalizedText, skillService } from '../../services/skill';
 import { RootState } from '../../store';
@@ -94,6 +95,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   } | null>(null);
   const upgradeCancelledRef = useRef(false);
 
+  const [detectedOpenClawSkills, setDetectedOpenClawSkills] = useState<Array<{ name: string; description: string; skillKey: string }> | null>(null);
+  const [isSyncingFromOpenClaw, setIsSyncingFromOpenClaw] = useState(false);
+
   const addSkillMenuRef = useRef<HTMLDivElement>(null);
   const addSkillButtonRef = useRef<HTMLButtonElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -105,6 +109,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   useEffect(() => {
     let isActive = true;
     const loadSkills = async () => {
+      // Refresh plugin skill IDs from OpenClaw before loading skills,
+      // so that plugin-provided skills are correctly marked as built-in.
+      await window.electron?.skills.refreshPluginSkillIds().catch(() => {});
       const loadedSkills = await skillService.loadSkills();
       if (!isActive) return;
       dispatch(setSkills(loadedSkills));
@@ -133,6 +140,19 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
       setIsLoadingMarketplace(false);
     });
     return () => { isActive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!ENABLE_OPENCLAW_SKILL_SYNC) return;
+    if (sessionStorage.getItem('openClawSkillSyncDetected')) return;
+    const detect = async () => {
+      const result = await window.electron?.skills.detectFromOpenClaw();
+      if (result?.skills?.length > 0) {
+        sessionStorage.setItem('openClawSkillSyncDetected', '1');
+        setDetectedOpenClawSkills(result.skills);
+      }
+    };
+    detect();
   }, []);
 
   useEffect(() => {
@@ -350,6 +370,29 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     }
 
     onCreateByChat?.();
+  };
+
+  const handleSyncFromOpenClaw = async () => {
+    setIsSyncingFromOpenClaw(true);
+    try {
+      await window.electron?.skills.syncFromOpenClaw();
+      setDetectedOpenClawSkills(null);
+      showToast(i18nService.t('skillsSyncSuccess'));
+    } catch {
+      showToast(i18nService.t('skillsSyncFailed'));
+    } finally {
+      setIsSyncingFromOpenClaw(false);
+    }
+  };
+
+  const handleManualOpenClawSync = async () => {
+    setIsAddSkillMenuOpen(false);
+    const result = await window.electron?.skills.detectFromOpenClaw();
+    if (result?.skills?.length > 0) {
+      setDetectedOpenClawSkills(result.skills);
+    } else {
+      showToast(i18nService.t('skillsSyncNoneFound'));
+    }
   };
 
   const handleImportFromDialog = async () => {
@@ -630,6 +673,16 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                 <PencilSquareIcon className="h-4 w-4 text-secondary" />
                 <span>{i18nService.t('createSkillByChat')}</span>
               </button>
+              {ENABLE_OPENCLAW_SKILL_SYNC && (
+              <button
+                type="button"
+                onClick={handleManualOpenClawSync}
+                className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-foreground hover:bg-surface-raised transition-colors border-t border-border"
+              >
+                <ArrowPathIcon className="h-4 w-4 text-secondary" />
+                <span>{i18nService.t('syncSkillsFromOpenClaw')}</span>
+              </button>
+              )}
             </div>
           )}
         </div>
@@ -1281,6 +1334,59 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                   {i18nService.t('skillUpgradeCancel')}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* OpenClaw Skill Sync - Loading Overlay */}
+      {isSyncingFromOpenClaw && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-background border border-border rounded-xl shadow-lg p-6 flex items-center gap-3">
+            <ArrowPathIcon className="h-5 w-5 animate-spin text-primary" />
+            <span className="text-sm text-foreground">{i18nService.t('skillsSyncing')}</span>
+          </div>
+        </div>
+      )}
+
+      {/* OpenClaw Skill Sync - Detection Dialog */}
+      {detectedOpenClawSkills !== null && detectedOpenClawSkills.length > 0 && !isSyncingFromOpenClaw && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-background border border-border rounded-xl shadow-lg w-full max-w-md p-6">
+            <h3 className="text-base font-semibold text-foreground mb-2">
+              {i18nService.t('skillsSyncTitle')}
+            </h3>
+            <p className="text-sm text-muted-foreground mb-3">
+              {i18nService.t('skillsSyncFound').replace('{count}', String(detectedOpenClawSkills.length))}
+            </p>
+            <div className="mb-4 max-h-40 overflow-y-auto rounded-md border border-border bg-surface-raised p-2 space-y-1.5">
+              {detectedOpenClawSkills.map(skill => (
+                <div key={skill.skillKey} className="flex items-baseline gap-2 px-1">
+                  <span className="shrink-0 text-xs font-medium text-foreground bg-background border border-border rounded px-1.5 py-0.5">{skill.name}</span>
+                  {skill.description && (
+                    <span className="text-[11px] text-muted-foreground truncate">{skill.description}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground mb-5">
+              {i18nService.t('skillsSyncLater')}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDetectedOpenClawSkills(null)}
+                className="px-4 py-1.5 text-xs rounded-lg border border-border text-secondary hover:bg-surface-raised transition-colors"
+              >
+                {i18nService.t('skillsSyncSkip')}
+              </button>
+              <button
+                type="button"
+                onClick={handleSyncFromOpenClaw}
+                className="px-4 py-1.5 text-xs rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
+              >
+                {i18nService.t('skillsSyncNow')}
+              </button>
             </div>
           </div>
         </div>

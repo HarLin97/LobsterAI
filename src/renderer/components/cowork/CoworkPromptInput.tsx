@@ -1,6 +1,6 @@
 import { CheckIcon, ChevronDownIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { ArrowUpIcon, FolderIcon } from '@heroicons/react/24/solid';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { agentService } from '../../services/agent';
@@ -21,6 +21,7 @@ import {
 import type { Model } from '../../store/slices/modelSlice';
 import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
 import { CoworkImageAttachment } from '../../types/cowork';
+import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { Skill } from '../../types/skill';
 import { getAgentDisplayName, shouldUseDefaultAgentIcon } from '../../utils/agentDisplay';
 import { toOpenClawModelRef } from '../../utils/openclawModelRef';
@@ -36,6 +37,17 @@ import { ActiveSkillBadge, SkillsButton } from '../skills';
 import { resolveAgentModelSelection, resolveEffectiveModel, useAgentSelectedModel } from './agentModelSelection';
 import AttachmentCard from './AttachmentCard';
 import FolderSelectorPopover from './FolderSelectorPopover';
+import { getCaretPixelPosition } from './getCaretPosition';
+import MediaMentionPicker from './MediaMentionPicker';
+import {
+  buildMediaMentionSegments,
+  computeMediaLabels,
+  extractMediaReferencesFromPrompt,
+  type MediaLabel,
+  MediaMentionSegmentKind,
+  resolveMediaMentionTrigger,
+} from './mediaMentionUtils';
+import MediaModelPicker from './MediaModelPicker';
 import { usePersistAgentModelSelection } from './usePersistAgentModelSelection';
 
 // CoworkAttachment is aliased from the Redux-persisted DraftAttachment type
@@ -154,7 +166,7 @@ export interface CoworkPromptInputRef {
 }
 
 interface CoworkPromptInputProps {
-  onSubmit: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
+  onSubmit: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[], mediaReferences?: MediaAttachmentRef[]) => boolean | void | Promise<boolean | void>;
   onStop?: () => void;
   isStreaming?: boolean;
   placeholder?: string;
@@ -217,6 +229,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [isPatchingModel, setIsPatchingModel] = useState(false);
     const [showAgentMenu, setShowAgentMenu] = useState(false);
     const [isReadOnlyContextCompact, setIsReadOnlyContextCompact] = useState(false);
+    const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
+    const [mentionFilter, setMentionFilter] = useState('');
+    const [mentionCursorPos, setMentionCursorPos] = useState(0);
+    const [mentionPickerPosition, setMentionPickerPosition] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+    const [textareaScrollTop, setTextareaScrollTop] = useState(0);
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const folderButtonRef = useRef<HTMLButtonElement>(null);
@@ -467,6 +484,62 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }
   }, [value, draftPrompt, dispatch, draftKey]);
 
+  useEffect(() => {
+    if (!value) {
+      setTextareaScrollTop(0);
+    }
+  }, [value]);
+
+  const mediaLabels = useMemo(() => computeMediaLabels(attachments), [attachments]);
+  const mediaMentionSegments = useMemo(
+    () => buildMediaMentionSegments(value, mediaLabels),
+    [mediaLabels, value]
+  );
+
+  const handleMentionSelect = useCallback((item: MediaLabel) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const before = value.slice(0, mentionCursorPos);
+    const after = value.slice(textarea.selectionStart);
+    // Remove the partial @filter text that the user typed
+    const atIdx = before.lastIndexOf('@');
+    const token = `@${item.label} `;
+    const newValue = before.slice(0, atIdx) + token + after;
+    const nextCursorPos = before.slice(0, atIdx).length + token.length;
+    setValue(newValue);
+    setMentionPickerOpen(false);
+    setMentionFilter('');
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(nextCursorPos, nextCursorPos);
+      setMentionCursorPos(nextCursorPos);
+    });
+  }, [value, mentionCursorPos]);
+
+  const handleTextareaScroll = useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
+    setTextareaScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
+  const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newValue = e.target.value;
+    setValue(newValue);
+
+    // Detect @ mention trigger
+    const cursorPos = e.target.selectionStart;
+    const mentionTrigger = mediaLabels.length > 0
+      ? resolveMediaMentionTrigger(newValue, cursorPos)
+      : null;
+    if (mentionTrigger) {
+      setMentionPickerOpen(true);
+      setMentionFilter(mentionTrigger.filter);
+      setMentionCursorPos(mentionTrigger.cursorPos);
+      const caretPos = getCaretPixelPosition(e.target, mentionTrigger.atIndex);
+      setMentionPickerPosition({ top: caretPos.top, left: caretPos.left });
+      return;
+    }
+    setMentionPickerOpen(false);
+  }, [mediaLabels]);
+
   const handleSubmit = useCallback(async () => {
     if (showFolderSelector && !workingDirectory?.trim()) {
       setShowFolderRequiredWarning(true);
@@ -566,13 +639,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         })),
       });
     }
-    const result = await onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
+
+    // Resolve @media tokens into MediaAttachmentRef array
+    const mediaReferences = extractMediaReferencesFromPrompt(finalPrompt, mediaLabels);
+
+    const result = await onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined, mediaReferences.length > 0 ? mediaReferences : undefined);
     if (result === false) return;
     setValue('');
     dispatch(setDraftPrompt({ sessionId: draftKey, draft: '' }));
     dispatch(clearDraftAttachments(draftKey));
     setImageVisionHint(false);
-  }, [value, isStreaming, disabled, isPatchingModel, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch, draftKey, effectiveSelectedModel?.id, modelSupportsImage]);
+  }, [value, isStreaming, disabled, isPatchingModel, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch, draftKey, effectiveSelectedModel?.id, modelSupportsImage, mediaLabels]);
 
   const handleSelectSkill = useCallback((skill: Skill) => {
     dispatch(toggleActiveSkill(skill.id));
@@ -595,6 +672,26 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+
+    if (event.key === 'Backspace' && !isComposing) {
+      const textarea = event.currentTarget;
+      const cursorPos = textarea.selectionStart;
+      if (cursorPos === textarea.selectionEnd && cursorPos > 0) {
+        const textBefore = value.slice(0, cursorPos);
+        const mentionMatch = textBefore.match(/@(图片|视频|音频)\d+ ?$/);
+        if (mentionMatch) {
+          event.preventDefault();
+          const tokenStart = cursorPos - mentionMatch[0].length;
+          const newValue = value.slice(0, tokenStart) + value.slice(cursorPos);
+          setValue(newValue);
+          requestAnimationFrame(() => {
+            textarea.setSelectionRange(tokenStart, tokenStart);
+          });
+          return;
+        }
+      }
+    }
+
     if (event.key !== 'Enter' || isComposing) return;
 
     // Use synced state (kept up-to-date via config-updated event) so that
@@ -1028,6 +1125,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         compact={useHomeContextLayout}
         dropdownDirection="up"
         alignDropdownToTriggerEnd={useHomeContextLayout}
+        portal={showReadOnlyContext}
         disabled={isPatchingModel || isPersistingAgentModel}
         value={agentModelIsInvalid && currentSession?.modelOverride
           ? { id: '__invalid__', name: currentSession.modelOverride.split('/').pop() || currentSession.modelOverride } as Model
@@ -1153,6 +1251,68 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   ) : null;
   const textareaPlaceholder = placeholder;
 
+  const renderMentionTextarea = ({
+    rows,
+    placeholder: textareaPlaceholderText,
+    style,
+    wrapperClassName = 'relative w-full',
+  }: {
+    rows: number;
+    placeholder: string;
+    style?: React.CSSProperties;
+    wrapperClassName?: string;
+  }) => (
+    <div className={wrapperClassName}>
+      {value && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 overflow-hidden"
+        >
+          <div
+            className={`${textareaClass} whitespace-pre-wrap break-words text-foreground`}
+            style={{
+              ...style,
+              transform: `translateY(-${textareaScrollTop}px)`,
+            }}
+          >
+            {mediaMentionSegments.map((segment, idx) => (
+              segment.kind === MediaMentionSegmentKind.Mention ? (
+                <span
+                  key={`${segment.kind}-${idx}`}
+                  className="rounded bg-primary/15 text-primary"
+                >
+                  {segment.text}
+                </span>
+              ) : (
+                <React.Fragment key={`${segment.kind}-${idx}`}>
+                  {segment.text}
+                </React.Fragment>
+              )
+            ))}
+            <span>{'\u200b'}</span>
+          </div>
+        </div>
+      )}
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={handleTextareaChange}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        onScroll={handleTextareaScroll}
+        placeholder={textareaPlaceholderText}
+        disabled={disabled}
+        rows={rows}
+        className={textareaClass}
+        style={{
+          ...style,
+          color: value ? 'transparent' : undefined,
+          caretColor: 'var(--lobster-text-primary)',
+        }}
+      />
+    </div>
+  );
+
   const readOnlyContextRow = isLarge && showReadOnlyContext && !useHomeContextLayout ? (
     <div className="mt-2 grid min-h-7 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-4">
       <div ref={readOnlyContextGroupRef} className="flex min-w-0 items-center gap-1">
@@ -1203,14 +1363,20 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   return (
     <div className="relative">
       {attachments.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-2 max-h-[136px] overflow-y-auto">
-          {attachments.map((attachment) => (
-            <AttachmentCard
-              key={attachment.path}
-              attachment={attachment}
-              onRemove={handleRemoveAttachment}
-            />
-          ))}
+        <div className="mb-2 max-h-[164px] overflow-y-auto rounded-xl bg-black/[0.035] p-2 dark:bg-white/[0.055]">
+          <div className="flex flex-wrap gap-2">
+            {attachments.map((attachment) => {
+              const ml = mediaLabels.find(m => m.attachment.path === attachment.path);
+              return (
+                <AttachmentCard
+                  key={attachment.path}
+                  attachment={attachment}
+                  onRemove={handleRemoveAttachment}
+                  label={ml?.label}
+                />
+              );
+            })}
+          </div>
         </div>
       )}
       {imageVisionHint && (
@@ -1245,21 +1411,24 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <>
               <div className="relative z-10 rounded-2xl border border-border bg-surface shadow-card">
                 {activeSkillContextRow}
-                <textarea
-                  ref={textareaRef}
-                  value={value}
-                  onChange={(e) => setValue(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  onPaste={handlePaste}
-                  placeholder={textareaPlaceholder}
-                  disabled={disabled}
-                  rows={2}
-                  className={textareaClass}
-                  style={{ minHeight: `${minHeight}px` }}
-                />
+                {renderMentionTextarea({
+                  rows: 2,
+                  placeholder: textareaPlaceholder,
+                  style: { minHeight: `${minHeight}px` },
+                })}
+                {mentionPickerOpen && (
+                  <MediaMentionPicker
+                    items={mediaLabels}
+                    filter={mentionFilter}
+                    position={mentionPickerPosition}
+                    onSelect={handleMentionSelect}
+                    onDismiss={() => setMentionPickerOpen(false)}
+                  />
+                )}
                 <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-1">
                   <div className="flex min-w-0 items-center gap-2">
                     {largeInputActions}
+                    <MediaModelPicker draftKey={draftKey} disabled={disabled} />
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {contextUsageControl}
@@ -1348,18 +1517,20 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           ) : (
             <>
               {activeSkillContextRow}
-              <textarea
-                ref={textareaRef}
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                placeholder={textareaPlaceholder}
-                disabled={disabled}
-                rows={2}
-                className={textareaClass}
-                style={{ minHeight: `${minHeight}px` }}
-              />
+              {renderMentionTextarea({
+                rows: 2,
+                placeholder: textareaPlaceholder,
+                style: { minHeight: `${minHeight}px` },
+              })}
+              {mentionPickerOpen && (
+                <MediaMentionPicker
+                  items={mediaLabels}
+                  filter={mentionFilter}
+                  position={mentionPickerPosition}
+                  onSelect={handleMentionSelect}
+                  onDismiss={() => setMentionPickerOpen(false)}
+                />
+              )}
               <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-1.5">
                 <div className="flex min-w-0 items-center gap-2 relative">
                   {showFolderSelector && (
@@ -1408,6 +1579,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     </>
                   )}
                   {largeInputActions}
+                  <MediaModelPicker draftKey={draftKey} disabled={disabled} />
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {contextUsageControl}
@@ -1419,17 +1591,20 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           )
         ) : (
           <>
-            <textarea
-              ref={textareaRef}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder={placeholder}
-              disabled={disabled}
-              rows={1}
-              className={textareaClass}
-            />
+            {renderMentionTextarea({
+              rows: 1,
+              placeholder,
+              wrapperClassName: 'relative flex-1',
+            })}
+            {mentionPickerOpen && (
+              <MediaMentionPicker
+                items={mediaLabels}
+                filter={mentionFilter}
+                position={mentionPickerPosition}
+                onSelect={handleMentionSelect}
+                onDismiss={() => setMentionPickerOpen(false)}
+              />
+            )}
 
             {!remoteManaged && (
               <div className="flex items-center gap-1">

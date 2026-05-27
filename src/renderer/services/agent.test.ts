@@ -67,6 +67,38 @@ describe('agentService.updateAgent', () => {
     expect(store.getState().skill.activeSkillIds).toEqual(['docx', 'web-search']);
   });
 
+  test('does not clear active skills when only model is updated', async () => {
+    store.dispatch(setAgents([{
+      id: 'agent-1',
+      name: 'Agent 1',
+      description: '',
+      icon: '',
+      model: '',
+      workingDirectory: '',
+      enabled: true,
+      pinned: false,
+      pinOrder: null,
+      isDefault: false,
+      source: 'custom',
+      skillIds: [],
+    }]));
+    store.dispatch(setCurrentAgentId('agent-1'));
+    store.dispatch(setActiveSkillIds(['user-selected-skill']));
+
+    (globalThis as { window?: unknown }).window = {
+      electron: {
+        agents: {
+          update: vi.fn().mockResolvedValue(makeAgent({ model: 'new-model', skillIds: [] })),
+        },
+      },
+    };
+
+    await agentService.updateAgent('agent-1', { model: 'new-model' });
+
+    // Active skills should remain untouched since skillIds was not in the update
+    expect(store.getState().skill.activeSkillIds).toEqual(['user-selected-skill']);
+  });
+
   test('does not replace active skills when another agent is saved', async () => {
     store.dispatch(setAgents([{
       id: 'agent-1',

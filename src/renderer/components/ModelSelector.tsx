@@ -32,7 +32,7 @@ interface ModelSelectorProps {
 }
 
 const DROPDOWN_MAX_HEIGHT = 344; // list max-h-72 plus the tab area
-const DROPDOWN_WIDTH = 240; // matches w-60
+const DROPDOWN_WIDTH = 300;
 const DROPDOWN_VIEWPORT_MARGIN = 8;
 const MODEL_ICON_CLASS_NAME = 'h-[18px] w-[18px]';
 const ModelSelectorGroup = {
@@ -72,6 +72,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const dropdownRef = React.useRef<HTMLDivElement>(null);
   const scrollContainerRef = React.useRef<HTMLDivElement>(null);
   const selectedItemRef = React.useRef<HTMLButtonElement>(null);
+  const [hoveredModel, setHoveredModel] = React.useState<Model | null>(null);
+  const [hoverCardStyle, setHoverCardStyle] = React.useState<React.CSSProperties>({});
+  const hoverTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const controlled = onChange !== undefined;
   const globalSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
@@ -106,6 +109,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const visibleModels = shouldShowGroupTabs
     ? (visibleGroup === ModelSelectorGroup.Server ? serverModels : userModels)
     : availableModels;
+  const accessibleModels = visibleModels.filter(m => m.accessible !== false);
+  const restrictedModels = visibleModels.filter(m => m.accessible === false);
 
   // 点击外部区域关闭下拉框
   React.useEffect(() => {
@@ -207,6 +212,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const handleModelSelect = (model: Model | null) => {
     if (disabled) return;
+    if (model && model.accessible === false) return;
     if (controlled) {
       onChange(model);
     } else if (model) {
@@ -259,8 +265,50 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     : 'font-medium text-sm';
   const triggerIconClassName = compact ? 'h-3.5 w-3.5' : 'h-4 w-4';
 
+  const handleModelHover = (model: Model, event: React.MouseEvent<HTMLButtonElement>) => {
+    if (model.accessible === false) return;
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    const itemRect = event.currentTarget.getBoundingClientRect();
+    hoverTimerRef.current = setTimeout(() => {
+      if (!model.description && !model.costMultiplier && !model.supportsImage && !model.supportsThinking) {
+        setHoveredModel(null);
+        return;
+      }
+      const dropdownEl = dropdownRef.current;
+      if (!dropdownEl) return;
+      const dropdownRect = dropdownEl.getBoundingClientRect();
+      const spaceRight = window.innerWidth - dropdownRect.right;
+      const cardWidth = 220;
+      const style: React.CSSProperties = {
+        position: 'fixed',
+        top: itemRect.top,
+        zIndex: 10001,
+      };
+      if (spaceRight >= cardWidth + 8) {
+        style.left = dropdownRect.right + 8;
+      } else {
+        style.right = window.innerWidth - dropdownRect.left + 8;
+      }
+      setHoverCardStyle(style);
+      setHoveredModel(model);
+    }, 200);
+  };
+
+  const handleModelHoverEnd = () => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setHoveredModel(null);
+  };
+
+  React.useEffect(() => {
+    if (!isOpen) setHoveredModel(null);
+  }, [isOpen]);
+
   const renderModelItem = (model: Model) => {
     const selected = isSelected(model);
+    const restricted = model.accessible === false;
 
     return (
       <button
@@ -268,26 +316,70 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         type="button"
         key={getModelIdentityKey(model)}
         onClick={() => handleModelSelect(model)}
-        className={`w-full px-3 py-2 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center gap-2.5 transition-colors ${
-          selected ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
+        onMouseEnter={(e) => handleModelHover(model, e)}
+        onMouseLeave={handleModelHoverEnd}
+        className={`w-full px-3 py-2 text-left dark:text-claude-darkText text-claude-text flex items-center gap-2.5 transition-colors ${
+          restricted
+            ? 'cursor-not-allowed'
+            : `dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover ${selected ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''}`
         }`}
       >
         <span className="flex h-5 w-5 shrink-0 items-center justify-center text-secondary">
           {renderProviderIcon(model)}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5">
+        <span className="min-w-0 truncate text-[13px] font-normal leading-5">
           {model.name}
         </span>
-        {model.supportsImage && (
+        {model.costMultiplier != null && model.costMultiplier > 0 && (
+          <span className="shrink-0 text-[11px] text-secondary whitespace-nowrap">
+            x{model.costMultiplier} {i18nService.t('authCreditsUnit')}
+          </span>
+        )}
+        <span className="flex-1" />
+        {model.supportsImage && !restricted && (
           <span className="shrink-0 rounded-md bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium leading-none text-secondary">
             {i18nService.t('modelSupportsImageInputBadge')}
           </span>
         )}
-        {selected && (
+        {selected && !restricted && (
           <CheckIcon className="h-4 w-4 shrink-0 text-emerald-500" />
         )}
       </button>
     );
+  };
+
+  const renderHoverCard = () => {
+    if (!hoveredModel) return null;
+    const card = (
+      <div style={hoverCardStyle} className="w-[220px] rounded-xl border border-border bg-surface shadow-popover p-3 pointer-events-none">
+        <div className="text-[13px] font-semibold text-foreground leading-5">{hoveredModel.name}</div>
+        {hoveredModel.description && (
+          <div className="mt-1 text-[11px] text-secondary leading-4">{hoveredModel.description}</div>
+        )}
+        {hoveredModel.costMultiplier != null && hoveredModel.costMultiplier > 0 && (
+          <div className="mt-2 text-[11px] text-secondary">
+            ({i18nService.t('modelCostMultiplierLabel')} x{hoveredModel.costMultiplier})
+          </div>
+        )}
+        {(hoveredModel.supportsImage || hoveredModel.supportsThinking) && (
+          <div className="mt-1.5 flex items-center gap-3 text-[11px] text-emerald-600">
+            {hoveredModel.supportsImage && (
+              <span className="flex items-center gap-1">
+                <span>✓</span>
+                <span>{i18nService.t('modelSupportsImageInputBadge')}</span>
+              </span>
+            )}
+            {hoveredModel.supportsThinking && (
+              <span className="flex items-center gap-1">
+                <span>✓</span>
+                <span>{i18nService.t('modelSupportsThinkingBadge')}</span>
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    );
+    return createPortal(card, document.body);
   };
 
   const renderGroupTabs = () => (
@@ -317,7 +409,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     <div
       ref={dropdownRef}
       style={portal ? portalStyle : undefined}
-      className={`${portal ? '' : `absolute ${dropdownPositionClass} ${dropdownAlignmentClass}`} w-60 bg-surface rounded-xl popover-enter shadow-popover z-50 border-border border overflow-hidden`}
+      className={`${portal ? '' : `absolute ${dropdownPositionClass} ${dropdownAlignmentClass}`} w-[300px] bg-surface rounded-xl popover-enter shadow-popover z-50 border-border border overflow-hidden`}
     >
       {shouldShowGroupTabs && renderGroupTabs()}
       <div ref={scrollContainerRef} className="model-selector-scroll max-h-72 overflow-y-auto py-1">
@@ -333,7 +425,34 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             {!selectedModel && <CheckIcon className="h-4 w-4 shrink-0 text-emerald-500" />}
           </button>
         )}
-        {visibleModels.map(renderModelItem)}
+        {accessibleModels.map(renderModelItem)}
+        {restrictedModels.length > 0 && (
+          <>
+            <div className="flex justify-center py-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  const { getPortalPricingUrl } = await import('../services/endpoints');
+                  await window.electron.shell.openExternal(getPortalPricingUrl());
+                }}
+                className="flex items-center gap-1.5 rounded-full bg-surface/80 backdrop-blur-md px-3.5 py-1.5 shadow-sm border border-border/40 cursor-pointer hover:bg-surface-raised hover:shadow-md transition-all"
+              >
+                <svg className="h-3.5 w-3.5 text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10.02 17.52C10.48 18.11 11.2 18.5 12 18.5C13.38 18.5 14.5 17.38 14.5 16C14.5 15.43 14.31 14.9 13.99 14.48" />
+                  <path d="M2.82 20.8C2.21 20.04 2 18.83 2 17V15C2 11 3 10 7 10H17C17.36 10 17.69 10.01 18 10.03C21.17 10.21 22 11.36 22 15V17C22 21 21 22 17 22H7C6.64 22 6.31 21.99 6 21.97" />
+                  <path d="M6 10V8C6 4.69 7 2 12 2C16.15 2 17.54 3.38 17.9 5.56" />
+                  <path d="M22 2L2 22" />
+                </svg>
+                <span className="text-[11px] text-blue-500 font-medium leading-none">
+                  {i18nService.t('modelSelectorLockedOverlay')}
+                </span>
+              </button>
+            </div>
+            <div className="pointer-events-none opacity-50">
+              {restrictedModels.map(renderModelItem)}
+            </div>
+          </>
+        )}
       </div>
     </div>
   ) : null;
@@ -351,6 +470,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       </button>
 
       {portal && dropdown ? createPortal(dropdown, document.body) : dropdown}
+      {renderHoverCard()}
     </div>
   );
 };

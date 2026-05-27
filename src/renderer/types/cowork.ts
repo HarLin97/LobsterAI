@@ -1,3 +1,8 @@
+import type {
+  CoworkContextUsageFailureReason,
+  CoworkContextUsageSource,
+} from '../../shared/cowork/constants';
+
 // Cowork image attachment for vision-capable models
 export interface CoworkImageAttachment {
   name: string;
@@ -75,6 +80,18 @@ export interface CoworkContextUsage {
   model?: string;
   updatedAt: number;
 }
+
+export type CoworkContextUsageResult =
+  | {
+      success: true;
+      usage?: CoworkContextUsage | null;
+      source?: CoworkContextUsageSource;
+    }
+  | {
+      success: false;
+      error?: string;
+      reason?: CoworkContextUsageFailureReason;
+    };
 
 // Cowork message
 export interface CoworkMessage {
@@ -258,6 +275,8 @@ export interface CoworkStartOptions {
   agentId?: string;
   modelOverride?: string;
   imageAttachments?: CoworkImageAttachment[];
+  mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
+  mediaReferences?: import('./mediaGeneration').MediaAttachmentRef[];
 }
 
 // Continue session options
@@ -267,6 +286,8 @@ export interface CoworkContinueOptions {
   systemPrompt?: string;
   activeSkillIds?: string[];
   imageAttachments?: CoworkImageAttachment[];
+  mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
+  mediaReferences?: import('./mediaGeneration').MediaAttachmentRef[];
 }
 
 // IPC result types

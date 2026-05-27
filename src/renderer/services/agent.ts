@@ -121,7 +121,12 @@ class AgentService {
             skillIds,
           },
         }));
-        syncActiveSkillsForCurrentAgent(agent.id, skillIds);
+        // Only sync active skills when skillIds were explicitly updated,
+        // to avoid clearing user's temporary skill selection on unrelated
+        // updates (e.g. model change).
+        if ('skillIds' in updates) {
+          syncActiveSkillsForCurrentAgent(agent.id, skillIds);
+        }
         return agent;
       }
       return null;
