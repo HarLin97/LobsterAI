@@ -23,6 +23,7 @@ import {
   getRetainedMediaPollCount,
   getToolResultDisplay,
   getToolResultLineCount,
+  getToolResultLineCountSummary,
   getVideoPathArtifacts,
   getVisibleAssistantItems,
   hasText,
@@ -254,7 +255,7 @@ const AssistantTurnBlock: React.FC<{
             </div>
             {resultLineCount > 0 && (
               <div className="text-xs text-muted mt-0.5">
-                {resultLineCount} {resultLineCount === 1 ? 'line' : 'lines'} of output
+                {getToolResultLineCountSummary(resultLineCount)}
               </div>
             )}
             {resultLineCount === 0 && showNoDetailError && (
