@@ -4453,8 +4453,8 @@ test('reconcileWithHistory: tail window starting with assistant updates anchored
 
   expect(getReplaceCallCount()).toBe(1);
   expect(getLastReplaceArgs()!.authoritative).toEqual([
-    { role: 'user', text: 'First question', timestamp: 1 },
-    { role: 'assistant', text: 'First answer', timestamp: 2 },
+    { role: 'user', text: 'First question', timestamp: 1, metadata: {} },
+    { role: 'assistant', text: 'First answer', timestamp: 2, metadata: {} },
     { role: 'user', text: 'Second question', timestamp: 3 },
     { role: 'assistant', text: 'Full complete answer from gateway.' },
   ]);
@@ -4485,7 +4485,7 @@ test('reconcileWithHistory: tail window repairs stale leading assistant before a
 
   expect(getReplaceCallCount()).toBe(1);
   expect(getLastReplaceArgs()!.authoritative).toEqual([
-    { role: 'user', text: 'First question', timestamp: 1 },
+    { role: 'user', text: 'First question', timestamp: 1, metadata: {} },
     { role: 'assistant', text: 'Correct previous answer' },
     { role: 'user', text: 'Second question', timestamp: 3 },
     { role: 'assistant', text: 'Full complete answer from gateway.' },
