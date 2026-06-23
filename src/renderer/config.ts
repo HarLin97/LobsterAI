@@ -83,6 +83,8 @@ export interface AppConfig {
   useSystemProxy: boolean;
   // 是否启用 SQLite 自动备份与恢复
   sqliteAutoBackupEnabled?: boolean;
+  // 是否允许发送基础产品使用统计
+  usageAnalyticsEnabled?: boolean;
   // 通知配置
   notificationSettings?: NotificationSettings;
   // 浏览器与网页访问配置
@@ -135,6 +137,7 @@ export const defaultConfig: AppConfig = {
   language: 'zh',
   useSystemProxy: false,
   sqliteAutoBackupEnabled: false,
+  usageAnalyticsEnabled: true,
   notificationSettings: defaultNotificationSettings,
   browserWebAccess: defaultBrowserWebAccessConfig,
   app: {

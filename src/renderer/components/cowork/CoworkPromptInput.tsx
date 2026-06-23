@@ -18,6 +18,11 @@ import { coworkService } from '../../services/cowork';
 import { getPortalPricingUrl } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import { getInstalledKitSkillIds } from '../../services/kitCapability';
+import {
+  LogReporterAction,
+  LogReporterEntry,
+  reportYdAnalyzer,
+} from '../../services/logReporter';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { selectDraftPrompts } from '../../store/selectors/coworkSelectors';
@@ -1442,6 +1447,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       draftKey,
       mode: nextMode,
     }));
+    if (nextMode === CoworkCollaborationMode.Plan) {
+      void reportYdAnalyzer({
+        action: LogReporterAction.PlanModeEnabled,
+        entry: LogReporterEntry.PromptToolsMenu,
+      });
+    }
   }, [dispatch, draftKey, isPlanMode]);
 
   const handleRemoveAttachment = useCallback((path: string) => {

@@ -723,6 +723,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [sqliteAutoBackupEnabled, setSqliteAutoBackupEnabled] = useState(false);
+  const [usageAnalyticsEnabled, setUsageAnalyticsEnabled] = useState(true);
   const [taskCompletionNotificationsEnabled, setTaskCompletionNotificationsEnabled] = useState(true);
   const [browserWebAccess, setBrowserWebAccess] = useState<BrowserWebAccessConfig>(() => ({
     ...defaultBrowserWebAccessConfig,
@@ -1130,6 +1131,7 @@ const Settings: React.FC<SettingsProps> = ({
       setLanguage(config.language);
       setUseSystemProxy(config.useSystemProxy ?? false);
       setSqliteAutoBackupEnabled(config.sqliteAutoBackupEnabled === true);
+      setUsageAnalyticsEnabled(config.usageAnalyticsEnabled !== false);
       setTaskCompletionNotificationsEnabled(
         normalizeNotificationSettings(config.notificationSettings).taskCompletionNotificationsEnabled,
       );
@@ -2320,6 +2322,7 @@ const Settings: React.FC<SettingsProps> = ({
         language,
         useSystemProxy,
         sqliteAutoBackupEnabled,
+        usageAnalyticsEnabled,
         notificationSettings: {
           taskCompletionNotificationsEnabled,
         },
@@ -3479,6 +3482,15 @@ const Settings: React.FC<SettingsProps> = ({
               checked={skipMissedJobs}
               onToggle={() => {
                 setSkipMissedJobs((prev) => !prev);
+              }}
+            />
+
+            <SettingsToggleRow
+              title={i18nService.t('usageAnalyticsEnabled')}
+              description={i18nService.t('usageAnalyticsEnabledDescription')}
+              checked={usageAnalyticsEnabled}
+              onToggle={() => {
+                setUsageAnalyticsEnabled((prev) => !prev);
               }}
             />
 
