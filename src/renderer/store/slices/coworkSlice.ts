@@ -38,7 +38,7 @@ interface CoworkState {
   draftKitIds: Record<string, string[]>;
   /** Keyed by draftKey, stores active skill IDs per draft so they survive view switches */
   draftSkillIds: Record<string, string[]>;
-  /** Keyed by draftKey, stores the selected collaboration mode for the next turn. */
+  /** Keyed by draftKey, stores the active collaboration mode for the draft/session. */
   draftCollaborationModes: Record<string, CoworkCollaborationModeType>;
   unreadSessionIds: string[];
   isCoworkActive: boolean;

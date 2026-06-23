@@ -1,13 +1,14 @@
 import { AgentId } from '@shared/agent';
 import React, { useCallback, useEffect, useState } from 'react';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { agentService } from '../../services/agent';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { RootState } from '../../store';
 import { selectCurrentSessionId } from '../../store/selectors/coworkSelectors';
-import type { SubagentSessionSummary } from '../../types/cowork';
+import { setDraftCollaborationMode } from '../../store/slices/coworkSlice';
+import { CoworkCollaborationMode, type SubagentSessionSummary } from '../../types/cowork';
 import { isDefaultAgentId } from '../../utils/agentDisplay';
 import AgentCreateModal from '../agent/AgentCreateModal';
 import AgentSettingsPanel from '../agent/AgentSettingsPanel';
@@ -56,6 +57,7 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   onSelectSubagent,
 }) => {
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const dispatch = useDispatch();
   const currentSessionId = useSelector(selectCurrentSessionId);
   const currentSessionStatus = useSelector(
     (state: RootState) => state.cowork.currentSession?.status,
@@ -239,10 +241,14 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
       await coworkService.loadSessions(agent.id);
     }
     coworkService.clearSession({ restoreAgentSkills: true });
+    dispatch(setDraftCollaborationMode({
+      draftKey: '__home__',
+      mode: CoworkCollaborationMode.Default,
+    }));
     onShowCowork();
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
-        detail: { clear: false },
+        detail: { clear: false, resetCollaborationMode: true },
       }));
     }, 0);
   };

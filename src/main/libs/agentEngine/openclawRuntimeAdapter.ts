@@ -5361,7 +5361,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     const parsedManagedSession = parseManagedSessionKey(normalizedSessionKey);
     if (!parsedManagedSession) {
-      return null;
+      return this.resolveLocalSessionIdFromGatewaySessionKey(normalizedSessionKey);
     }
 
     const session = this.store.getSession(parsedManagedSession.sessionId);
@@ -5371,6 +5371,48 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     this.rememberSessionKey(session.id, normalizedSessionKey);
     this.rememberSessionKey(session.id, this.toSessionKey(session.id, session.agentId));
+    return session.id;
+  }
+
+  private resolveLocalSessionIdFromGatewaySessionKey(sessionKey: string): string | null {
+    const match = /^agent:([^:]+):([^:]+):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(sessionKey);
+    if (!match) {
+      return null;
+    }
+
+    const [, agentId, source, candidateSessionId] = match;
+    const session = this.store.getSession(candidateSessionId);
+    if (!session) {
+      console.debug(
+        '[OpenClawRuntime] ignored gateway session key with unknown local session id',
+        `sessionKey=${sessionKey}`,
+        `agentId=${agentId}`,
+        `source=${source}`,
+      );
+      return null;
+    }
+    const localAgentId = typeof session.agentId === 'string' && session.agentId.trim()
+      ? session.agentId.trim()
+      : 'main';
+    if (agentId !== localAgentId) {
+      console.debug(
+        '[OpenClawRuntime] ignored gateway session key with mismatched local agent id',
+        `sessionId=${candidateSessionId}`,
+        `sessionKeyAgentId=${agentId}`,
+        `localAgentId=${localAgentId}`,
+        `source=${source}`,
+      );
+      return null;
+    }
+
+    this.rememberSessionKey(session.id, sessionKey);
+    this.rememberSessionKey(session.id, this.toSessionKey(session.id, session.agentId));
+    console.warn(
+      '[OpenClawRuntime] resolved non-managed gateway session key to local session by id fallback',
+      `sessionId=${session.id}`,
+      `agentId=${agentId}`,
+      `source=${source}`,
+    );
     return session.id;
   }
 
@@ -5889,11 +5931,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         console.warn(
           `[OpenClawRuntime] blocked ${toolName} in plan mode for session ${sessionId}: ${blockedReason}.`,
         );
-        const blockedMessage = this.store.addMessage(sessionId, {
-          type: 'system',
-          content: t('coworkPlanModeToolBlocked', { tool: toolName }),
-        });
-        this.emit('message', sessionId, blockedMessage);
         (turn.planModeSuppressedToolCallIds ??= new Set()).add(toolCallId);
         if (turn.planModeRecoveryAttempted || turn.planModeSafetyRecoveryPending) {
           console.warn(

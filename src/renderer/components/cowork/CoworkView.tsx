@@ -19,7 +19,7 @@ import {
   selectCurrentSession,
   selectIsStreaming,
 } from '../../store/selectors/coworkSelectors';
-import { addMessage, setCurrentSession, setDraftKitIds, setDraftSkillIds, setStreaming, updateSessionStatus } from '../../store/slices/coworkSlice';
+import { addMessage, setCurrentSession, setDraftCollaborationMode, setDraftKitIds, setDraftSkillIds, setStreaming, updateSessionStatus } from '../../store/slices/coworkSlice';
 import { clearActiveKits } from '../../store/slices/kitSlice';
 import { clearSelection,selectAction, setActions } from '../../store/slices/quickActionSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../../store/slices/skillSlice';
@@ -359,6 +359,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
       // Immediately show the session detail page with user message
       dispatch(setCurrentSession(tempSession));
+      if (isPlanMode) {
+        dispatch(setDraftCollaborationMode({
+          draftKey: tempSessionId,
+          mode: CoworkCollaborationMode.Plan,
+        }));
+      }
       dispatch(setStreaming(true));
 
       // Clear active skills, kits and quick action selection after starting session
@@ -415,6 +421,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       }
       if (!startedSession) {
         return false;
+      }
+      if (isPlanMode) {
+        dispatch(setDraftCollaborationMode({
+          draftKey: startedSession.id,
+          mode: CoworkCollaborationMode.Plan,
+        }));
       }
 
       // Stop immediately if user cancelled while startup request was in flight.
@@ -556,8 +568,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       const shouldClear = !currentSession;
       coworkService.clearSession({ restoreAgentSkills: true });
       dispatch(clearSelection());
+      dispatch(setDraftCollaborationMode({
+        draftKey: '__home__',
+        mode: CoworkCollaborationMode.Default,
+      }));
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
-        detail: { clear: shouldClear },
+        detail: { clear: shouldClear, resetCollaborationMode: true },
       }));
     };
     window.addEventListener(CoworkUiEvent.ShortcutNewSession, handleNewSession);

@@ -43,11 +43,11 @@ import {
   selectCurrentSessionId,
   selectFirstPendingPermission,
 } from './store/selectors/coworkSelectors';
-import { setDraftKitIds, setDraftPrompt } from './store/slices/coworkSlice';
+import { setDraftCollaborationMode, setDraftKitIds, setDraftPrompt } from './store/slices/coworkSlice';
 import { setActiveKitIds } from './store/slices/kitSlice';
 import { setAvailableModels, setDefaultSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
-import type { CoworkPermissionResult } from './types/cowork';
+import { CoworkCollaborationMode, type CoworkPermissionResult } from './types/cowork';
 
 const getOpenClawProviderIdForConfig = (
   providerName: string,
@@ -350,6 +350,10 @@ const App: React.FC = () => {
     dispatch(setActiveKitIds([kitId]));
     coworkService.clearSession({ restoreAgentSkills: true });
     dispatch(clearSelection());
+    dispatch(setDraftCollaborationMode({
+      draftKey: '__home__',
+      mode: CoworkCollaborationMode.Default,
+    }));
     // Set the draft prompt and kit selection in store BEFORE switching view, so that when
     // CoworkPromptInput mounts/updates with draftKey='__home__', it picks up both.
     dispatch(setDraftPrompt({ sessionId: '__home__', draft: text }));
@@ -357,7 +361,7 @@ const App: React.FC = () => {
     setMainView('cowork');
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
-        detail: { text },
+        detail: { resetCollaborationMode: true, text },
       }));
     }, 0);
   }, [dispatch]);
@@ -371,10 +375,14 @@ const App: React.FC = () => {
     const shouldClearInput = mainView === 'cowork' && !currentSessionId;
     coworkService.clearSession({ restoreAgentSkills: true });
     dispatch(clearSelection());
+    dispatch(setDraftCollaborationMode({
+      draftKey: '__home__',
+      mode: CoworkCollaborationMode.Default,
+    }));
     setMainView('cowork');
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
-        detail: { clear: shouldClearInput },
+        detail: { clear: shouldClearInput, resetCollaborationMode: true },
       }));
     }, 0);
   }, [dispatch, mainView, currentSessionId]);
@@ -383,6 +391,10 @@ const App: React.FC = () => {
     dispatch(setDraftPrompt({ sessionId: '__home__', draft: i18nService.t('skillCreatorPrompt') }));
     coworkService.clearSession();
     dispatch(clearSelection());
+    dispatch(setDraftCollaborationMode({
+      draftKey: '__home__',
+      mode: CoworkCollaborationMode.Default,
+    }));
     setMainView('cowork');
   }, [dispatch]);
 

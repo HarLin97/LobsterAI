@@ -1577,9 +1577,12 @@ test('continueSession aborts silently when the session is stopped during the mod
 
 // ==================== Reconcile tests ====================
 
-function createReconcileStore(messages: Array<Record<string, unknown>>) {
+function createReconcileStore(
+  messages: Array<Record<string, unknown>>,
+  options: { sessionId?: string } = {},
+) {
   const session = {
-    id: 'session-1',
+    id: options.sessionId ?? 'session-1',
     title: 'Test Session',
     claudeSessionId: null,
     status: 'completed',
@@ -2462,6 +2465,85 @@ test('chat final backfills only current-turn tool results from history', async (
   } finally {
     vi.useRealTimers();
   }
+});
+
+test('chat error maps non-managed OpenClaw session key to existing local session id', () => {
+  const localSessionId = '9d1af7fd-2827-42aa-a28d-8282c9b8df47';
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'create a ppt', timestamp: 1, metadata: {} },
+  ], { sessionId: localSessionId });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const canonicalSessionKey = `agent:main:lobsterai:${session.id}`;
+  const gatewaySessionKey = `agent:main:openai:${session.id}`;
+  const errorSpy = vi.fn();
+
+  session.status = 'running';
+  adapter.on('error', errorSpy);
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, canonicalSessionKey, 'run-timeout'));
+
+  adapter.handleChatEvent({
+    state: 'error',
+    runId: 'run-timeout',
+    sessionKey: gatewaySessionKey,
+    errorMessage: 'Unknown model: qwen-oauth/qwen3.6-plus',
+  }, 1);
+
+  expect(session.status).toBe('error');
+  expect(adapter.activeTurns.has(session.id)).toBe(false);
+  expect(errorSpy).toHaveBeenCalledWith(session.id, 'Unknown model: qwen-oauth/qwen3.6-plus');
+  expect(session.messages.some((message) => (
+    message.type === 'system'
+    && message.content === 'Unknown model: qwen-oauth/qwen3.6-plus'
+  ))).toBe(true);
+});
+
+test('chat error ignores non-managed OpenClaw session key when local session id is unknown', () => {
+  const localSessionId = '9d1af7fd-2827-42aa-a28d-8282c9b8df47';
+  const unknownSessionId = '583d961c-4706-4742-ac60-20509f6698e5';
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'create a ppt', timestamp: 1, metadata: {} },
+  ], { sessionId: localSessionId });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const canonicalSessionKey = `agent:main:lobsterai:${session.id}`;
+  const gatewaySessionKey = `agent:main:openai:${unknownSessionId}`;
+
+  session.status = 'running';
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, canonicalSessionKey, 'run-timeout'));
+
+  adapter.handleChatEvent({
+    state: 'error',
+    runId: 'run-timeout',
+    sessionKey: gatewaySessionKey,
+    errorMessage: 'Unknown model: qwen-oauth/qwen3.6-plus',
+  }, 1);
+
+  expect(session.status).toBe('running');
+  expect(adapter.activeTurns.has(session.id)).toBe(true);
+  expect(session.messages.some((message) => message.type === 'system')).toBe(false);
+});
+
+test('chat error ignores non-managed OpenClaw session key when agent id mismatches local session', () => {
+  const localSessionId = '9d1af7fd-2827-42aa-a28d-8282c9b8df47';
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'create a ppt', timestamp: 1, metadata: {} },
+  ], { sessionId: localSessionId });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const canonicalSessionKey = `agent:main:lobsterai:${session.id}`;
+  const gatewaySessionKey = `agent:agent-2:openai:${session.id}`;
+
+  session.status = 'running';
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, canonicalSessionKey, 'run-timeout'));
+
+  adapter.handleChatEvent({
+    state: 'error',
+    runId: 'run-timeout',
+    sessionKey: gatewaySessionKey,
+    errorMessage: 'Unknown model: qwen-oauth/qwen3.6-plus',
+  }, 1);
+
+  expect(session.status).toBe('running');
+  expect(adapter.activeTurns.has(session.id)).toBe(true);
+  expect(session.messages.some((message) => message.type === 'system')).toBe(false);
 });
 
 test('chat final repairs managed session assistant text from history', async () => {
@@ -4169,6 +4251,7 @@ test('blocked plan mode mutation aborts the unsafe run and resumes with a tool-f
   expect(turn.planModeSafetyRecoveryPending).toBe(true);
   expect(turn.planModeRecoveryAttempted).toBe(true);
   expect(session.status).toBe('running');
+  expect(session.messages.some((message) => message.type === 'system')).toBe(false);
 
   adapter.handleChatEvent({
     state: 'aborted',
@@ -4235,6 +4318,7 @@ test('repeated blocked mutation in one plan turn stops instead of looping recove
     runId: 'run-plan-repeat',
   });
   expect(request.mock.calls.some(([method]) => method === 'chat.send')).toBe(false);
+  expect(session.messages.some((message) => message.type === 'system')).toBe(false);
   expect(session.status).toBe('idle');
 });
 
@@ -4272,6 +4356,7 @@ test.each(['write_file', 'create_file', 'delete_file', 'powershell'])(
       runId: turn.runId,
     });
     expect(turn.planModeSafetyRecoveryPending).toBe(true);
+    expect(session.messages.some((message) => message.type === 'system')).toBe(false);
     expect(session.status).toBe('running');
   },
 );
