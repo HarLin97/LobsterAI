@@ -297,6 +297,7 @@ type GatewayClientCtor = new (options: Record<string, unknown>) => GatewayClient
 
 type OpenClawRuntimeAdapterOptions = {
   normalizeModelRef?: (modelRef: string) => string;
+  onGatewayClientReady?: () => void;
 };
 
 const SessionModelPatchSource = {
@@ -4261,6 +4262,11 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.gatewayClientEntryPath = connection.clientEntryPath;
         this.resetGatewayRpcHealth();
         settleResolve();
+        try {
+          this.options.onGatewayClientReady?.();
+        } catch (error) {
+          console.warn('[OpenClawRuntime] gateway ready callback failed:', error);
+        }
         this.lastTickTimestamp = Date.now();
         this.startTickWatchdog();
       },

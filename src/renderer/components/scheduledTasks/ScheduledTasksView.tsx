@@ -2,6 +2,7 @@ import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { ScheduledTaskDataStatus } from '../../../scheduledTask/constants';
 import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
@@ -38,6 +39,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const viewMode = useSelector((state: RootState) => state.scheduledTask.viewMode);
   const selectedTaskId = useSelector((state: RootState) => state.scheduledTask.selectedTaskId);
   const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
+  const taskListStatus = useSelector((state: RootState) => state.scheduledTask.taskListStatus);
   const selectedTask = selectedTaskId ? (tasks.find(t => t.id === selectedTaskId) ?? null) : null;
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
   const [deleteTaskInfo, setDeleteTaskInfo] = useState<{ id: string; name: string } | null>(null);
@@ -187,7 +189,8 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                 <button
                   type="button"
                   onClick={() => dispatch(setViewMode('create'))}
-                  className="px-3 py-1 text-[14px] font-normal leading-5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
+                  disabled={taskListStatus !== ScheduledTaskDataStatus.Ready}
+                  className="px-3 py-1 text-[14px] font-normal leading-5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary"
                 >
                   {i18nService.t('scheduledTasksNewTask')}
                 </button>

@@ -1,5 +1,9 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+import {
+  ScheduledTaskDataStatus,
+  type ScheduledTaskDataStatus as ScheduledTaskDataStatusValue,
+} from '../../../scheduledTask/constants';
 import type {
   ScheduledTask,
   ScheduledTaskRun,
@@ -16,7 +20,10 @@ interface ScheduledTaskState {
   runsHasMore: Record<string, boolean>;
   allRuns: ScheduledTaskRunWithName[];
   allRunsHasMore: boolean;
-  loading: boolean;
+  taskListStatus: ScheduledTaskDataStatusValue;
+  allRunsStatus: ScheduledTaskDataStatusValue;
+  taskListError: string | null;
+  allRunsError: string | null;
   error: string | null;
 }
 
@@ -28,7 +35,10 @@ const initialState: ScheduledTaskState = {
   runsHasMore: {},
   allRuns: [],
   allRunsHasMore: false,
-  loading: false,
+  taskListStatus: ScheduledTaskDataStatus.Starting,
+  allRunsStatus: ScheduledTaskDataStatus.Starting,
+  taskListError: null,
+  allRunsError: null,
   error: null,
 };
 
@@ -36,15 +46,33 @@ const scheduledTaskSlice = createSlice({
   name: 'scheduledTask',
   initialState,
   reducers: {
-    setLoading(state, action: PayloadAction<boolean>) {
-      state.loading = action.payload;
+    setTaskListStatus(state, action: PayloadAction<ScheduledTaskDataStatusValue>) {
+      state.taskListStatus = action.payload;
+      if (action.payload !== ScheduledTaskDataStatus.Error) {
+        state.taskListError = null;
+      }
+    },
+    setAllRunsStatus(state, action: PayloadAction<ScheduledTaskDataStatusValue>) {
+      state.allRunsStatus = action.payload;
+      if (action.payload !== ScheduledTaskDataStatus.Error) {
+        state.allRunsError = null;
+      }
+    },
+    setTaskListError(state, action: PayloadAction<string>) {
+      state.taskListStatus = ScheduledTaskDataStatus.Error;
+      state.taskListError = action.payload;
+    },
+    setAllRunsError(state, action: PayloadAction<string>) {
+      state.allRunsStatus = ScheduledTaskDataStatus.Error;
+      state.allRunsError = action.payload;
     },
     setError(state, action: PayloadAction<string | null>) {
       state.error = action.payload;
     },
     setTasks(state, action: PayloadAction<ScheduledTask[]>) {
       state.tasks = action.payload;
-      state.loading = false;
+      state.taskListStatus = ScheduledTaskDataStatus.Ready;
+      state.taskListError = null;
     },
     addTask(state, action: PayloadAction<ScheduledTask>) {
       state.tasks.unshift(action.payload);
@@ -117,6 +145,8 @@ const scheduledTaskSlice = createSlice({
     ) {
       state.allRuns = action.payload.runs;
       state.allRunsHasMore = action.payload.hasMore;
+      state.allRunsStatus = ScheduledTaskDataStatus.Ready;
+      state.allRunsError = null;
     },
     appendAllRuns(
       state,
@@ -129,7 +159,10 @@ const scheduledTaskSlice = createSlice({
 });
 
 export const {
-  setLoading,
+  setTaskListStatus,
+  setAllRunsStatus,
+  setTaskListError,
+  setAllRunsError,
   setError,
   setTasks,
   addTask,

@@ -173,6 +173,30 @@ describe('CronJobService internal task filtering', () => {
   });
 });
 
+describe('CronJobService gateway readiness', () => {
+  test('polls immediately when the gateway becomes ready after polling started', async () => {
+    let gatewayClient: { request: <T>() => Promise<T> } | null = null;
+    const request = vi.fn(async <T>() => ({ jobs: [] }) as T);
+    const service = new CronJobService({
+      getGatewayClient: () => gatewayClient,
+      ensureGatewayReady: async () => {},
+    });
+
+    service.startPolling();
+    await Promise.resolve();
+    expect(request).not.toHaveBeenCalled();
+
+    gatewayClient = { request };
+    service.notifyGatewayReady();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('cron.list', {
+      includeDisabled: true,
+      limit: 200,
+    }));
+    service.stopPolling();
+  });
+});
+
 describe('CronJobService run history filtering', () => {
   test('filters global runs by application status after reading gateway entries', async () => {
     const job = makeGatewayJob({ id: 'job-1', name: 'User task' });

@@ -2,13 +2,14 @@ import { ClockIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
-import { TaskStatus } from '../../../scheduledTask/constants';
+import { ScheduledTaskDataStatus, TaskStatus } from '../../../scheduledTask/constants';
 import type { RunFilter, ScheduledTaskRunWithName } from '../../../scheduledTask/types';
 import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import DateInput from './DateInput';
 import RunSessionModal from './RunSessionModal';
+import ScheduledTaskDataState from './ScheduledTaskDataState';
 import { formatDateTime, formatDuration } from './utils';
 
 const STATUS_OPTIONS = [
@@ -62,6 +63,8 @@ const EMPTY_FILTER: RunFilter = {};
 const AllRunsHistory: React.FC = () => {
   const allRuns = useSelector((state: RootState) => state.scheduledTask.allRuns);
   const allRunsHasMore = useSelector((state: RootState) => state.scheduledTask.allRunsHasMore);
+  const allRunsStatus = useSelector((state: RootState) => state.scheduledTask.allRunsStatus);
+  const allRunsError = useSelector((state: RootState) => state.scheduledTask.allRunsError);
   const [viewingRun, setViewingRun] = useState<ScheduledTaskRunWithName | null>(null);
   const [filter, setFilter] = useState<RunFilter>(EMPTY_FILTER);
 
@@ -108,6 +111,20 @@ const AllRunsHistory: React.FC = () => {
   };
 
   const isEmpty = displayedRuns.length === 0;
+
+  if (allRunsStatus !== ScheduledTaskDataStatus.Ready) {
+    return (
+      <div className={historyPageClass}>
+        <div className={historyContentClass}>
+          <ScheduledTaskDataState
+            status={allRunsStatus}
+            error={allRunsError}
+            onRetry={() => loadInitial(filter)}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={historyPageClass}>

@@ -2163,6 +2163,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksTemplateMonthlyAdminSchedule: '每月 25 日 10:00',
     scheduledTasksTemplateMonthlyAdminPrompt:
       '请提醒我整理本月行政待办，包括发票、报销、订阅续费、合同、设备和其他月底前需要处理的事项。请输出一份可勾选清单，并标出建议优先级。',
+    scheduledTasksServiceStarting: '定时任务服务正在启动...',
+    scheduledTasksLoading: '正在加载定时任务...',
+    scheduledTasksLoadFailed: '定时任务数据加载失败',
+    scheduledTasksRetry: '重试',
     scheduledTasksEmptyState: '暂无定时任务',
     scheduledTasksEmptyHint: '创建定时任务，让 AI 按计划自动执行',
     scheduledTasksListColTitle: '标题',
@@ -4791,6 +4795,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksTemplateMonthlyAdminSchedule: 'Monthly on the 25th at 10:00',
     scheduledTasksTemplateMonthlyAdminPrompt:
       "Remind me to organize this month's admin tasks, including invoices, expenses, subscription renewals, contracts, equipment, and other items that should be handled before month end. Output a checklist and mark suggested priority.",
+    scheduledTasksServiceStarting: 'Starting scheduled task service...',
+    scheduledTasksLoading: 'Loading scheduled tasks...',
+    scheduledTasksLoadFailed: 'Failed to load scheduled task data',
+    scheduledTasksRetry: 'Retry',
     scheduledTasksEmptyState: 'No scheduled tasks',
     scheduledTasksEmptyHint: 'Create scheduled tasks to automate AI execution on a schedule',
     scheduledTasksListColTitle: 'Title',

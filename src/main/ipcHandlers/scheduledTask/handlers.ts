@@ -108,10 +108,10 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
       // to avoid blocking the renderer init. Tasks will be loaded later via the
       // onRefresh listener when the gateway becomes available.
       if (!getOpenClawRuntimeAdapter()?.getGatewayClient()) {
-        return { success: true, tasks: [] };
+        return { success: true, ready: false, tasks: [] };
       }
       const tasks = await getCronJobService().listJobs();
-      return { success: true, tasks };
+      return { success: true, ready: true, tasks };
     } catch (error) {
       return {
         success: false,
@@ -253,8 +253,11 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
       filter?: import('../../../scheduledTask/types').RunFilter,
     ) => {
       try {
+        if (!getOpenClawRuntimeAdapter()?.getGatewayClient()) {
+          return { success: true, ready: false, runs: [] };
+        }
         const runs = await getCronJobService().listAllRuns(limit, offset, filter);
-        return { success: true, runs };
+        return { success: true, ready: true, runs };
       } catch (error) {
         return {
           success: false,
