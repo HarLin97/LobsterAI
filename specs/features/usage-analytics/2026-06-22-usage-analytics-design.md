@@ -444,6 +444,73 @@ export const LogReporterActionPrefix = {
   - 不上传记忆条目正文、条目 ID、搜索词、来源信息、创建/更新时间或删除原因。
   - 不记录用户打开编辑弹窗、输入草稿或搜索列表的行为，只记录持久化成功后的 CRUD 操作。
 
+#### 2.4.23 `lobsterai_dreaming_setting_changed`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 梦境」修改 Dreaming 配置，并且设置页保存成功后发送。未保存、保存失败或配置无变化不发送。
+- 事件含义：统计 Dreaming 记忆整理功能的开启和调度配置使用情况。
+- 业务参数：
+  - `source`：string，触发来源。当前固定为 `settings_dreaming`。
+  - `changedKeys`：string，本次变化类型的去重列表，使用逗号分隔。当前取值包括 `dreaming_enabled`、`dreaming_frequency`。
+  - `dreamingEnabled`：boolean，保存后是否启用 Dreaming。
+  - `frequencyType`：string，保存后的频率类型。当前取值为 `preset` 或 `custom`。
+- 隐私边界：不上传自定义 cron 表达式、时区、Dream Diary 内容、记忆内容或模型名称。
+
+#### 2.4.24 `lobsterai_plugin_settings_saved`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 插件」修改插件启用状态或插件配置，并且设置页保存成功后发送。未保存、保存失败或无插件变更不发送。
+- 事件含义：统计插件设置变更规模，不记录具体插件配置。
+- 业务参数：
+  - `source`：string，触发来源。当前固定为 `settings_plugins`。
+  - `toggleCount`：number，本次保存中发生启用状态变化的插件数量。
+  - `enabledToggleCount`：number，本次保存中被启用的插件数量。
+  - `disabledToggleCount`：number，本次保存中被停用的插件数量。
+  - `configCount`：number，本次保存中发生配置变化的插件数量。
+  - `changedKeys`：string，本次变化类型的去重列表，使用逗号分隔。当前取值包括 `toggle`、`config`。
+- 隐私边界：不上传插件 ID、插件配置、token、API Key、URL、本地路径、env 或 header。
+
+#### 2.4.25 `lobsterai_plugin_action`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 插件」执行安装、卸载、更新、检测本地插件或检查更新等动作，并得到结果后发送。
+- 事件含义：统计插件生命周期动作和成功率。
+- 业务参数：
+  - `source`：string，触发来源。当前固定为 `settings_plugins`。
+  - `actionType`：string，动作类型。当前取值包括 `install`、`uninstall`、`update`、`check_updates`、`detect`、`sync`。
+  - `result`：string，动作结果。当前取值为 `success` 或 `failed`。
+  - `installSource`：string，安装来源；仅安装动作发送。当前取值为 `npm`、`clawhub`、`git`、`local`、`openclaw`。
+  - `hasVersion`：boolean，安装时是否填写版本；仅安装动作发送。
+  - `hasRegistry`：boolean，安装时是否填写 registry；仅 npm 安装动作发送。
+  - `updateCount`：number，检查更新时发现的可更新插件数量；仅检查更新成功时发送。
+  - `detectedCount`：number，检测或同步本地插件时发现/同步的插件数量；仅对应动作成功时发送。
+- 隐私边界：不上传插件 ID、安装 spec、registry URL、版本号、Git URL、本地路径、安装日志、更新日志或错误详情。
+
+#### 2.4.26 `lobsterai_shortcut_setting_changed`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 快捷键」修改快捷键并保存成功后发送。未保存、保存失败或快捷键无变化不发送。
+- 事件含义：统计快捷键自定义使用情况。
+- 业务参数：
+  - `source`：string，触发来源。当前固定为 `settings_shortcuts`。
+  - `changedCount`：number，本次保存中发生变化的快捷键数量。
+  - `configuredCount`：number，保存后已配置快捷键数量。
+  - `disabledCount`：number，保存后被清空的快捷键数量。
+  - `resetToDefault`：boolean，保存后的快捷键配置是否与默认配置一致。
+- 隐私边界：不上传快捷键具体组合、动作 key、搜索词或冲突提示内容。
+
+#### 2.4.27 `lobsterai_about_action`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 关于」执行主动动作后发送。包括检查更新、复制联系邮箱、打开用户社区、打开用户手册、打开服务条款、导出日志。
+- 事件含义：统计关于页支持/更新相关入口使用情况。
+- 业务参数：
+  - `source`：string，触发来源。当前固定为 `settings_about`。
+  - `actionType`：string，动作类型。当前取值包括 `check_update`、`copy_contact_email`、`open_user_community`、`open_user_manual`、`open_service_terms`、`export_logs`。
+  - `result`：string，动作结果。当前取值为 `success`、`failed`、`canceled`、`update_found`、`up_to_date`、`downloading`、`ready`。
+  - `missingEntryCount`：number，导出日志时缺失的日志项数量；仅导出成功且存在缺失项信息时发送。
+- 隐私边界：不上传联系邮箱、外链 URL、导出日志路径、日志内容、更新包 URL、错误详情或本地文件信息。
+
 ### 2.5 请求流程
 
 ```text

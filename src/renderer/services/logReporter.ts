@@ -21,11 +21,13 @@ export const LogReporterActionPrefix = {
 export const LogReporterAction = {
   AgentEngineMaintenanceAction: 'lobsterai_agent_engine_maintenance_action',
   AgentEngineSettingChanged: 'lobsterai_agent_engine_setting_changed',
+  AboutAction: 'lobsterai_about_action',
   AppStarted: 'lobsterai_app_started',
   AppearanceSettingChanged: 'lobsterai_appearance_setting_changed',
   BrowserSettingChanged: 'lobsterai_browser_setting_changed',
   CustomModelConnectionTested: 'lobsterai_custom_model_connection_tested',
   CustomModelSettingsSaved: 'lobsterai_custom_model_settings_saved',
+  DreamingSettingChanged: 'lobsterai_dreaming_setting_changed',
   EmailSkillConnectionTested: 'lobsterai_email_skill_connection_tested',
   EmailSkillSettingsSaved: 'lobsterai_email_skill_settings_saved',
   ExpertKitSelected: 'lobsterai_expert_kit_selected',
@@ -39,6 +41,9 @@ export const LogReporterAction = {
   McpEnabled: 'lobsterai_mcp_enabled',
   ModelSelected: 'lobsterai_model_selected',
   PlanModeEnabled: 'lobsterai_plan_mode_enabled',
+  PluginAction: 'lobsterai_plugin_action',
+  PluginSettingsSaved: 'lobsterai_plugin_settings_saved',
+  ShortcutSettingChanged: 'lobsterai_shortcut_setting_changed',
   SkillEnabled: 'lobsterai_skill_enabled',
   UsageAnalyticsEnabled: 'lobsterai_usage_analytics_enabled',
 } as const;

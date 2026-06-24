@@ -45,7 +45,7 @@ import MessageCopyIcon from './icons/MessageCopyIcon';
 import PlugIcon from './icons/PlugIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
-import PluginsSettings, { type PluginsSettingsHandle } from './plugins/PluginsSettings';
+import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
   buildOpenAICompatibleChatCompletionsUrl,
@@ -153,9 +153,13 @@ const SettingsAnalyticsSource = {
   AgentEngine: 'settings_agent_engine',
   Appearance: 'settings_appearance',
   Browser: 'settings_browser',
+  Dreaming: 'settings_dreaming',
   General: 'settings_general',
   Memory: 'settings_memory',
   Model: 'settings_model',
+  Plugins: 'settings_plugins',
+  Shortcuts: 'settings_shortcuts',
+  About: 'settings_about',
 } as const;
 
 type SettingsAnalyticsValue = string | boolean | number;
@@ -172,6 +176,35 @@ type MemorySettingAnalyticsSummary = {
   memoryEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
 };
+
+type DreamingSettingAnalyticsSummary = {
+  changedKeys: string;
+  dreamingEnabled: boolean;
+  frequencyType: 'preset' | 'custom';
+};
+
+type ShortcutSettingAnalyticsSummary = {
+  changedCount: number;
+  configuredCount: number;
+  disabledCount: number;
+  resetToDefault: boolean;
+};
+
+type PluginSettingsAnalyticsSummary = {
+  changedKeys: string;
+  configCount: number;
+  disabledToggleCount: number;
+  enabledToggleCount: number;
+  toggleCount: number;
+};
+
+const DREAMING_FREQUENCY_PRESETS_FOR_ANALYTICS = new Set([
+  '0 3 * * *',
+  '0 0 * * *',
+  '0 0,12 * * *',
+  '0 */6 * * *',
+  '0 3 * * 0',
+]);
 
 type CustomModelSettingsAnalyticsSummary = {
   changedKeys: string;
@@ -381,6 +414,101 @@ const buildMemorySettingAnalyticsSummary = (
   };
 };
 
+const resolveDreamingFrequencyType = (frequency: string): 'preset' | 'custom' => (
+  DREAMING_FREQUENCY_PRESETS_FOR_ANALYTICS.has(frequency) ? 'preset' : 'custom'
+);
+
+const buildDreamingSettingAnalyticsSummary = (
+  previousConfig: {
+    dreamingEnabled: boolean;
+    dreamingFrequency: string;
+  },
+  nextConfig: {
+    dreamingEnabled: boolean;
+    dreamingFrequency: string;
+  },
+): DreamingSettingAnalyticsSummary | null => {
+  const changedKeys = new Set<string>();
+  if (previousConfig.dreamingEnabled !== nextConfig.dreamingEnabled) {
+    changedKeys.add('dreaming_enabled');
+  }
+  if (previousConfig.dreamingFrequency !== nextConfig.dreamingFrequency) {
+    changedKeys.add('dreaming_frequency');
+  }
+
+  if (changedKeys.size === 0) {
+    return null;
+  }
+
+  return {
+    changedKeys: Array.from(changedKeys).sort().join(','),
+    dreamingEnabled: nextConfig.dreamingEnabled,
+    frequencyType: resolveDreamingFrequencyType(nextConfig.dreamingFrequency),
+  };
+};
+
+const countConfiguredShortcuts = (shortcutConfig: ShortcutConfig): number => (
+  Object.values(shortcutConfig).filter(value => String(value || '').trim().length > 0).length
+);
+
+const buildShortcutSettingAnalyticsSummary = (
+  previousShortcuts: ShortcutConfig,
+  nextShortcuts: ShortcutConfig,
+): ShortcutSettingAnalyticsSummary | null => {
+  const keys = new Set([
+    ...Object.keys(previousShortcuts),
+    ...Object.keys(nextShortcuts),
+    ...Object.keys(defaultConfig.shortcuts || {}),
+  ]);
+  let changedCount = 0;
+  keys.forEach(key => {
+    if ((previousShortcuts[key as ShortcutAction] || '') !== (nextShortcuts[key as ShortcutAction] || '')) {
+      changedCount += 1;
+    }
+  });
+
+  if (changedCount === 0) {
+    return null;
+  }
+
+  const defaultShortcuts: ShortcutConfig = { ...defaultConfig.shortcuts! };
+  const resetToDefault = Array.from(keys).every(key => (
+    (nextShortcuts[key as ShortcutAction] || '') === (defaultShortcuts[key as ShortcutAction] || '')
+  ));
+
+  return {
+    changedCount,
+    configuredCount: countConfiguredShortcuts(nextShortcuts),
+    disabledCount: Array.from(keys).filter(key => !String(nextShortcuts[key as ShortcutAction] || '').trim()).length,
+    resetToDefault,
+  };
+};
+
+const buildPluginSettingsAnalyticsSummary = (
+  pendingChanges: PluginPendingChanges | null,
+): PluginSettingsAnalyticsSummary | null => {
+  if (!pendingChanges) {
+    return null;
+  }
+  const toggleCount = pendingChanges.toggles.length;
+  const configCount = pendingChanges.configs.length;
+  if (toggleCount === 0 && configCount === 0) {
+    return null;
+  }
+  const changedKeys = [
+    ...(toggleCount > 0 ? ['toggle'] : []),
+    ...(configCount > 0 ? ['config'] : []),
+  ].join(',');
+
+  return {
+    changedKeys,
+    configCount,
+    disabledToggleCount: pendingChanges.toggles.filter(change => !change.enabled).length,
+    enabledToggleCount: pendingChanges.toggles.filter(change => change.enabled).length,
+    toggleCount,
+  };
+};
+
 const reportGeneralSettingChanged = (
   settingKey: string,
   settingValue: SettingsAnalyticsValue,
@@ -445,6 +573,54 @@ const reportMemoryEntryChanged = (
     source: SettingsAnalyticsSource.Memory,
     operation,
     entryCount,
+  });
+};
+
+const reportDreamingSettingChanged = (
+  summary: DreamingSettingAnalyticsSummary,
+): void => {
+  console.debug('[Settings] reporting dreaming setting analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.DreamingSettingChanged,
+    source: SettingsAnalyticsSource.Dreaming,
+    ...summary,
+  });
+};
+
+const reportPluginSettingsSaved = (
+  summary: PluginSettingsAnalyticsSummary,
+): void => {
+  console.debug('[Settings] reporting plugin settings analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.PluginSettingsSaved,
+    source: SettingsAnalyticsSource.Plugins,
+    ...summary,
+  });
+};
+
+const reportShortcutSettingChanged = (
+  summary: ShortcutSettingAnalyticsSummary,
+): void => {
+  console.debug('[Settings] reporting shortcut setting analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.ShortcutSettingChanged,
+    source: SettingsAnalyticsSource.Shortcuts,
+    ...summary,
+  });
+};
+
+const reportAboutAction = (
+  actionType: string,
+  result: string,
+  options: { missingEntryCount?: number } = {},
+): void => {
+  console.debug('[Settings] reporting about action analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.AboutAction,
+    source: SettingsAnalyticsSource.About,
+    actionType,
+    result,
+    missingEntryCount: options.missingEntryCount,
   });
 };
 
@@ -1233,6 +1409,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleCopyContactEmail = useCallback(async () => {
     const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
+    reportAboutAction('copy_contact_email', copied ? 'success' : 'failed');
     if (copied) {
       setEmailCopied(true);
       if (emailCopiedTimerRef.current != null) {
@@ -1258,6 +1435,7 @@ const Settings: React.FC<SettingsProps> = ({
 
       if (!result.updateFound) {
         setUpdateCheckStatus('upToDate');
+        reportAboutAction('check_update', 'up_to_date');
         if (updateCheckTimerRef.current != null) {
           window.clearTimeout(updateCheckTimerRef.current);
         }
@@ -1270,16 +1448,20 @@ const Settings: React.FC<SettingsProps> = ({
 
       if (result.state.status === AppUpdateStatus.Ready) {
         setUpdateCheckStatus('ready');
+        reportAboutAction('check_update', 'ready');
       } else if (result.state.status === AppUpdateStatus.Downloading) {
         setUpdateCheckStatus('downloading');
+        reportAboutAction('check_update', 'downloading');
       } else {
         setUpdateCheckStatus('idle');
+        reportAboutAction('check_update', 'update_found');
       }
 
       if (result.state.info) {
         onUpdateFound?.(result.state.info);
       }
     } catch {
+      reportAboutAction('check_update', 'failed');
       setUpdateCheckStatus('error');
       if (updateCheckTimerRef.current != null) {
         window.clearTimeout(updateCheckTimerRef.current);
@@ -1308,14 +1490,17 @@ const Settings: React.FC<SettingsProps> = ({
   }, [appUpdateState?.progress?.percent, updateCheckStatus]);
 
   const handleOpenUserManual = useCallback(() => {
+    reportAboutAction('open_user_manual', 'success');
     void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
   }, []);
 
   const handleOpenUserCommunity = useCallback(() => {
+    reportAboutAction('open_user_community', 'success');
     void window.electron.shell.openExternal(ABOUT_USER_COMMUNITY_URL);
   }, []);
 
   const handleOpenServiceTerms = useCallback(() => {
+    reportAboutAction('open_service_terms', 'success');
     void window.electron.shell.openExternal(ABOUT_SERVICE_TERMS_URL);
   }, []);
 
@@ -1331,9 +1516,11 @@ const Settings: React.FC<SettingsProps> = ({
       const result = await window.electron.log.exportZip();
       if (!result.success) {
         setError(result.error || i18nService.t('aboutExportLogsFailed'));
+        reportAboutAction('export_logs', 'failed');
         return;
       }
       if (result.canceled) {
+        reportAboutAction('export_logs', 'canceled');
         return;
       }
 
@@ -1347,8 +1534,12 @@ const Settings: React.FC<SettingsProps> = ({
       } else {
         setNoticeMessage(i18nService.t('aboutExportLogsSuccess'));
       }
+      reportAboutAction('export_logs', 'success', {
+        missingEntryCount: result.missingEntries?.length ?? 0,
+      });
     } catch (exportError) {
       setError(exportError instanceof Error ? exportError.message : i18nService.t('aboutExportLogsFailed'));
+      reportAboutAction('export_logs', 'failed');
     } finally {
       setIsExportingLogs(false);
     }
@@ -2710,6 +2901,10 @@ const Settings: React.FC<SettingsProps> = ({
       });
       const previousConfig = configService.getConfig();
       const previousBrowserWebAccess = normalizeBrowserWebAccessConfig(previousConfig.browserWebAccess);
+      const previousShortcuts: ShortcutConfig = {
+        ...defaultConfig.shortcuts!,
+        ...(previousConfig.shortcuts || {}),
+      };
       const previousProviders = previousConfig.providers
         ? normalizeProvidersForSettingsSave(previousConfig.providers as ProvidersConfig)
         : normalizedProviders;
@@ -2737,10 +2932,19 @@ const Settings: React.FC<SettingsProps> = ({
         memoryEnabled: coworkMemoryEnabled,
         memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
       };
+      const previousDreamingSettings = {
+        dreamingEnabled: coworkConfig.dreamingEnabled ?? false,
+        dreamingFrequency: coworkConfig.dreamingFrequency ?? '0 3 * * *',
+      };
+      const nextDreamingSettings = {
+        dreamingEnabled,
+        dreamingFrequency,
+      };
       const previousTaskCompletionNotificationsEnabled = normalizeNotificationSettings(
         previousConfig.notificationSettings,
       ).taskCompletionNotificationsEnabled;
       const previousThemeId = initialThemeIdRef.current;
+      let savedPluginPendingChanges: PluginPendingChanges | null = null;
 
       await configService.updateConfig({
         api: {
@@ -2841,6 +3045,7 @@ const Settings: React.FC<SettingsProps> = ({
         const pendingChanges = pluginsSettingsRef.current.getPendingChanges();
         if (pendingChanges) {
           await window.electron?.plugins.batchSave(pendingChanges);
+          savedPluginPendingChanges = pendingChanges;
           pluginsSettingsRef.current.resetDirty();
         }
       }
@@ -2898,6 +3103,24 @@ const Settings: React.FC<SettingsProps> = ({
         );
         if (memorySettingsSummary) {
           reportMemorySettingChanged(memorySettingsSummary);
+        }
+        const dreamingSettingsSummary = buildDreamingSettingAnalyticsSummary(
+          previousDreamingSettings,
+          nextDreamingSettings,
+        );
+        if (dreamingSettingsSummary) {
+          reportDreamingSettingChanged(dreamingSettingsSummary);
+        }
+        const shortcutSettingsSummary = buildShortcutSettingAnalyticsSummary(
+          previousShortcuts,
+          shortcuts,
+        );
+        if (shortcutSettingsSummary) {
+          reportShortcutSettingChanged(shortcutSettingsSummary);
+        }
+        const pluginSettingsSummary = buildPluginSettingsAnalyticsSummary(savedPluginPendingChanges);
+        if (pluginSettingsSummary) {
+          reportPluginSettingsSaved(pluginSettingsSummary);
         }
         const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
           previousProviders,
