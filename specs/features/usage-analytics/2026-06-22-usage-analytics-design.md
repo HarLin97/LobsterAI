@@ -347,6 +347,21 @@ export const LogReporterActionPrefix = {
   - `enabledInstanceCount`：number，操作后的启用实例数量。
 - 隐私边界：不上传 instanceId、instanceName、账号、邮箱、token、secret、URL 或其它实例配置内容。
 
+#### 2.4.18 `lobsterai_browser_setting_changed`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 浏览器」修改配置并保存成功后，根据保存前后的 diff 发送。未保存、保存失败或配置无变化不发送。
+- 事件含义：统计浏览器访问配置的使用情况，当前只记录网络模式和阻止访问域名列表规模。
+- 业务参数：
+  - `source`：string，触发来源。当前固定为 `settings_browser`。
+  - `changedKeys`：string，本次变化类型的去重列表，使用逗号分隔。当前取值包括 `network_mode`、`blocked_hostnames`。
+  - `networkMode`：string，保存后的浏览器网络模式。当前为 `proxy-compatible` 或 `strict`。
+  - `blockedHostnameCount`：number，保存后的阻止访问域名数量。
+  - `previousBlockedHostnameCount`：number，保存前的阻止访问域名数量；无法获取时不发送。
+- 隐私边界：
+  - 不上传具体 hostname、URL、CDP URL、浏览器可执行路径、extraArgs、代理地址、测试页面、浏览历史或网页内容。
+  - `blockedHostnameCount` 只用于观察配置规模，不表达用户访问或屏蔽了哪些具体站点。
+
 ### 2.5 请求流程
 
 ```text

@@ -152,6 +152,7 @@ const SETTINGS_TAB_SHORTCUT_ACTIONS: Partial<Record<ShortcutAction, TabType>> = 
 const SettingsAnalyticsSource = {
   AgentEngine: 'settings_agent_engine',
   Appearance: 'settings_appearance',
+  Browser: 'settings_browser',
   General: 'settings_general',
   Model: 'settings_model',
 } as const;
@@ -273,6 +274,35 @@ const buildCustomModelSettingsAnalyticsSummary = (
   };
 };
 
+const buildBrowserSettingAnalyticsParams = (
+  previousConfig: BrowserWebAccessConfig,
+  nextConfig: BrowserWebAccessConfig,
+): {
+  blockedHostnameCount: number;
+  changedKeys: string;
+  networkMode: string;
+  previousBlockedHostnameCount?: number;
+} | null => {
+  const changedKeys = new Set<string>();
+  if (previousConfig.networkMode !== nextConfig.networkMode) {
+    changedKeys.add('network_mode');
+  }
+  if (previousConfig.blockedHostnames.length !== nextConfig.blockedHostnames.length) {
+    changedKeys.add('blocked_hostnames');
+  }
+
+  if (changedKeys.size === 0) {
+    return null;
+  }
+
+  return {
+    blockedHostnameCount: nextConfig.blockedHostnames.length,
+    changedKeys: Array.from(changedKeys).sort().join(','),
+    networkMode: nextConfig.networkMode,
+    previousBlockedHostnameCount: previousConfig.blockedHostnames.length,
+  };
+};
+
 const reportGeneralSettingChanged = (
   settingKey: string,
   settingValue: SettingsAnalyticsValue,
@@ -298,6 +328,21 @@ const reportAppearanceSettingChanged = (
     settingValue,
     previousValue,
     source: SettingsAnalyticsSource.Appearance,
+  });
+};
+
+const reportBrowserSettingChanged = (
+  params: {
+    blockedHostnameCount: number;
+    changedKeys: string;
+    networkMode: string;
+    previousBlockedHostnameCount?: number;
+  },
+): void => {
+  void reportYdAnalyzer({
+    action: LogReporterAction.BrowserSettingChanged,
+    source: SettingsAnalyticsSource.Browser,
+    ...params,
   });
 };
 
@@ -2551,6 +2596,7 @@ const Settings: React.FC<SettingsProps> = ({
         webFetch: defaultBrowserWebAccessConfig.webFetch,
       });
       const previousConfig = configService.getConfig();
+      const previousBrowserWebAccess = normalizeBrowserWebAccessConfig(previousConfig.browserWebAccess);
       const previousProviders = previousConfig.providers
         ? normalizeProvidersForSettingsSave(previousConfig.providers as ProvidersConfig)
         : normalizedProviders;
@@ -2695,6 +2741,13 @@ const Settings: React.FC<SettingsProps> = ({
         }
         if (previousThemeId !== themeId) {
           reportAppearanceSettingChanged('themeId', themeId, previousThemeId);
+        }
+        const browserSettingParams = buildBrowserSettingAnalyticsParams(
+          previousBrowserWebAccess,
+          normalizedBrowserWebAccess,
+        );
+        if (browserSettingParams) {
+          reportBrowserSettingChanged(browserSettingParams);
         }
         if (previousAgentEngine !== coworkAgentEngine) {
           reportAgentEngineSettingChanged('agentEngine', coworkAgentEngine, previousAgentEngine);
