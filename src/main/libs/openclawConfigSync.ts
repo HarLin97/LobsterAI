@@ -279,6 +279,8 @@ const MANAGED_WEB_SEARCH_POLICY_PROMPT = [
   'Do not claim you searched the web unless you actually used `browser`, `web_fetch`, or the LobsterAI `web-search` skill.',
 ].join('\n');
 
+const BUNDLED_BROWSER_PLUGIN_ID = 'browser';
+
 const MANAGED_BROWSER_POLICY_PROMPT = [
   '## Browser Policy',
   '',
@@ -1648,6 +1650,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
           // plugins (moonshot, minimax, volcengine, browser, etc.) survive
           // config rewrites.  Our managed entries below override stale values.
           ...cleanedExistingEntries,
+          [BUNDLED_BROWSER_PLUGIN_ID]: { enabled: true },
           qqbot: { enabled: qqbotPluginEnabled },
           ...Object.fromEntries(
             preinstalledPlugins.map(plugin => {
@@ -1699,6 +1702,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
           : [];
         const trustedPluginAllow = Array.from(new Set([
           ...existingAllow,
+          BUNDLED_BROWSER_PLUGIN_ID,
           ...preinstalledPlugins.map(plugin => plugin.pluginId),
           ...userPlugins.filter(plugin => plugin.enabled).map(plugin => plugin.pluginId),
         ])).sort();

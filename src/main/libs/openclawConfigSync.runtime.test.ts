@@ -1245,7 +1245,9 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.plugins.entries).not.toHaveProperty('feishu');
     expect(config.plugins.entries.qqbot).toEqual({ enabled: true });
     expect(config.plugins.entries.discord).toEqual({ enabled: false });
+    expect(config.plugins.entries.browser).toEqual({ enabled: true });
     expect(config.plugins.entries).not.toHaveProperty('openclaw-qqbot');
+    expect(config.plugins.allow).toContain('browser');
     expect(config.plugins.allow).toContain('qqbot');
     expect(config.plugins.allow).toContain('discord');
   });
