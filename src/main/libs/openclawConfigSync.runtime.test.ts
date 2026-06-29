@@ -1045,10 +1045,11 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(selection.providerConfig.api).toBe(OpenClawApi.AnthropicMessages);
     expect(selection.providerConfig.auth).toBe(AuthType.OAuth);
     expect(selection.providerConfig.apiKey).toBe('${LOBSTER_APIKEY_MINIMAX}');
+    expect(selection.providerConfig.models[0].maxTokens).toBe(32000);
   });
 
   test('keeps MiniMax API key mode on the standard MiniMax provider', async () => {
-    const { AuthType, OpenClawProviderId, ProviderName } = await import('../../shared/providers');
+    const { AuthType, OpenClawApi, OpenClawProviderId, ProviderName } = await import('../../shared/providers');
     const { buildProviderSelection } = await import('./openclawConfigSync');
 
     const selection = buildProviderSelection({
@@ -1065,7 +1066,9 @@ describe('OpenClawConfigSync runtime config output', () => {
 
     expect(selection.providerId).toBe(OpenClawProviderId.Minimax);
     expect(selection.primaryModel).toBe(`${OpenClawProviderId.Minimax}/MiniMax-M2.7`);
+    expect(selection.providerConfig.api).toBe(OpenClawApi.AnthropicMessages);
     expect(selection.providerConfig.auth).toBe(AuthType.ApiKey);
+    expect(selection.providerConfig.models[0].maxTokens).toBe(32000);
   });
 
   test('repairs stale image capability for known Qwen models before writing OpenClaw input', async () => {

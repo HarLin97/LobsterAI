@@ -99,6 +99,9 @@ const OpenClawContextCacheMode = {
   Explicit: 'explicit',
 } as const;
 
+// OpenClaw caps implicit Anthropic Messages output requests at 32k unless a
+// caller explicitly passes another per-request maxTokens value.
+const OPENCLAW_ANTHROPIC_DEFAULT_MAX_TOKENS = 32000;
 const EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = '********************';
 const CUSTOM_PROVIDER_NAME_PATTERN = /^custom_[0-9]$/;
 
@@ -904,6 +907,10 @@ export const buildProviderSelection = (options: {
     options.modelId,
     options.contextWindow,
   ) ?? descriptor.modelDefaults?.contextWindow;
+  const modelMaxTokens = descriptor.modelDefaults?.maxTokens
+    ?? (api === OpenClawApiConst.AnthropicMessages
+      ? OPENCLAW_ANTHROPIC_DEFAULT_MAX_TOKENS
+      : undefined);
   const request = shouldUseEnvProxyForProviderBaseUrl(baseUrl)
     ? { proxy: { mode: 'env-proxy' as const } }
     : undefined;
@@ -933,8 +940,8 @@ export const buildProviderSelection = (options: {
           ...(reasoning !== undefined ? { reasoning } : {}),
           ...(descriptor.modelDefaults?.cost ? { cost: descriptor.modelDefaults.cost } : {}),
           ...(contextWindow !== undefined ? { contextWindow } : {}),
-          ...(descriptor.modelDefaults?.maxTokens
-            ? { maxTokens: descriptor.modelDefaults.maxTokens }
+          ...(modelMaxTokens !== undefined
+            ? { maxTokens: modelMaxTokens }
             : {}),
         },
       ],

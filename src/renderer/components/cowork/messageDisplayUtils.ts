@@ -390,6 +390,11 @@ export const getToolResultLineCountSummary = (lineCount: number): string => {
 export const getLargeToolResultSummary = (sizeLabel: string): string =>
   i18nService.t('coworkToolLargeOutput').replace('{size}', sizeLabel);
 
+const getGenericRunningStatusText = (): string => {
+  const text = i18nService.t('coworkToolRunning');
+  return text.endsWith('...') || text.endsWith('…') ? text : `${text}...`;
+};
+
 export const getStreamingActivityStatusText = (
   messages: CoworkMessage[],
   isContextMaintenance = false,
@@ -418,10 +423,10 @@ export const getStreamingActivityStatusText = (
       : '';
     return toolName
       ? `${i18nService.t('coworkToolRunning')} ${toolName}...`
-      : i18nService.t('coworkToolRunning');
+      : getGenericRunningStatusText();
   }
 
-  return i18nService.t('coworkWaitingForModel');
+  return getGenericRunningStatusText();
 };
 
 export const getToolResultCollapsedDisplay = (message: CoworkMessage): ToolResultCollapsedDisplay => {

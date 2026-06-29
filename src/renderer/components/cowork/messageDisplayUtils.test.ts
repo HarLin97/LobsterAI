@@ -50,7 +50,7 @@ test('collapsed tool result display summarizes large output without full formatt
   expect(collapsed.text).toContain('first line');
 });
 
-test('streaming activity status shows waiting for model response before assistant content', () => {
+test('streaming activity status shows generic running before assistant content', () => {
   const messages: CoworkMessage[] = [{
     id: 'user-1',
     type: 'user',
@@ -58,7 +58,7 @@ test('streaming activity status shows waiting for model response before assistan
     timestamp: 1,
   }];
 
-  expect(getStreamingActivityStatusText(messages)).toBe('正在等待模型响应...');
+  expect(getStreamingActivityStatusText(messages)).toBe('执行中...');
 });
 
 test('streaming activity status keeps unresolved tool progress visible', () => {

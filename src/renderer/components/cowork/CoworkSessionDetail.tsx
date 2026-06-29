@@ -757,15 +757,19 @@ const StreamingActivityBar: React.FC<{ messages: CoworkMessage[]; isContextMaint
   messages,
   isContextMaintenance = false,
 }) => {
+  const statusText = getStreamingActivityStatusText(messages, isContextMaintenance);
+
   return (
     <div className={`shrink-0 animate-fade-in ${COWORK_DETAIL_GUTTER_CLASS}`}>
       <div className={COWORK_DETAIL_CONTENT_CLASS}>
         <div className="streaming-bar" />
-        <div className="py-1">
-          <span className="text-xs text-secondary">
-            {getStreamingActivityStatusText(messages, isContextMaintenance)}
-          </span>
-        </div>
+        {statusText && (
+          <div className="py-1">
+            <span className="text-xs text-secondary">
+              {statusText}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
