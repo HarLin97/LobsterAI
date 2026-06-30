@@ -36,8 +36,9 @@ export const MessageActionButton: React.FC<MessageActionButtonProps> = ({
 
 export const MessageCopyButton: React.FC<{
   content: string;
+  onCopy?: (result: 'success' | 'failed') => void;
   visible?: boolean;
-}> = ({ content, visible = true }) => {
+}> = ({ content, onCopy, visible = true }) => {
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<number | null>(null);
 
@@ -49,6 +50,7 @@ export const MessageCopyButton: React.FC<{
     event.stopPropagation();
     const copiedToClipboard = await copyTextToClipboard(content);
     if (!copiedToClipboard) {
+      onCopy?.('failed');
       window.electron?.log?.fromRenderer?.(
         'warn',
         'MessageActionButton',
@@ -57,6 +59,7 @@ export const MessageCopyButton: React.FC<{
       return;
     }
 
+    onCopy?.('success');
     setCopied(true);
     if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
     copiedTimerRef.current = window.setTimeout(() => setCopied(false), 2000);

@@ -10,6 +10,7 @@ import { type Artifact, ArtifactTypeValue } from '@/types/artifact';
 import { revealLocalPathWithToast, showShellFailureToast } from '@/utils/localFileActions';
 
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
+import { reportArtifactPreviewAction } from './artifactAnalytics';
 import {
   getPreviewCardDescriptor,
   PreviewCardDisplayKind,
@@ -59,6 +60,7 @@ interface AppInfo {
 
 interface OpenDropdownProps {
   anchorRef: React.RefObject<HTMLElement>;
+  artifact: Artifact;
   filePath: string;
   browserOpenAction?: {
     label: string;
@@ -67,7 +69,7 @@ interface OpenDropdownProps {
   onClose: () => void;
 }
 
-const OpenDropdown: React.FC<OpenDropdownProps> = ({ anchorRef, filePath, browserOpenAction, onClose }) => {
+const OpenDropdown: React.FC<OpenDropdownProps> = ({ anchorRef, artifact, filePath, browserOpenAction, onClose }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const [apps, setApps] = useState<AppInfo[]>([]);
@@ -130,42 +132,83 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({ anchorRef, filePath, browse
     };
   }, [anchorRef, onClose]);
 
-  const handleOpenWithSpecificApp = useCallback(async (appPath: string) => {
+  const handleOpenWithSpecificApp = useCallback(async (app: AppInfo) => {
     const normalized = normalizeFilePath(filePath);
+    let success = false;
     try {
-      const result = await window.electron?.shell?.openPathWithApp(normalized, appPath);
+      const result = await window.electron?.shell?.openPathWithApp(normalized, app.path);
+      success = Boolean(result?.success);
       if (!result?.success) {
         showShellFailureToast(result, 'openFileFailed');
       }
     } catch {
       showShellFailureToast(null, 'openFileFailed');
     }
+    reportArtifactPreviewAction({
+      actionType: 'open_external_app',
+      source: 'conversation_artifact_card',
+      artifact,
+      params: {
+        appName: app.name,
+        isDefaultApp: app.isDefault,
+        openTarget: 'external_app',
+        result: success ? 'success' : 'failed',
+      },
+    });
     onClose();
-  }, [filePath, onClose]);
+  }, [artifact, filePath, onClose]);
 
   const handleOpenWithDefault = useCallback(async () => {
     const normalized = normalizeFilePath(filePath);
+    let success = false;
     try {
       const result = await window.electron?.shell?.openPath(normalized);
+      success = Boolean(result?.success);
       if (!result?.success) {
         showShellFailureToast(result, 'openFileFailed');
       }
     } catch {
       showShellFailureToast(null, 'openFileFailed');
     }
+    reportArtifactPreviewAction({
+      actionType: 'open_external_app',
+      source: 'conversation_artifact_card',
+      artifact,
+      params: {
+        appName: 'default',
+        openTarget: 'external_app',
+        result: success ? 'success' : 'failed',
+      },
+    });
     onClose();
-  }, [filePath, onClose]);
+  }, [artifact, filePath, onClose]);
 
   const handleRevealInFolder = useCallback(async () => {
     const normalized = normalizeFilePath(filePath);
     await revealLocalPathWithToast(normalized);
+    reportArtifactPreviewAction({
+      actionType: 'reveal_in_folder',
+      source: 'conversation_artifact_card',
+      artifact,
+      params: {
+        openTarget: 'folder',
+      },
+    });
     onClose();
-  }, [filePath, onClose]);
+  }, [artifact, filePath, onClose]);
 
   const handleBrowserOpen = useCallback(() => {
+    reportArtifactPreviewAction({
+      actionType: 'open_lobster_browser',
+      source: 'conversation_artifact_card',
+      artifact,
+      params: {
+        openTarget: 'lobster_browser',
+      },
+    });
     browserOpenAction?.onOpen();
     onClose();
-  }, [browserOpenAction, onClose]);
+  }, [artifact, browserOpenAction, onClose]);
 
   if (!position) return null;
 
@@ -195,7 +238,7 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({ anchorRef, filePath, browse
             <button
               key={idx}
               type="button"
-              onClick={() => handleOpenWithSpecificApp(app.path)}
+              onClick={() => handleOpenWithSpecificApp(app)}
               className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-foreground hover:bg-black/[0.06] dark:hover:bg-white/[0.08] transition-colors text-left"
             >
               {app.icon ? (
@@ -249,6 +292,16 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   const dropdownAnchorRef = useRef<HTMLButtonElement>(null);
 
   const handleClick = useCallback(() => {
+    reportArtifactPreviewAction({
+      actionType: 'card_open',
+      source: 'conversation_artifact_card',
+      artifact,
+      params: {
+        openTarget: artifact.type === ArtifactTypeValue.LocalService || artifact.type === ArtifactTypeValue.Html
+          ? 'lobster_browser'
+          : 'preview_panel',
+      },
+    });
     if (artifact.type === ArtifactTypeValue.LocalService && onOpenLocalService) {
       onOpenLocalService(artifact);
       return;
@@ -296,7 +349,21 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         <button
           ref={dropdownAnchorRef as React.RefObject<HTMLButtonElement>}
           type="button"
-          onClick={(e) => { e.stopPropagation(); setDropdownOpen(v => !v); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setDropdownOpen(v => {
+              const nextOpen = !v;
+              reportArtifactPreviewAction({
+                actionType: 'open_menu_toggle',
+                source: 'conversation_artifact_card',
+                artifact,
+                params: {
+                  targetOpen: nextOpen,
+                },
+              });
+              return nextOpen;
+            });
+          }}
           className="flex-shrink-0 ml-auto flex items-center gap-1 text-primary text-sm font-medium px-2 py-1 min-w-[78px] justify-end rounded-md hover:bg-primary/10 dark:hover:bg-primary/15 transition-colors"
           aria-label={t('artifactPreviewCardOpenWith')}
         >
@@ -306,6 +373,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         {dropdownOpen && (
           <OpenDropdown
             anchorRef={dropdownAnchorRef as React.RefObject<HTMLElement>}
+            artifact={artifact}
             filePath={artifact.filePath!}
             browserOpenAction={browserOpenAction}
             onClose={() => setDropdownOpen(false)}

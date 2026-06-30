@@ -44,6 +44,58 @@ const compactLookupPart = (value: string): string =>
 const catalogKey = (providerId: string, modelId: string): string =>
   `${normalizeLookupPart(providerId)}/${normalizeLookupPart(modelId)}`;
 
+// The bundled OpenClaw catalog may be unavailable in CI or in a trimmed
+// runtime, but LobsterAI still needs to write correct limits for known native
+// Anthropic-format providers. Keep this fallback scoped to official provider
+// IDs so custom providers do not inherit limits by model-name coincidence.
+const BUILT_IN_MODEL_MAX_TOKENS = new Map<string, number>([
+  ['anthropic/claude-sonnet-4-6', 64_000],
+  ['anthropic/claude-sonnet-4.6', 64_000],
+  ['minimax/minimax-m3', 131_072],
+  ['minimax/minimax-m2.7', 131_072],
+  ['minimax/minimax-m2.7-highspeed', 131_072],
+  ['minimax/minimax-m2.5', 131_072],
+  ['minimax/minimax-m2.5-highspeed', 131_072],
+  ['minimax-portal/minimax-m3', 131_072],
+  ['minimax-portal/minimax-m2.7', 131_072],
+  ['minimax-portal/minimax-m2.7-highspeed', 131_072],
+  ['minimax-portal/minimax-m2.5', 131_072],
+  ['minimax-portal/minimax-m2.5-highspeed', 131_072],
+]);
+
+const BUILT_IN_PROVIDER_ALIASES = new Map<string, string>([
+  ['minimax-cn', 'minimax'],
+  ['minimax-portal-cn', 'minimax-portal'],
+]);
+
+const resolveBuiltInModelMaxTokens = (
+  providerId: string,
+  modelId: string,
+): number | undefined => {
+  const normalizedProvider = normalizeLookupPart(providerId);
+  const providerCandidate = BUILT_IN_PROVIDER_ALIASES.get(normalizedProvider) ?? normalizedProvider;
+  if (!providerCandidate) return undefined;
+
+  const normalizedModel = normalizeLookupPart(modelId);
+  const modelCandidates = [
+    normalizedModel,
+    normalizedModel.includes('/')
+      ? normalizedModel.slice(normalizedModel.lastIndexOf('/') + 1)
+      : '',
+    normalizedModel.startsWith('claude-') && normalizedModel.includes('.')
+      ? normalizedModel.replace(/\./g, '-')
+      : '',
+  ].filter(Boolean);
+
+  for (const modelCandidate of Array.from(new Set(modelCandidates))) {
+    const maxTokens = BUILT_IN_MODEL_MAX_TOKENS.get(catalogKey(providerCandidate, modelCandidate));
+    if (isPositiveNumber(maxTokens)) {
+      return maxTokens;
+    }
+  }
+  return undefined;
+};
+
 const readJsonFile = <T>(filePath: string): T | null => {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
@@ -273,7 +325,7 @@ export const resolveOpenClawCatalogModelMaxTokens = (
   modelId: string,
 ): number | undefined => {
   const index = getOpenClawCatalogIndex();
-  if (!index) return undefined;
+  if (!index) return resolveBuiltInModelMaxTokens(providerId, modelId);
 
   for (const providerCandidate of resolveProviderCandidates(index, providerId)) {
     for (const modelCandidate of resolveModelCandidates(index, providerCandidate, modelId)) {
@@ -283,7 +335,7 @@ export const resolveOpenClawCatalogModelMaxTokens = (
       }
     }
   }
-  return undefined;
+  return resolveBuiltInModelMaxTokens(providerId, modelId);
 };
 
 export const resetOpenClawCatalogMaxTokensCacheForTest = (): void => {

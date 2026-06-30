@@ -43,6 +43,10 @@ import {
 import { openLocalPathWithToast, revealLocalPathWithToast } from '@/utils/localFileActions';
 
 import CopyIcon from '../icons/CopyIcon';
+import {
+  getArtifactBrowserUrlType,
+  reportArtifactPreviewAction,
+} from './artifactAnalytics';
 import ArtifactRenderer from './ArtifactRenderer';
 import FileDirectoryView from './FileDirectoryView';
 import CodeRenderer from './renderers/CodeRenderer';
@@ -562,6 +566,22 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     ),
     [onAddSelectedText, selectedTextEnabled],
   );
+  const reportSelectedArtifactAction = useCallback((
+    actionType: string,
+    params?: Record<string, string | number | boolean | null | undefined>,
+  ) => {
+    reportArtifactPreviewAction({
+      actionType,
+      source: 'artifact_panel',
+      artifact: selectedArtifact,
+      params: {
+        tabCount: artifacts.length,
+        isPanelExpanded,
+        contentView: activeTab,
+        ...params,
+      },
+    });
+  }, [activeTab, artifacts.length, isPanelExpanded, selectedArtifact]);
 
   const isResizing = useRef(false);
   const startX = useRef(0);
@@ -721,12 +741,24 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
   const toggleFileListDrawer = useCallback(() => {
     if (showFileListDrawer && isFileListDrawerVisible) {
+      reportSelectedArtifactAction('file_list_drawer_toggle', {
+        targetOpen: false,
+      });
       closeFileListDrawer();
       return;
     }
 
+    reportSelectedArtifactAction('file_list_drawer_toggle', {
+      targetOpen: true,
+    });
     openFileListDrawer();
-  }, [closeFileListDrawer, isFileListDrawerVisible, openFileListDrawer, showFileListDrawer]);
+  }, [
+    closeFileListDrawer,
+    isFileListDrawerVisible,
+    openFileListDrawer,
+    reportSelectedArtifactAction,
+    showFileListDrawer,
+  ]);
 
   const handleResizeStart = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -994,6 +1026,15 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const handleSelectArtifact = useCallback(
     (id: string) => {
       const artifact = artifacts.find(item => item.id === id);
+      reportArtifactPreviewAction({
+        actionType: 'file_list_select_artifact',
+        source: 'artifact_panel',
+        artifact,
+        params: {
+          tabCount: artifacts.length,
+          entry: 'file_list',
+        },
+      });
       if (artifact && openLocalServiceArtifact(artifact)) return;
       if (artifact?.type === ArtifactTypeValue.Html && artifact.filePath && onOpenHtmlFileInBrowser) {
         onOpenHtmlFileInBrowser(artifact);
@@ -1015,6 +1056,15 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const handleSelectArtifactFromDrawer = useCallback(
     (id: string) => {
       const artifact = artifacts.find(item => item.id === id);
+      reportArtifactPreviewAction({
+        actionType: 'file_list_select_artifact',
+        source: 'artifact_panel',
+        artifact,
+        params: {
+          tabCount: artifacts.length,
+          entry: 'drawer',
+        },
+      });
       if (artifact && openLocalServiceArtifact(artifact)) {
         closeFileListDrawer();
         return;
@@ -1040,6 +1090,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const handleSetContentView = useCallback(
     (contentView: ArtifactContentView) => {
       if (!activePreviewTab) return;
+      reportSelectedArtifactAction('content_view_change', {
+        targetContentView: contentView,
+      });
       dispatch(
         setPreviewTabContentView({
           sessionId,
@@ -1048,48 +1101,62 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         }),
       );
     },
-    [activePreviewTab, dispatch, sessionId],
+    [activePreviewTab, dispatch, reportSelectedArtifactAction, sessionId],
   );
 
   const handleCopy = useCallback(async () => {
     if (!selectedArtifact) return;
-    if (selectedArtifact.type === 'image') {
-      if (selectedArtifact.filePath) {
-        const result = await window.electron?.clipboard?.writeImageFromFile(
-          selectedArtifact.filePath,
-        );
-        if (!result?.success) {
-          window.dispatchEvent(
-            new CustomEvent('app:showToast', { detail: result?.error || t('copyFailed') }),
+    try {
+      if (selectedArtifact.type === 'image') {
+        if (selectedArtifact.filePath) {
+          const result = await window.electron?.clipboard?.writeImageFromFile(
+            selectedArtifact.filePath,
           );
-          return;
+          if (!result?.success) {
+            reportSelectedArtifactAction('copy_content', { result: 'failed' });
+            window.dispatchEvent(
+              new CustomEvent('app:showToast', { detail: result?.error || t('copyFailed') }),
+            );
+            return;
+          }
+        } else if (selectedArtifact.content) {
+          const blob = await dataUrlToPngBlob(selectedArtifact.content);
+          await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
         }
-      } else if (selectedArtifact.content) {
-        const blob = await dataUrlToPngBlob(selectedArtifact.content);
-        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-      }
-    } else {
-      if (selectedArtifact.filePath && !selectedArtifact.content && selectedArtifact.type !== 'document') {
-        const result = await window.electron?.dialog?.readTextFile?.(selectedArtifact.filePath);
-        if (!result?.success || typeof result.content !== 'string') {
-          window.dispatchEvent(new CustomEvent('app:showToast', { detail: result?.error || t('copyFailed') }));
-          return;
-        }
-        await navigator.clipboard.writeText(result.content);
       } else {
-        await navigator.clipboard.writeText(selectedArtifact.content);
+        if (selectedArtifact.filePath && !selectedArtifact.content && selectedArtifact.type !== 'document') {
+          const result = await window.electron?.dialog?.readTextFile?.(selectedArtifact.filePath);
+          if (!result?.success || typeof result.content !== 'string') {
+            reportSelectedArtifactAction('copy_content', { result: 'failed' });
+            window.dispatchEvent(new CustomEvent('app:showToast', { detail: result?.error || t('copyFailed') }));
+            return;
+          }
+          await navigator.clipboard.writeText(result.content);
+        } else {
+          await navigator.clipboard.writeText(selectedArtifact.content);
+        }
       }
+      reportSelectedArtifactAction('copy_content', { result: 'success' });
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: t('messageCopied') }));
+    } catch {
+      reportSelectedArtifactAction('copy_content', { result: 'failed' });
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: t('copyFailed') }));
     }
-    window.dispatchEvent(new CustomEvent('app:showToast', { detail: t('messageCopied') }));
-  }, [selectedArtifact]);
+  }, [reportSelectedArtifactAction, selectedArtifact]);
 
   const handleRevealInFolder = useCallback(() => {
     if (!selectedArtifact?.filePath) return;
+    reportSelectedArtifactAction('reveal_in_folder', {
+      openTarget: 'folder',
+    });
     void revealLocalPathWithToast(selectedArtifact.filePath);
-  }, [selectedArtifact]);
+  }, [reportSelectedArtifactAction, selectedArtifact]);
 
   const handleOpenInBrowser = useCallback(() => {
     if (!selectedArtifact) return;
+    reportSelectedArtifactAction('open_in_browser', {
+      openTarget: selectedArtifact.type === ArtifactTypeValue.Html ? 'lobster_browser' : 'external_browser',
+    });
 
     if (
       selectedArtifact.type === ArtifactTypeValue.Html &&
@@ -1125,7 +1192,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     if (html) {
       window.electron?.shell?.openHtmlInBrowser(html);
     }
-  }, [onOpenHtmlFileInBrowser, selectedArtifact]);
+  }, [onOpenHtmlFileInBrowser, reportSelectedArtifactAction, selectedArtifact]);
 
   const openSubscriptionPage = useCallback(() => {
     window.electron?.shell?.openExternal(getPortalPricingUrl(PortalPricingKeyfrom.HtmlShare));
@@ -1742,6 +1809,15 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const handleShareHtmlArtifact = useCallback(async () => {
     if (!htmlShareArtifact || !selectedShareSourceType || isHtmlSharing)
       return;
+    reportArtifactPreviewAction({
+      actionType: 'share_html_click',
+      source: isBrowserTabActive ? 'artifact_browser' : 'artifact_panel',
+      artifact: htmlShareArtifact,
+      params: {
+        hasExistingShare: Boolean(selectedHtmlShare),
+        shareSourceType: selectedShareSourceType,
+      },
+    });
     const request = buildHtmlSharePendingRequest(
       htmlShareArtifact,
       selectedShareSourceType,
@@ -1805,6 +1881,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     openExistingHtmlShareDialog,
     rememberHtmlShare,
     htmlShareArtifact,
+    isBrowserTabActive,
     selectedHtmlShare,
     selectedShareSourceType,
     sessionId,
@@ -1812,6 +1889,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
   const handleOpenWithApp = useCallback(() => {
     if (selectedArtifact?.filePath) {
+      reportSelectedArtifactAction('open_with_app', {
+        openTarget: 'external_app',
+      });
       let filePath = selectedArtifact.filePath;
       if (filePath.startsWith('file:///')) {
         filePath = filePath.slice(7);
@@ -1826,7 +1906,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       }
       void openLocalPathWithToast(filePath);
     }
-  }, [selectedArtifact]);
+  }, [reportSelectedArtifactAction, selectedArtifact]);
 
   const handleRefresh = useCallback(async () => {
     if (!selectedArtifact?.filePath) return;
@@ -1835,6 +1915,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         sessionId: selectedArtifact.sessionId,
         artifact: { ...selectedArtifact, createdAt: Date.now() },
       }));
+      reportSelectedArtifactAction('refresh_preview', { result: 'success' });
       return;
     }
     try {
@@ -1846,6 +1927,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             contentVersion: Date.now(),
           },
         }));
+        reportSelectedArtifactAction('refresh_preview', { result: 'success' });
         return;
       }
 
@@ -1857,6 +1939,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             sessionId: selectedArtifact.sessionId,
             artifact: { ...selectedArtifact, content: result.content, contentVersion: Date.now() },
           }));
+          reportSelectedArtifactAction('refresh_preview', { result: 'success' });
+        } else {
+          reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
         }
         return;
       }
@@ -1881,11 +1966,15 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             artifact: { ...selectedArtifact, content },
           }),
         );
+        reportSelectedArtifactAction('refresh_preview', { result: 'success' });
+      } else {
+        reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
       }
     } catch {
+      reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
       // File unreadable or missing
     }
-  }, [selectedArtifact, dispatch]);
+  }, [selectedArtifact, dispatch, reportSelectedArtifactAction]);
 
   const handleRefreshRef = useRef(handleRefresh);
   handleRefreshRef.current = handleRefresh;
@@ -1995,7 +2084,13 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                   <button
                     ref={artifactActionsMenuButtonRef}
                     type="button"
-                    onClick={() => setIsArtifactActionsMenuOpen(value => !value)}
+                    onClick={() => setIsArtifactActionsMenuOpen(value => {
+                      const nextOpen = !value;
+                      reportSelectedArtifactAction('actions_menu_toggle', {
+                        targetOpen: nextOpen,
+                      });
+                      return nextOpen;
+                    })}
                     className={`p-1 rounded transition-colors ${
                       isArtifactActionsMenuOpen
                         ? 'bg-surface text-foreground'
@@ -3097,6 +3192,31 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
     () => getSessionLocalServices(sessionArtifacts),
     [sessionArtifacts],
   );
+  const reportBrowserAction = useCallback((
+    actionType: string,
+    params?: Record<string, string | number | boolean | null | undefined>,
+  ) => {
+    reportArtifactPreviewAction({
+      actionType,
+      source: 'artifact_browser',
+      params: {
+        browserUrlType: getArtifactBrowserUrlType(currentUrl || address),
+        hasCurrentUrl: Boolean(currentUrl),
+        isDeviceToolbarVisible,
+        browserZoomPercent: Math.round(browserZoomFactor * 100),
+        devicePreset: devicePresetId,
+        deviceScalePercent: Math.round(deviceScale * 100),
+        ...params,
+      },
+    });
+  }, [
+    address,
+    browserZoomFactor,
+    currentUrl,
+    devicePresetId,
+    deviceScale,
+    isDeviceToolbarVisible,
+  ]);
 
   const hideAddressOpenExternal = useCallback(() => {
     setIsAddressBarFocused(false);
@@ -3423,6 +3543,9 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
 
   const handleNavigate = useCallback(() => {
     const trimmedAddress = address.trim();
+    reportBrowserAction('browser_address_submit', {
+      browserUrlType: getArtifactBrowserUrlType(trimmedAddress),
+    });
     if (
       autoRefreshFilePath &&
       localHtmlPreviewUrl &&
@@ -3447,15 +3570,21 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
     onAddressChange,
     onCurrentUrlChange,
     onTitleChange,
+    reportBrowserAction,
   ]);
 
   const handleOpenLocalService = useCallback(
     (service: LocalWebService) => {
+      reportBrowserAction('browser_open_local_service', {
+        browserUrlType: 'localhost',
+        servicePort: service.port,
+        serviceOnline: service.online,
+      });
       onTitleChange?.('');
       onCurrentUrlChange(service.url);
       onAddressChange(service.url);
     },
-    [onAddressChange, onCurrentUrlChange, onTitleChange],
+    [onAddressChange, onCurrentUrlChange, onTitleChange, reportBrowserAction],
   );
 
   const handleAddressKeyDown = useCallback(
@@ -3504,41 +3633,70 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
 
   const handleOpenExternal = useCallback(() => {
     if (!currentUrl) return;
+    reportBrowserAction('browser_open_external', {
+      browserUrlType: getArtifactBrowserUrlType(currentUrl),
+    });
     window.electron?.shell?.openExternal(currentUrl);
-  }, [currentUrl]);
+  }, [currentUrl, reportBrowserAction]);
 
   const handleToggleDeviceToolbar = useCallback(() => {
-    setIsDeviceToolbarVisible(value => !value);
+    setIsDeviceToolbarVisible(value => {
+      const nextVisible = !value;
+      reportBrowserAction('browser_device_toolbar_toggle', {
+        targetOpen: nextVisible,
+      });
+      return nextVisible;
+    });
     setIsBrowserMenuOpen(false);
-  }, []);
+  }, [reportBrowserAction]);
 
   const handleDevicePresetChange = useCallback((value: string) => {
     const preset = BROWSER_DEVICE_PRESETS.find(item => item.id === value);
     if (!preset) return;
+    reportBrowserAction('browser_device_preset_change', {
+      targetDevicePreset: preset.id,
+      targetDeviceWidth: preset.width,
+      targetDeviceHeight: preset.height,
+    });
     setDevicePresetId(preset.id);
     setDeviceWidth(preset.width);
     setDeviceHeight(preset.height);
-  }, []);
+  }, [reportBrowserAction]);
 
   const handleDeviceWidthChange = useCallback((value: string) => {
+    reportBrowserAction('browser_device_size_change', {
+      dimension: 'width',
+      targetDeviceSize: clampBrowserDeviceSize(Number(value)),
+    });
     setDevicePresetId(BrowserDevicePresetId.Responsive);
     setDeviceWidth(clampBrowserDeviceSize(Number(value)));
-  }, []);
+  }, [reportBrowserAction]);
 
   const handleDeviceHeightChange = useCallback((value: string) => {
+    reportBrowserAction('browser_device_size_change', {
+      dimension: 'height',
+      targetDeviceSize: clampBrowserDeviceSize(Number(value)),
+    });
     setDevicePresetId(BrowserDevicePresetId.Responsive);
     setDeviceHeight(clampBrowserDeviceSize(Number(value)));
-  }, []);
+  }, [reportBrowserAction]);
 
   const handleRotateDevice = useCallback(() => {
+    reportBrowserAction('browser_device_rotate', {
+      targetDeviceWidth: deviceHeight,
+      targetDeviceHeight: deviceWidth,
+    });
     setDevicePresetId(BrowserDevicePresetId.Responsive);
     setDeviceWidth(deviceHeight);
     setDeviceHeight(deviceWidth);
-  }, [deviceHeight, deviceWidth]);
+  }, [deviceHeight, deviceWidth, reportBrowserAction]);
 
   const handleDeviceScaleChange = useCallback((value: string) => {
+    reportBrowserAction('browser_device_scale_change', {
+      targetDeviceScalePercent: Math.round(clampBrowserDeviceScale(Number(value)) * 100),
+    });
     setDeviceScale(clampBrowserDeviceScale(Number(value)));
-  }, []);
+  }, [reportBrowserAction]);
 
   const applyBrowserZoom = useCallback(
     (nextFactor: number) => {
@@ -3550,30 +3708,42 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
   );
 
   const handleZoomOut = useCallback(() => {
+    reportBrowserAction('browser_zoom_out', {
+      targetBrowserZoomPercent: Math.round(clampBrowserZoomFactor(browserZoomFactor - BrowserZoom.Step) * 100),
+    });
     applyBrowserZoom(browserZoomFactor - BrowserZoom.Step);
-  }, [applyBrowserZoom, browserZoomFactor]);
+  }, [applyBrowserZoom, browserZoomFactor, reportBrowserAction]);
 
   const handleZoomIn = useCallback(() => {
+    reportBrowserAction('browser_zoom_in', {
+      targetBrowserZoomPercent: Math.round(clampBrowserZoomFactor(browserZoomFactor + BrowserZoom.Step) * 100),
+    });
     applyBrowserZoom(browserZoomFactor + BrowserZoom.Step);
-  }, [applyBrowserZoom, browserZoomFactor]);
+  }, [applyBrowserZoom, browserZoomFactor, reportBrowserAction]);
 
   const handleResetZoom = useCallback(() => {
+    reportBrowserAction('browser_zoom_reset', {
+      targetBrowserZoomPercent: Math.round(BrowserZoom.Default * 100),
+    });
     applyBrowserZoom(BrowserZoom.Default);
-  }, [applyBrowserZoom]);
+  }, [applyBrowserZoom, reportBrowserAction]);
 
   const handleOpenBlankPage = useCallback(() => {
+    reportBrowserAction('browser_open_blank_page');
     setIsBrowserMenuOpen(false);
     lastRequestedUrlRef.current = '';
     lastRequestedWebviewRef.current = null;
     onAddressChange('');
     onCurrentUrlChange('');
     onTitleChange?.('');
-  }, [onAddressChange, onCurrentUrlChange, onTitleChange]);
+  }, [onAddressChange, onCurrentUrlChange, onTitleChange, reportBrowserAction]);
 
   const handleClearBrowserCookies = useCallback(async () => {
     setIsBrowserMenuOpen(false);
+    let success = false;
     try {
       const result = await window.electron?.artifact?.clearBrowserCookies?.();
+      success = Boolean(result?.success);
       window.dispatchEvent(
         new CustomEvent('app:showToast', {
           detail: result?.success
@@ -3587,13 +3757,19 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
           detail: t('artifactBrowserClearCookiesFailed'),
         }),
       );
+    } finally {
+      reportBrowserAction('browser_clear_cookies', {
+        result: success ? 'success' : 'failed',
+      });
     }
-  }, []);
+  }, [reportBrowserAction]);
 
   const handleClearBrowserCache = useCallback(async () => {
     setIsBrowserMenuOpen(false);
+    let success = false;
     try {
       const result = await window.electron?.artifact?.clearBrowserCache?.();
+      success = Boolean(result?.success);
       window.dispatchEvent(
         new CustomEvent('app:showToast', {
           detail: result?.success
@@ -3607,8 +3783,12 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
           detail: t('artifactBrowserClearCacheFailed'),
         }),
       );
+    } finally {
+      reportBrowserAction('browser_clear_cache', {
+        result: success ? 'success' : 'failed',
+      });
     }
-  }, []);
+  }, [reportBrowserAction]);
 
   const setTemporaryScreenshotStatus = useCallback((status: BrowserScreenshotStatus) => {
     setScreenshotStatus(status);
@@ -3631,6 +3811,9 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         throw new Error(result?.error || 'Failed to write browser screenshot to clipboard');
       }
       setTemporaryScreenshotStatus(BrowserScreenshotStatus.Copied);
+      reportBrowserAction('browser_screenshot', {
+        result: 'success',
+      });
       window.dispatchEvent(
         new CustomEvent('app:showToast', {
           detail: t('artifactBrowserScreenshotCopied'),
@@ -3638,6 +3821,9 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
       );
     } catch {
       setTemporaryScreenshotStatus(BrowserScreenshotStatus.Error);
+      reportBrowserAction('browser_screenshot', {
+        result: 'failed',
+      });
       window.dispatchEvent(
         new CustomEvent('app:showToast', {
           detail: t('artifactBrowserScreenshotFailed'),
@@ -3646,7 +3832,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
     } finally {
       setIsCapturingScreenshot(false);
     }
-  }, [currentUrl, isCapturingScreenshot, setTemporaryScreenshotStatus, webviewNode]);
+  }, [currentUrl, isCapturingScreenshot, reportBrowserAction, setTemporaryScreenshotStatus, webviewNode]);
 
   const handleCaptureScreenshotFromMenu = useCallback(() => {
     setIsBrowserMenuOpen(false);
@@ -3656,12 +3842,14 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
   const handleToggleAnnotation = useCallback(async () => {
     if (!webviewNode?.executeJavaScript || !webviewNode.capturePage || !currentUrl) return;
     if (isAnnotating) {
+      reportBrowserAction('browser_annotate_cancel');
       await webviewNode
         .executeJavaScript('window.__lobsterAnnotationCleanup?.()')
         .catch(() => undefined);
       setIsAnnotating(false);
       return;
     }
+    reportBrowserAction('browser_annotate_start');
     setIsAnnotating(true);
     try {
       const labels: BrowserAnnotationLabels = {
@@ -3678,8 +3866,12 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
       const result = (await webviewNode.executeJavaScript(buildBrowserAnnotationScript(labels))) as
         | BrowserAnnotationResult
         | undefined;
-      if (result?.status !== BrowserAnnotationStatus.Sent || !result.element || !result.rect)
+      if (result?.status !== BrowserAnnotationStatus.Sent || !result.element || !result.rect) {
+        reportBrowserAction('browser_annotate_end', {
+          result: result?.status === BrowserAnnotationStatus.Cancelled ? 'cancelled' : 'failed',
+        });
         return;
+      }
 
       await new Promise(resolve => window.setTimeout(resolve, 80));
       const image = await webviewNode.capturePage();
@@ -3700,7 +3892,15 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         annotation,
         element: result.element,
       });
+      reportBrowserAction('browser_annotate_send', {
+        result: 'success',
+        hasComment: Boolean(result.comment?.trim()),
+        annotationElementTag: result.element.tagName,
+      });
     } catch {
+      reportBrowserAction('browser_annotate_send', {
+        result: 'failed',
+      });
       window.dispatchEvent(
         new CustomEvent('app:showToast', {
           detail: t('artifactBrowserScreenshotFailed'),
@@ -3712,7 +3912,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         .catch(() => undefined);
       setIsAnnotating(false);
     }
-  }, [currentUrl, isAnnotating, onAnnotationCaptured, webviewNode]);
+  }, [currentUrl, isAnnotating, onAnnotationCaptured, reportBrowserAction, webviewNode]);
 
   const screenshotButtonTitle =
     screenshotStatus === BrowserScreenshotStatus.Copied
@@ -3736,7 +3936,10 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
       <div className="flex h-12 shrink-0 items-center gap-1.5 border-b border-border px-3">
         <button
           type="button"
-          onClick={() => webviewNode?.goBack?.()}
+          onClick={() => {
+            reportBrowserAction('browser_back');
+            webviewNode?.goBack?.();
+          }}
           disabled={!canGoBack}
           className="inline-flex h-7 w-7 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
           title={t('artifactBrowserBack')}
@@ -3745,7 +3948,10 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => webviewNode?.goForward?.()}
+          onClick={() => {
+            reportBrowserAction('browser_forward');
+            webviewNode?.goForward?.();
+          }}
           disabled={!canGoForward}
           className="inline-flex h-7 w-7 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
           title={t('artifactBrowserForward')}
@@ -3754,7 +3960,14 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => (isLoading ? webviewNode?.stop?.() : webviewNode?.reload?.())}
+          onClick={() => {
+            reportBrowserAction(isLoading ? 'browser_stop' : 'browser_reload');
+            if (isLoading) {
+              webviewNode?.stop?.();
+            } else {
+              webviewNode?.reload?.();
+            }
+          }}
           disabled={!currentUrl}
           className="inline-flex h-7 w-7 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
           title={isLoading ? t('artifactBrowserStop') : t('artifactBrowserReload')}
@@ -3859,7 +4072,13 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         <button
           ref={browserMenuButtonRef}
           type="button"
-          onClick={() => setIsBrowserMenuOpen(value => !value)}
+          onClick={() => setIsBrowserMenuOpen(value => {
+            const nextOpen = !value;
+            reportBrowserAction('browser_more_menu_toggle', {
+              targetOpen: nextOpen,
+            });
+            return nextOpen;
+          })}
           className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors ${
             isBrowserMenuOpen
               ? 'bg-surface text-foreground'

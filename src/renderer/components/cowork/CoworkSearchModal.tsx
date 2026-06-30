@@ -5,6 +5,7 @@ import { useSelector } from 'react-redux';
 
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
+import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import { RootState } from '../../store';
 import { CoworkSessionStatusValue, type CoworkSessionSummary } from '../../types/cowork';
 import { getAgentDisplayNameById } from '../../utils/agentDisplay';
@@ -12,9 +13,37 @@ import Modal from '../common/Modal';
 
 const SEARCH_SESSION_LIMIT = 100;
 const SEARCH_DEBOUNCE_MS = 180;
+const TASK_SEARCH_ANALYTICS_SOURCE = 'home_task_search';
 
 const getSessionAgentId = (session: CoworkSessionSummary) => {
   return session.agentId?.trim() || AgentId.Main;
+};
+
+const getSessionAgentType = (session: CoworkSessionSummary): 'main' | 'custom' => (
+  getSessionAgentId(session) === AgentId.Main ? 'main' : 'custom'
+);
+
+const reportTaskSearchAction = (
+  actionType: string,
+  options: {
+    agentType?: 'main' | 'custom';
+    hasQuery?: boolean;
+    isCurrentSession?: boolean;
+    resultCount?: number;
+    sessionStatus?: string;
+  } = {},
+): void => {
+  console.debug('[CoworkSearch] reporting task search analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.TaskSearchAction,
+    source: TASK_SEARCH_ANALYTICS_SOURCE,
+    actionType,
+    hasQuery: options.hasQuery,
+    resultCount: options.resultCount,
+    isCurrentSession: options.isCurrentSession,
+    sessionStatus: options.sessionStatus,
+    agentType: options.agentType,
+  });
 };
 
 const mergeUniqueSessions = (
@@ -55,6 +84,8 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const requestIdRef = useRef(0);
+  const reportedOpenRef = useRef(false);
+  const reportedEmptyResultKeyRef = useRef<string | null>(null);
 
   const displayedSessions = useMemo(() => {
     const trimmedQuery = searchQuery.trim().toLowerCase();
@@ -83,6 +114,13 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
+      if (!reportedOpenRef.current) {
+        reportedOpenRef.current = true;
+        reportTaskSearchAction('open', {
+          hasQuery: false,
+          resultCount: sessions.length,
+        });
+      }
       requestAnimationFrame(() => {
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
@@ -92,7 +130,9 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
     setSearchQuery('');
     setDebouncedSearchQuery('');
     setSearchResultQuery('');
-  }, [isOpen]);
+    reportedOpenRef.current = false;
+    reportedEmptyResultKeyRef.current = null;
+  }, [isOpen, sessions.length]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -142,23 +182,53 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
     if (!isOpen) return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        reportTaskSearchAction('close', {
+          hasQuery: searchQuery.trim().length > 0,
+          resultCount: displayedSessions.length,
+        });
         onClose();
       }
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen, onClose]);
+  }, [displayedSessions.length, isOpen, onClose, searchQuery]);
 
   const handleSelectSession = async (session: CoworkSessionSummary) => {
+    reportTaskSearchAction('select_result', {
+      agentType: getSessionAgentType(session),
+      hasQuery: searchQuery.trim().length > 0,
+      isCurrentSession: session.id === currentSessionId,
+      resultCount: displayedSessions.length,
+      sessionStatus: session.status,
+    });
     await onSelectSession(session);
     onClose();
   };
+
+  const handleClose = () => {
+    reportTaskSearchAction('close', {
+      hasQuery: searchQuery.trim().length > 0,
+      resultCount: displayedSessions.length,
+    });
+    onClose();
+  };
+
+  useEffect(() => {
+    if (!isOpen || isLoading || displayedSessions.length > 0) return;
+    const emptyResultKey = `${searchQuery.trim().length > 0 ? 'query' : 'recent'}:${searchResultQuery}`;
+    if (reportedEmptyResultKeyRef.current === emptyResultKey) return;
+    reportedEmptyResultKeyRef.current = emptyResultKey;
+    reportTaskSearchAction('empty_result', {
+      hasQuery: searchQuery.trim().length > 0,
+      resultCount: 0,
+    });
+  }, [displayedSessions.length, isLoading, isOpen, searchQuery, searchResultQuery]);
 
   if (!isOpen) return null;
 
   return (
     <Modal
-      onClose={onClose}
+      onClose={handleClose}
       overlayClassName="fixed inset-0 z-50 flex items-start justify-center bg-black/10 px-6 pt-[18vh] backdrop-blur-[1px] dark:bg-black/30"
       className="modal-content w-full max-w-[520px] overflow-hidden rounded-[18px] border border-border bg-white shadow-modal dark:bg-surface"
     >
@@ -173,7 +243,7 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             aria-label={i18nService.t('close')}
             title={i18nService.t('close')}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.06]"

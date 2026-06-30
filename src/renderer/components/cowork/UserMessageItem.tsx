@@ -16,6 +16,7 @@ import EditIcon from '../icons/EditIcon';
 import MessageCopyIcon from '../icons/MessageCopyIcon';
 import SidebarKitsIcon from '../icons/SidebarKitsIcon';
 import SkillIcon from '../icons/SkillIcon';
+import { reportConversationMessageAction } from './conversationAnalytics';
 import ImagePreviewModal, { type ImagePreviewSource } from './ImagePreviewModal';
 import {
   COWORK_DETAIL_CONTENT_CLASS,
@@ -30,17 +31,26 @@ import UserMessageContent from './UserMessageContent';
 
 const CopyButton: React.FC<{
   content: string;
+  onCopy?: (result: 'success' | 'failed') => void;
   visible: boolean;
-}> = ({ content, visible }) => {
+}> = ({ content, onCopy, visible }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const copiedToClipboard = await copyTextToClipboard(content);
     if (copiedToClipboard) {
+      onCopy?.('success');
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+      return;
     }
+    onCopy?.('failed');
+    window.electron?.log?.fromRenderer?.(
+      'warn',
+      'UserMessageItem',
+      'Failed to copy user message content to the clipboard.',
+    );
   };
 
   return (
@@ -214,6 +224,20 @@ const UserMessageItem: React.FC<{
     ? imageAttachmentPreviews
     : legacyImageAttachments;
   const hasCapabilityBadges = messageKitReferences.length > 0 || messageSkills.length > 0;
+  const handleImagePreviewOpen = useCallback((image: ImagePreviewSource) => {
+    reportConversationMessageAction({
+      actionType: 'open_message_image',
+      message,
+    });
+    setExpandedImage(image);
+  }, [message]);
+  const handleReEditClick = useCallback(() => {
+    reportConversationMessageAction({
+      actionType: 'reedit_user_message',
+      message,
+    });
+    onReEdit?.(message);
+  }, [message, onReEdit]);
 
   return (
     <div
@@ -250,7 +274,7 @@ const UserMessageItem: React.FC<{
                   <UserMessageContent
                     content={displayContent}
                     className="max-w-none"
-                    onImageClick={setExpandedImage}
+                    onImageClick={handleImagePreviewOpen}
                   />
                 )}
                 {displayImageAttachments.length > 0 && (
@@ -262,7 +286,7 @@ const UserMessageItem: React.FC<{
                           alt={img.name}
                           className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border border-border hover:border-primary transition-colors"
                           title={img.name}
-                          onClick={() => setExpandedImage({
+                          onClick={() => handleImagePreviewOpen({
                             src: `data:${img.mimeType};base64,${img.base64Data}`,
                             alt: img.name,
                             name: img.name,
@@ -282,12 +306,21 @@ const UserMessageItem: React.FC<{
                 {modelLabel && <span>{modelLabel}</span>}
                 <CopyButton
                   content={message.content}
+                  onCopy={(result) => reportConversationMessageAction({
+                    actionType: 'copy_message',
+                    message,
+                    params: {
+                      result,
+                      copySource: 'user_message',
+                      copiedLength: message.content.length,
+                    },
+                  })}
                   visible={isHovered}
                 />
                 {onReEdit && (
                   <ReEditButton
                     visible={isHovered}
-                    onClick={() => onReEdit(message)}
+                    onClick={handleReEditClick}
                   />
                 )}
               </div>

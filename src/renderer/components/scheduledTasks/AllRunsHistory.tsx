@@ -7,6 +7,7 @@ import type { RunFilter, ScheduledTaskRunWithName } from '../../../scheduledTask
 import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
+import { getFilterAnalyticsParams, getRunAnalyticsParams, reportScheduledTaskAction } from './analytics';
 import DateInput from './DateInput';
 import RunSessionModal from './RunSessionModal';
 import ScheduledTaskDataState from './ScheduledTaskDataState';
@@ -90,24 +91,55 @@ const AllRunsHistory: React.FC = () => {
   };
 
   const handleClearFilter = () => {
+    reportScheduledTaskAction('history_filter_clear', {
+      source: 'scheduled_tasks_history',
+      resultCount: displayedRuns.length,
+      ...getFilterAnalyticsParams(filter),
+    });
     handleFilterChange(EMPTY_FILTER);
   };
 
   const handleStatusToggle = (status: TaskStatus) => {
-    handleFilterChange({
+    const nextFilter = {
       ...filter,
       status: filter.status === status ? undefined : status,
+    };
+    reportScheduledTaskAction('history_filter_status', {
+      source: 'scheduled_tasks_history',
+      targetStatus: status,
+      selected: nextFilter.status === status,
+      resultCount: displayedRuns.length,
+      ...getFilterAnalyticsParams(nextFilter),
     });
+    handleFilterChange(nextFilter);
   };
 
   const handleLoadMore = () => {
+    reportScheduledTaskAction('history_load_more', {
+      source: 'scheduled_tasks_history',
+      loadedCount: allRuns.length,
+      ...getFilterAnalyticsParams(filter),
+    });
     scheduledTaskService.loadAllRuns(50, allRuns.length, filter);
   };
 
   const handleViewSession = (run: ScheduledTaskRunWithName) => {
-    if (run.sessionId || run.sessionKey) {
+    if (run.sessionId || run.sessionKey || run.summary || run.error) {
+      reportScheduledTaskAction('history_view_session', {
+        source: 'scheduled_tasks_history',
+        ...getRunAnalyticsParams(run),
+      });
       setViewingRun(run);
     }
+  };
+
+  const handleDateFilterChange = (newFilter: RunFilter) => {
+    reportScheduledTaskAction('history_filter_date', {
+      source: 'scheduled_tasks_history',
+      resultCount: displayedRuns.length,
+      ...getFilterAnalyticsParams(newFilter),
+    });
+    handleFilterChange(newFilter);
   };
 
   const isEmpty = displayedRuns.length === 0;
@@ -119,7 +151,13 @@ const AllRunsHistory: React.FC = () => {
           <ScheduledTaskDataState
             status={allRunsStatus}
             error={allRunsError}
-            onRetry={() => loadInitial(filter)}
+            onRetry={() => {
+              reportScheduledTaskAction('retry_load_history', {
+                source: 'scheduled_tasks_history',
+                ...getFilterAnalyticsParams(filter),
+              });
+              loadInitial(filter);
+            }}
           />
         </div>
       </div>
@@ -158,14 +196,14 @@ const AllRunsHistory: React.FC = () => {
             <DateInput
               value={filter.startDate ?? ''}
               max={filter.endDate}
-              onChange={v => handleFilterChange({ ...filter, startDate: v || undefined })}
+              onChange={v => handleDateFilterChange({ ...filter, startDate: v || undefined })}
               placeholder={i18nService.t('scheduledTasksFilterStartDate')}
             />
             <span className="text-xs text-secondary/50">–</span>
             <DateInput
               value={filter.endDate ?? ''}
               min={filter.startDate}
-              onChange={v => handleFilterChange({ ...filter, endDate: v || undefined })}
+              onChange={v => handleDateFilterChange({ ...filter, endDate: v || undefined })}
               placeholder={i18nService.t('scheduledTasksFilterEndDate')}
             />
             {hasActiveFilter && (
@@ -212,12 +250,12 @@ const AllRunsHistory: React.FC = () => {
             <div className="p-2">
               {displayedRuns.map(run => {
                 const cfg = statusConfig[run.status];
-                const hasSession = run.sessionId || run.sessionKey;
+                const canViewRun = run.sessionId || run.sessionKey || run.summary || run.error;
                 return (
                   <div
                     key={run.id}
                     className={`${historyGridClass} rounded-md px-3 py-3 transition-colors ${
-                      hasSession ? 'hover:bg-surface-raised/60 cursor-pointer' : ''
+                      canViewRun ? 'hover:bg-surface-raised/60 cursor-pointer' : ''
                     }`}
                     onClick={() => handleViewSession(run)}
                   >
@@ -285,6 +323,8 @@ const AllRunsHistory: React.FC = () => {
           <RunSessionModal
             sessionId={viewingRun.sessionId}
             sessionKey={viewingRun.sessionKey}
+            runSummary={viewingRun.summary}
+            runError={viewingRun.error}
             onClose={() => setViewingRun(null)}
           />
         )}

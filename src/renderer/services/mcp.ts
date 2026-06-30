@@ -1,4 +1,5 @@
 import { McpCategory, McpMarketplaceCategoryInfo, McpMarketplaceServer,McpRegistryEntry, McpServerConfig, McpServerFormData } from '../types/mcp';
+import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 
 /**
  * Convert remote marketplace server data to McpRegistryEntry format.
@@ -20,6 +21,12 @@ function convertMarketplaceToRegistry(
     requiredEnvKeys: s.requiredEnvKeys,
     optionalEnvKeys: s.optionalEnvKeys,
   }));
+}
+
+function getMcpAnalyticsSource(server: McpServerConfig): string {
+  if (server.isBuiltIn) return 'built_in';
+  if (server.registryId) return 'marketplace';
+  return 'custom';
 }
 
 class McpService {
@@ -92,9 +99,22 @@ class McpService {
 
   async setServerEnabled(id: string, enabled: boolean): Promise<McpServerConfig[]> {
     try {
+      const previousServer = this.servers.find(server => server.id === id);
       const result = await window.electron.mcp.setEnabled({ id, enabled });
       if (result.success && result.servers) {
         this.servers = result.servers;
+        const updatedServer = this.servers.find(server => server.id === id) ?? previousServer;
+        if (enabled && previousServer?.enabled !== true && updatedServer) {
+          void reportYdAnalyzer({
+            action: LogReporterAction.McpEnabled,
+            mcpId: updatedServer.id,
+            mcpName: updatedServer.name,
+            mcpSource: getMcpAnalyticsSource(updatedServer),
+            registryId: updatedServer.registryId,
+            transportType: updatedServer.transportType,
+            isBuiltIn: updatedServer.isBuiltIn,
+          });
+        }
         return this.servers;
       }
       throw new Error(result.error || 'Failed to update MCP server');

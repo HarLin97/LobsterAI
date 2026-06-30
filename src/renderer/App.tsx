@@ -35,6 +35,7 @@ import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
 import { i18nService } from './services/i18n';
+import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
 import { scheduledTaskService } from './services/scheduledTask';
 import { matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
@@ -110,6 +111,7 @@ const App: React.FC = () => {
   } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
+  const hasReportedAppStartedRef = useRef(false);
   const previousUpdateStatusRef = useRef<AppUpdateRuntimeState['status']>(AppUpdateStatus.Idle);
   const shouldInstallReadyUpdateRef = useRef(false);
   const dispatch = useDispatch();
@@ -229,6 +231,14 @@ const App: React.FC = () => {
 
         setIsInitialized(true);
         mark('shell ready');
+        if (!hasReportedAppStartedRef.current) {
+          hasReportedAppStartedRef.current = true;
+          void reportYdAnalyzer({
+            action: LogReporterAction.AppStarted,
+            providerModelCount: providerModels.length,
+            hasLoggedInUser: !!store.getState().auth.user?.yid,
+          });
+        }
 
         void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
           console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
@@ -256,6 +266,12 @@ const App: React.FC = () => {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (authUser) {
+      void authService.fetchProfileSummary();
+    }
+  }, [authUser]);
 
   // Listen for Copilot token auto-refresh events from the main process
   useEffect(() => {

@@ -1,14 +1,14 @@
 import { ArrowRightIcon } from '@heroicons/react/24/outline';
 import React from 'react';
-import { useDispatch,useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { RootState } from '../../store';
 import { selectPrompt } from '../../store/slices/quickActionSlice';
-import type { LocalizedPrompt,LocalizedQuickAction } from '../../types/quickAction';
+import type { LocalizedPrompt, LocalizedQuickAction } from '../../types/quickAction';
 
 interface PromptPanelProps {
   action: LocalizedQuickAction;
-  onPromptSelect: (prompt: string) => void;
+  onPromptSelect: (prompt: string, promptId: string) => void;
 }
 
 const PromptPanel: React.FC<PromptPanelProps> = ({ action, onPromptSelect }) => {
@@ -19,7 +19,7 @@ const PromptPanel: React.FC<PromptPanelProps> = ({ action, onPromptSelect }) => 
 
   const handlePromptClick = (prompt: LocalizedPrompt) => {
     dispatch(selectPrompt(prompt.id));
-    onPromptSelect(prompt.prompt);
+    onPromptSelect(prompt.prompt, prompt.id);
   };
 
   if (!action.prompts || action.prompts.length === 0) {

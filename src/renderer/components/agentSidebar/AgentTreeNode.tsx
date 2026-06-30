@@ -43,6 +43,25 @@ interface AgentTreeNodeProps {
   onRenameTask: (task: AgentSidebarTaskNode, title: string) => Promise<void>;
   onToggleSelection: (selectionKey: string, agentId: string) => void;
   onEnterBatchMode: (task: AgentSidebarTaskNode) => void;
+  onSidebarAction?: (actionType: string, params?: {
+    agentType?: 'main' | 'custom';
+    hasActiveSubagent?: boolean;
+    isCurrentSession?: boolean;
+    isCurrentSubagent?: boolean;
+    isExpanded?: boolean;
+    isPinned?: boolean;
+    subagentStatus?: string;
+    targetPinned?: boolean;
+    taskStatus?: string;
+    visibleTaskCount?: number;
+  }) => void;
+  getTaskActionParams?: (task: AgentSidebarTaskNode, hasActiveSubagent?: boolean) => {
+    agentType: 'main' | 'custom';
+    hasActiveSubagent?: boolean;
+    isCurrentSession: boolean;
+    isPinned: boolean;
+    taskStatus: string;
+  };
 }
 
 const ACTION_MENU_VIEWPORT_PADDING = 8;
@@ -91,6 +110,8 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   onRenameTask,
   onToggleSelection,
   onEnterBatchMode,
+  onSidebarAction,
+  getTaskActionParams,
 }) => {
   const [menuPosition, setMenuPosition] = useState<{ right: number; top: number } | null>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
@@ -231,6 +252,11 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   };
 
   const handleAgentClick = (event: React.MouseEvent) => {
+    onSidebarAction?.('agent_header_click', {
+      agentType: isMainAgent ? 'main' : 'custom',
+      isExpanded: agent.isExpanded,
+      isPinned: agent.pinned,
+    });
     onToggleExpanded(agent.id);
     handleCreateTask(event);
   };
@@ -239,6 +265,11 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
     event.stopPropagation();
     if (isMainAgent) return;
     closeMenu();
+    onSidebarAction?.('agent_delete_confirm_open', {
+      agentType: 'custom',
+      isExpanded: agent.isExpanded,
+      isPinned: agent.pinned,
+    });
     setShowConfirmDelete(true);
   };
 
@@ -283,6 +314,11 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
               }
               const position = calculateMenuPosition();
               if (position) {
+                onSidebarAction?.('agent_menu_open', {
+                  agentType: isMainAgent ? 'main' : 'custom',
+                  isExpanded: agent.isExpanded,
+                  isPinned: agent.pinned,
+                });
                 setMenuPosition(position);
               }
             }}
@@ -358,8 +394,20 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
             message={i18nService.t('agentDeleteConfirmMessage').replace('{name}', agentName)}
             cancelLabel={i18nService.t('cancel')}
             confirmLabel={i18nService.t('delete')}
-            onCancel={() => setShowConfirmDelete(false)}
+            onCancel={() => {
+              onSidebarAction?.('agent_delete_cancel', {
+                agentType: 'custom',
+                isExpanded: agent.isExpanded,
+                isPinned: agent.pinned,
+              });
+              setShowConfirmDelete(false);
+            }}
             onConfirm={() => {
+              onSidebarAction?.('agent_delete_submit', {
+                agentType: 'custom',
+                isExpanded: agent.isExpanded,
+                isPinned: agent.pinned,
+              });
               setShowConfirmDelete(false);
               void onDeleteAgent(agent);
             }}
@@ -419,6 +467,8 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                     onRename={(title) => onRenameTask(task, title)}
                     onToggleSelection={() => onToggleSelection(createSessionBatchKey(task.id), task.agentId)}
                     onEnterBatchMode={() => onEnterBatchMode(task)}
+                    onSidebarAction={onSidebarAction}
+                    analyticsParams={getTaskActionParams?.(task, task.isSelected && selectedSubagentId != null)}
                   />
                   {task.isSelected && subagentsBySessionId?.[task.id]?.map((sub) => (
                     <SubagentTaskRow
@@ -436,6 +486,11 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                         createSubagentBatchKey(task.id, sub.id),
                         task.agentId,
                       )}
+                      onSidebarAction={onSidebarAction}
+                      analyticsParams={{
+                        isCurrentSubagent: sub.id === selectedSubagentId,
+                        subagentStatus: sub.status,
+                      }}
                     />
                   ))}
                 </React.Fragment>

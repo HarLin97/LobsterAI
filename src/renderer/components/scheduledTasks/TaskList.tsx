@@ -15,6 +15,7 @@ import { RootState } from '../../store';
 import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
 import EditIcon from '../icons/EditIcon';
 import TrashIcon from '../icons/TrashIcon';
+import { getTaskAnalyticsParams, reportScheduledTaskAction } from './analytics';
 import ScheduledTaskDataState from './ScheduledTaskDataState';
 import {
   formatNextRunRelative,
@@ -43,11 +44,12 @@ interface MenuPosition {
 
 interface TaskListItemProps {
   task: ScheduledTask;
-  onRequestDelete: (taskId: string, taskName: string) => void;
+  onRequestDelete: (taskId: string, taskName: string, source?: string) => void;
 }
 
 const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) => {
   const dispatch = useDispatch();
+  const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const [showMenu, setShowMenu] = React.useState(false);
   const [menuPosition, setMenuPosition] = React.useState<MenuPosition | null>(null);
   const menuButtonRef = React.useRef<HTMLButtonElement>(null);
@@ -117,11 +119,73 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
 
   const statusLabel = i18nService.t(getStatusLabelKey(task.state.lastStatus));
   const statusTone = getStatusTone(task.state.lastStatus);
+  const analyticsParams = React.useMemo(
+    () => getTaskAnalyticsParams(task, availableModels),
+    [availableModels, task],
+  );
+
+  const handleSelectTask = React.useCallback(() => {
+    reportScheduledTaskAction('select_task', {
+      source: 'scheduled_tasks_list',
+      ...analyticsParams,
+    });
+    dispatch(selectTask(task.id));
+  }, [analyticsParams, dispatch, task.id]);
+
+  const handleToggleTask = React.useCallback(async () => {
+    const targetEnabled = !task.enabled;
+    reportScheduledTaskAction('toggle_enabled', {
+      source: 'scheduled_tasks_list',
+      targetEnabled,
+      ...analyticsParams,
+    });
+    try {
+      await scheduledTaskService.toggleTask(task.id, targetEnabled);
+      reportScheduledTaskAction('toggle_enabled_success', {
+        source: 'scheduled_tasks_list',
+        targetEnabled,
+        result: 'success',
+        ...analyticsParams,
+      });
+    } catch (error) {
+      reportScheduledTaskAction('toggle_enabled_failed', {
+        source: 'scheduled_tasks_list',
+        targetEnabled,
+        result: 'failed',
+        errorCode: 'toggle_failed',
+        ...analyticsParams,
+      });
+      throw error;
+    }
+  }, [analyticsParams, task.enabled, task.id]);
+
+  const handleRunManually = React.useCallback(async () => {
+    reportScheduledTaskAction('run_manually', {
+      source: 'scheduled_tasks_list',
+      ...analyticsParams,
+    });
+    try {
+      await scheduledTaskService.runManually(task.id);
+      reportScheduledTaskAction('run_manually_success', {
+        source: 'scheduled_tasks_list',
+        result: 'success',
+        ...analyticsParams,
+      });
+    } catch (error) {
+      reportScheduledTaskAction('run_manually_failed', {
+        source: 'scheduled_tasks_list',
+        result: 'failed',
+        errorCode: 'run_manually_failed',
+        ...analyticsParams,
+      });
+      throw error;
+    }
+  }, [analyticsParams, task.id]);
 
   return (
     <div
       className={`${listGridClass} rounded-md px-3 py-3 hover:bg-surface-raised/60 cursor-pointer transition-colors`}
-      onClick={() => dispatch(selectTask(task.id))}
+      onClick={handleSelectTask}
     >
       <div className="min-w-0">
         <div className={`text-sm truncate ${task.enabled ? 'text-foreground' : 'text-secondary'}`}>
@@ -147,7 +211,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
           type="button"
           onClick={event => {
             event.stopPropagation();
-            void scheduledTaskService.toggleTask(task.id, !task.enabled);
+            void handleToggleTask();
           }}
           className={`relative shrink-0 w-7 h-4 rounded-full transition-colors ${
             task.enabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
@@ -168,7 +232,16 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
             type="button"
             onClick={event => {
               event.stopPropagation();
-              setShowMenu(value => !value);
+              setShowMenu(value => {
+                const nextShowMenu = !value;
+                if (nextShowMenu) {
+                  reportScheduledTaskAction('task_menu_open', {
+                    source: 'scheduled_tasks_list',
+                    ...analyticsParams,
+                  });
+                }
+                return nextShowMenu;
+              });
             }}
             className="p-1.5 rounded-md text-secondary hover:bg-surface-raised transition-colors"
           >
@@ -187,7 +260,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
                   onClick={event => {
                     event.stopPropagation();
                     setShowMenu(false);
-                    void scheduledTaskService.runManually(task.id);
+                    void handleRunManually();
                   }}
                   disabled={Boolean(task.state.runningAtMs)}
                   className={`${menuItemClassName} disabled:opacity-50`}
@@ -200,6 +273,10 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
                   onClick={event => {
                     event.stopPropagation();
                     setShowMenu(false);
+                    reportScheduledTaskAction('edit_task', {
+                      source: 'scheduled_tasks_list',
+                      ...analyticsParams,
+                    });
                     dispatch(selectTask(task.id));
                     dispatch(setViewMode('edit'));
                   }}
@@ -213,7 +290,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
                   onClick={event => {
                     event.stopPropagation();
                     setShowMenu(false);
-                    onRequestDelete(task.id, task.name);
+                    onRequestDelete(task.id, task.name, 'scheduled_tasks_list');
                   }}
                   className={destructiveMenuItemClassName}
                 >
@@ -231,7 +308,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
 };
 
 interface TaskListProps {
-  onRequestDelete: (taskId: string, taskName: string) => void;
+  onRequestDelete: (taskId: string, taskName: string, source?: string) => void;
 }
 
 const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
@@ -246,7 +323,13 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
           <ScheduledTaskDataState
             status={status}
             error={error}
-            onRetry={() => void scheduledTaskService.loadTasks()}
+            onRetry={() => {
+              reportScheduledTaskAction('retry_load_tasks', {
+                source: 'scheduled_tasks_list',
+                result: 'retry',
+              });
+              void scheduledTaskService.loadTasks();
+            }}
           />
         </div>
       </div>

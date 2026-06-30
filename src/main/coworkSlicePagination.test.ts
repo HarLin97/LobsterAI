@@ -17,6 +17,7 @@ import coworkReducer, {
   setMessageRailIndexLoading,
   setMessageWindow,
   setSessions,
+  updateMessageContent,
 } from '../renderer/store/slices/coworkSlice';
 import type { CoworkMessage,CoworkSession, CoworkSessionSummary } from '../renderer/types/cowork';
 
@@ -255,6 +256,36 @@ test('setMessageRailIndex: stores full lightweight rail index by session', () =>
 
   expect(state.messageRailIndexBySessionId.sess1).toHaveLength(1);
   expect(state.messageRailIndexBySessionId.sess1[0].messageOffset).toBe(0);
+});
+
+test('updateMessageContent: preserves rail index messageOffset from full index', () => {
+  const session = makeFullSession('sess1', [
+    { ...makeMessage('m51', 'old content'), type: 'assistant' },
+  ], 50);
+  let state = coworkReducer(emptyState, setCurrentSession(session));
+  state = coworkReducer(state, setMessageRailIndex({
+    sessionId: 'sess1',
+    items: [
+      {
+        messageId: 'm51',
+        type: 'assistant',
+        sequence: 51,
+        messageOffset: 50,
+        timestamp: 1000,
+        preview: 'old content',
+        contentLen: 11,
+      },
+    ],
+  }));
+
+  state = coworkReducer(state, updateMessageContent({
+    sessionId: 'sess1',
+    messageId: 'm51',
+    content: 'updated content',
+  }));
+
+  expect(state.messageRailIndexBySessionId.sess1[0].messageOffset).toBe(50);
+  expect(state.messageRailIndexBySessionId.sess1[0].preview).toBe('updated content');
 });
 
 test('setMessageRailIndexLoading: clears loading flag when loading finishes', () => {

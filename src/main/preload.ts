@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
 import { AgentIpcChannel } from '../shared/agent/constants';
+import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
@@ -694,6 +695,7 @@ contextBridge.exposeInMainWorld('electron', {
   appInfo: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     getSystemLocale: () => ipcRenderer.invoke('app:getSystemLocale'),
+    getKeyfromAttribution: () => ipcRenderer.invoke(AppIpcChannel.GetKeyfromAttribution),
     relaunch: () => ipcRenderer.invoke('app:relaunch'),
   },
   appUpdate: {
@@ -904,8 +906,8 @@ contextBridge.exposeInMainWorld('electron', {
     countRuns: (taskId: string) => ipcRenderer.invoke(ScheduledTaskIpc.CountRuns, taskId),
     listAllRuns: (limit?: number, offset?: number, filter?: any) =>
       ipcRenderer.invoke(ScheduledTaskIpc.ListAllRuns, limit, offset, filter),
-    resolveSession: (sessionKey: string) =>
-      ipcRenderer.invoke(ScheduledTaskIpc.ResolveSession, sessionKey),
+    resolveSession: (input: string | { sessionId?: string | null; sessionKey?: string | null }) =>
+      ipcRenderer.invoke(ScheduledTaskIpc.ResolveSession, input),
 
     // Delivery channels
     listChannels: () => ipcRenderer.invoke(ScheduledTaskIpc.ListChannels),

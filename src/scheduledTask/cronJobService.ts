@@ -448,6 +448,8 @@ export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
         : new Date(safeFiniteNumber(entry.ts, tsMs)).toISOString(),
     durationMs: safeFiniteNumberOrNull(entry.durationMs),
     error: status === TaskStatus.Success ? null : (entry.error ?? null),
+    summary: entry.summary ?? null,
+    deliveryError: entry.deliveryError ?? null,
   };
 }
 

@@ -126,6 +126,7 @@ class AuthService {
     // Listen for quota changes (e.g. after cowork session using server model)
     this.unsubQuotaChanged = window.electron.auth.onQuotaChanged(() => {
       this.refreshQuota();
+      void this.fetchProfileSummary();
       this.loadServerModels();
     });
 
@@ -136,6 +137,7 @@ class AuthService {
         if (now - this.lastRefreshTime > 30_000) {
           this.lastRefreshTime = now;
           this.refreshQuota();
+          void this.fetchProfileSummary();
           this.loadServerModels();
         }
       }
@@ -187,6 +189,7 @@ class AuthService {
       if (result.success) {
         store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
         await this.loadServerModels();
+        void this.fetchProfileSummary();
         this.refreshQuota();
         return true;
       }
@@ -207,6 +210,7 @@ class AuthService {
       if (result.success && result.user) {
         store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
         await this.loadServerModels();
+        void this.fetchProfileSummary();
         return { isLoggedIn: true, user: result.user, quota: result.quota ?? null };
       }
     } catch {

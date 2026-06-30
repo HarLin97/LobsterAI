@@ -14,6 +14,12 @@ import ConnectorIcon from '../icons/ConnectorIcon';
 import PencilIcon from '../icons/PencilIcon';
 import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
+import {
+  getFormAnalyticsParams,
+  getRegistryAnalyticsParams,
+  getServerAnalyticsParams,
+  reportMcpAction,
+} from './analytics';
 import McpServerFormModal from './McpServerFormModal';
 
 const TRANSPORT_BADGE_COLORS: Record<string, string> = {
@@ -246,37 +252,125 @@ const McpManager: React.FC = () => {
     return entries;
   }, [searchQuery, activeCategory, dynamicRegistry, getRegistryEntryDescription]);
 
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!query) return undefined;
+    const resultCount = activeTab === 'marketplace'
+      ? filteredMarketplace.length
+      : activeTab === 'custom'
+        ? filteredCustom.length
+        : filteredInstalled.length;
+    const timer = window.setTimeout(() => {
+      reportMcpAction('search', {
+        source: 'mcp_manager',
+        activeTab,
+        activeCategory,
+        searchKeywordLength: query.length,
+        resultCount,
+      });
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeCategory,
+    activeTab,
+    filteredCustom.length,
+    filteredInstalled.length,
+    filteredMarketplace.length,
+    searchQuery,
+  ]);
+
   const handleToggleEnabled = async (serverId: string) => {
     const targetServer = servers.find(s => s.id === serverId);
     if (!targetServer) return;
+    const registryEntry = getRegistryEntryForServer(targetServer);
+    const targetEnabled = !targetServer.enabled;
+    reportMcpAction('toggle_enabled', {
+      source: 'mcp_manager',
+      activeTab,
+      targetEnabled,
+      ...getServerAnalyticsParams(targetServer, registryEntry),
+    });
     try {
-      const updatedServers = await mcpService.setServerEnabled(serverId, !targetServer.enabled);
+      const updatedServers = await mcpService.setServerEnabled(serverId, targetEnabled);
       dispatch(setMcpServers(updatedServers));
       setActionError('');
+      reportMcpAction('toggle_enabled_success', {
+        source: 'mcp_manager',
+        activeTab,
+        targetEnabled,
+        result: 'success',
+        ...getServerAnalyticsParams(targetServer, registryEntry),
+      });
     } catch (error) {
       setActionError(error instanceof Error ? error.message : i18nService.t('mcpUpdateFailed'));
+      reportMcpAction('toggle_enabled_failed', {
+        source: 'mcp_manager',
+        activeTab,
+        targetEnabled,
+        result: 'failed',
+        errorCode: 'toggle_failed',
+        ...getServerAnalyticsParams(targetServer, registryEntry),
+      });
     }
   };
 
   const handleRetryLaunchResolution = async (serverId: string) => {
+    const targetServer = servers.find(s => s.id === serverId);
+    const registryEntry = targetServer ? getRegistryEntryForServer(targetServer) : undefined;
     setActionError('');
+    if (targetServer) {
+      reportMcpAction('launch_retry_submit', {
+        source: 'mcp_manager',
+        activeTab,
+        ...getServerAnalyticsParams(targetServer, registryEntry),
+      });
+    }
     const result = await mcpService.retryLaunchResolution(serverId);
     if (!result.success) {
       setActionError(result.error || i18nService.t('mcpUpdateFailed'));
+      if (targetServer) {
+        reportMcpAction('launch_retry_failed', {
+          source: 'mcp_manager',
+          activeTab,
+          result: 'failed',
+          errorCode: 'launch_retry_failed',
+          ...getServerAnalyticsParams(targetServer, registryEntry),
+        });
+      }
       return;
     }
     if (result.servers) {
       dispatch(setMcpServers(result.servers));
     }
+    if (targetServer) {
+      reportMcpAction('launch_retry_success', {
+        source: 'mcp_manager',
+        activeTab,
+        result: 'success',
+        ...getServerAnalyticsParams(targetServer, registryEntry),
+      });
+    }
   };
 
   const handleRequestDelete = (server: McpServerConfig) => {
     setActionError('');
+    reportMcpAction('delete_confirm_open', {
+      source: 'mcp_manager',
+      activeTab,
+      ...getServerAnalyticsParams(server, getRegistryEntryForServer(server)),
+    });
     setPendingDelete(server);
   };
 
   const handleCancelDelete = () => {
     if (isDeleting) return;
+    if (pendingDelete) {
+      reportMcpAction('delete_confirm_cancel', {
+        source: 'mcp_manager',
+        activeTab,
+        ...getServerAnalyticsParams(pendingDelete, getRegistryEntryForServer(pendingDelete)),
+      });
+    }
     setPendingDelete(null);
   };
 
@@ -288,28 +382,62 @@ const McpManager: React.FC = () => {
     if (!result.success) {
       setActionError(result.error || i18nService.t('mcpDeleteFailed'));
       setIsDeleting(false);
+      reportMcpAction('delete_failed', {
+        source: 'mcp_manager',
+        activeTab,
+        result: 'failed',
+        errorCode: 'delete_failed',
+        ...getServerAnalyticsParams(pendingDelete, getRegistryEntryForServer(pendingDelete)),
+      });
       return;
     }
     if (result.servers) {
       dispatch(setMcpServers(result.servers));
     }
+    reportMcpAction('delete_success', {
+      source: 'mcp_manager',
+      activeTab,
+      result: 'success',
+      ...getServerAnalyticsParams(pendingDelete, getRegistryEntryForServer(pendingDelete)),
+    });
     setIsDeleting(false);
     setPendingDelete(null);
   };
 
   const handleOpenEditForm = (server: McpServerConfig) => {
+    reportMcpAction('edit_open', {
+      source: 'mcp_manager',
+      activeTab,
+      ...getServerAnalyticsParams(server, getRegistryEntryForServer(server)),
+    });
     setEditingServer(server);
     setInstallingRegistry(getRegistryEntryForServer(server) ?? null);
     setIsFormOpen(true);
   };
 
   const handleInstallFromRegistry = (entry: McpRegistryEntry) => {
+    reportMcpAction('marketplace_install_open', {
+      source: 'mcp_manager',
+      activeTab,
+      activeCategory,
+      ...getRegistryAnalyticsParams(entry),
+    });
     setEditingServer(null);
     setInstallingRegistry(entry);
     setIsFormOpen(true);
   };
 
   const handleCloseForm = () => {
+    reportMcpAction('form_close', {
+      source: 'mcp_manager',
+      activeTab,
+      mode: editingServer ? 'edit' : installingRegistry ? 'marketplace_install' : 'create',
+      ...(editingServer
+        ? getServerAnalyticsParams(editingServer, getRegistryEntryForServer(editingServer))
+        : installingRegistry
+          ? getRegistryAnalyticsParams(installingRegistry)
+          : {}),
+    });
     setIsFormOpen(false);
     setEditingServer(null);
     setInstallingRegistry(null);
@@ -318,28 +446,71 @@ const McpManager: React.FC = () => {
   const handleSaveForm = async (data: McpServerFormData) => {
     setActionError('');
     if (editingServer && editingServer.id) {
+      reportMcpAction('edit_submit', {
+        source: 'mcp_manager',
+        activeTab,
+        ...getServerAnalyticsParams(editingServer, getRegistryEntryForServer(editingServer)),
+        ...getFormAnalyticsParams(data, installingRegistry),
+      });
       const result = await mcpService.updateServer(editingServer.id, data);
       if (!result.success) {
         setActionError(result.error || i18nService.t('mcpUpdateFailed'));
+        reportMcpAction('edit_failed', {
+          source: 'mcp_manager',
+          activeTab,
+          result: 'failed',
+          errorCode: 'edit_failed',
+          ...getServerAnalyticsParams(editingServer, getRegistryEntryForServer(editingServer)),
+          ...getFormAnalyticsParams(data, installingRegistry),
+        });
         return;
       }
       if (result.servers) {
         dispatch(setMcpServers(result.servers));
       }
+      reportMcpAction('edit_success', {
+        source: 'mcp_manager',
+        activeTab,
+        result: 'success',
+        ...getServerAnalyticsParams(editingServer, getRegistryEntryForServer(editingServer)),
+        ...getFormAnalyticsParams(data, installingRegistry),
+      });
     } else {
+      reportMcpAction('create_submit', {
+        source: 'mcp_manager',
+        activeTab,
+        ...getFormAnalyticsParams(data, installingRegistry),
+      });
       const result = await mcpService.createServer(data);
       if (!result.success) {
         setActionError(result.error || i18nService.t('mcpCreateFailed'));
+        reportMcpAction('create_failed', {
+          source: 'mcp_manager',
+          activeTab,
+          result: 'failed',
+          errorCode: 'create_failed',
+          ...getFormAnalyticsParams(data, installingRegistry),
+        });
         return;
       }
       if (result.servers) {
         dispatch(setMcpServers(result.servers));
       }
+      reportMcpAction('create_success', {
+        source: 'mcp_manager',
+        activeTab,
+        result: 'success',
+        ...getFormAnalyticsParams(data, installingRegistry),
+      });
     }
     handleCloseForm();
   };
 
   const handleOpenCreateForm = () => {
+    reportMcpAction('custom_create_open', {
+      source: 'mcp_manager',
+      activeTab,
+    });
     setEditingServer(null);
     setInstallingRegistry(null);
     setIsFormOpen(true);
@@ -403,7 +574,20 @@ const McpManager: React.FC = () => {
             {searchQuery && (
               <button
                 type="button"
-                onClick={() => setSearchQuery('')}
+                onClick={() => {
+                  reportMcpAction('clear_search', {
+                    source: 'mcp_manager',
+                    activeTab,
+                    activeCategory,
+                    searchKeywordLength: searchQuery.trim().length,
+                    resultCount: activeTab === 'marketplace'
+                      ? filteredMarketplace.length
+                      : activeTab === 'custom'
+                        ? filteredCustom.length
+                        : filteredInstalled.length,
+                  });
+                  setSearchQuery('');
+                }}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-secondary hover:text-primary transition-colors"
               >
                 <XCircleIconSolid className="h-4 w-4" />
@@ -414,7 +598,18 @@ const McpManager: React.FC = () => {
 
         {/* Tabs */}
         <div className="flex items-center border-b border-border">
-          <button type="button" onClick={() => setActiveTab('installed')} className={tabClass('installed')}>
+          <button
+            type="button"
+            onClick={() => {
+              reportMcpAction('tab_change', {
+                source: 'mcp_manager',
+                activeTab,
+                targetTab: 'installed',
+              });
+              setActiveTab('installed');
+            }}
+            className={tabClass('installed')}
+          >
             {i18nService.t('mcpInstalled')}
             {servers.length > 0 && (
               <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
@@ -423,7 +618,18 @@ const McpManager: React.FC = () => {
             )}
             <div className={tabIndicatorClass('installed')} />
           </button>
-          <button type="button" onClick={() => setActiveTab('marketplace')} className={tabClass('marketplace')}>
+          <button
+            type="button"
+            onClick={() => {
+              reportMcpAction('tab_change', {
+                source: 'mcp_manager',
+                activeTab,
+                targetTab: 'marketplace',
+              });
+              setActiveTab('marketplace');
+            }}
+            className={tabClass('marketplace')}
+          >
             {i18nService.t('mcpMarketplace')}
             {marketplaceCount > 0 && (
               <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
@@ -432,7 +638,18 @@ const McpManager: React.FC = () => {
             )}
             <div className={tabIndicatorClass('marketplace')} />
           </button>
-          <button type="button" onClick={() => setActiveTab('custom')} className={tabClass('custom')}>
+          <button
+            type="button"
+            onClick={() => {
+              reportMcpAction('tab_change', {
+                source: 'mcp_manager',
+                activeTab,
+                targetTab: 'custom',
+              });
+              setActiveTab('custom');
+            }}
+            className={tabClass('custom')}
+          >
             {i18nService.t('mcpCustom')}
             {customCount > 0 && (
               <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
@@ -450,7 +667,16 @@ const McpManager: React.FC = () => {
               <button
                 key={cat.id}
                 type="button"
-                onClick={() => setActiveCategory(cat.id)}
+                onClick={() => {
+                  reportMcpAction('category_change', {
+                    source: 'mcp_manager',
+                    activeTab,
+                    activeCategory,
+                    targetCategory: cat.id,
+                    resultCount: filteredMarketplace.length,
+                  });
+                  setActiveCategory(cat.id);
+                }}
                 className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
                   activeCategory === cat.id
                     ? 'bg-primary text-white'

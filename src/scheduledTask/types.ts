@@ -81,6 +81,8 @@ export interface ScheduledTaskRun {
   finishedAt: string | null;
   durationMs: number | null;
   error: string | null;
+  summary?: string | null;
+  deliveryError?: string | null;
 }
 
 export interface ScheduledTaskRunWithName extends ScheduledTaskRun {

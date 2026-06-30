@@ -21,6 +21,10 @@ vi.mock('./config', () => ({
   },
 }));
 
+vi.mock('./installationId', () => ({
+  getInstallationId: vi.fn(() => Promise.resolve('installation-uuid')),
+}));
+
 import { configService } from './config';
 import {
   buildLogUrl,
@@ -48,7 +52,10 @@ test('builds a Youdao Analyzer URL with common action parameters', () => {
     {
       appVersion: '2026.6.18',
       arch: 'arm64',
+      firstKeyfrom: 'bilibili',
+      installationId: 'installation-uuid',
       language: 'en',
+      latestKeyfrom: 'partner_a',
       platform: 'darwin',
       userId: 'test-user',
       timestamp: 123456789,
@@ -62,6 +69,9 @@ test('builds a Youdao Analyzer URL with common action parameters', () => {
   expect(result.searchParams.get('os_platform')).toBe('darwin');
   expect(result.searchParams.get('os_arch')).toBe('arm64');
   expect(result.searchParams.get('language')).toBe('en');
+  expect(result.searchParams.get('uuid')).toBe('installation-uuid');
+  expect(result.searchParams.get('firstKeyfrom')).toBe('bilibili');
+  expect(result.searchParams.get('latestKeyfrom')).toBe('partner_a');
   expect(result.searchParams.get('is_logged_in')).toBe('true');
   expect(result.searchParams.get('action')).toBe('lobsterai_skill_enabled');
   expect(result.searchParams.get('skillId')).toBe('xlsx');
@@ -80,6 +90,9 @@ test('does not allow event parameters to override common parameters', () => {
       os_platform: 'unexpected-platform',
       os_arch: 'unexpected-arch',
       language: 'unexpected-language',
+      uuid: 'unexpected-uuid',
+      firstKeyfrom: 'unexpected-first-keyfrom',
+      latestKeyfrom: 'unexpected-latest-keyfrom',
       is_logged_in: false,
       log_Usid: 'unexpected-user',
       uts: 1,
@@ -87,7 +100,10 @@ test('does not allow event parameters to override common parameters', () => {
     {
       appVersion: 'trusted-version',
       arch: 'trusted-arch',
+      firstKeyfrom: 'trusted-first-keyfrom',
+      installationId: 'trusted-uuid',
       language: 'trusted-language',
+      latestKeyfrom: 'trusted-latest-keyfrom',
       platform: 'trusted-platform',
       userId: 'trusted-user',
       timestamp: 2,
@@ -100,6 +116,9 @@ test('does not allow event parameters to override common parameters', () => {
   expect(result.searchParams.get('os_platform')).toBe('trusted-platform');
   expect(result.searchParams.get('os_arch')).toBe('trusted-arch');
   expect(result.searchParams.get('language')).toBe('trusted-language');
+  expect(result.searchParams.get('uuid')).toBe('trusted-uuid');
+  expect(result.searchParams.get('firstKeyfrom')).toBe('trusted-first-keyfrom');
+  expect(result.searchParams.get('latestKeyfrom')).toBe('trusted-latest-keyfrom');
   expect(result.searchParams.get('is_logged_in')).toBe('true');
   expect(result.searchParams.get('log_Usid')).toBe('trusted-user');
   expect(result.searchParams.get('uts')).toBe('2');
@@ -151,6 +170,11 @@ test('reports an event through the Electron API bridge', async () => {
       arch: 'arm64',
       appInfo: {
         getVersion: vi.fn().mockResolvedValue('2026.6.18'),
+        getKeyfromAttribution: vi.fn().mockResolvedValue({
+          firstKeyfrom: 'bilibili',
+          latestKeyfrom: 'partner_a',
+          updatedAt: 123456789,
+        }),
       },
       api: {
         fetch: fetchMock,
@@ -173,6 +197,9 @@ test('reports an event through the Electron API bridge', async () => {
   expect(requestUrl.searchParams.get('app_version')).toBe('2026.6.18');
   expect(requestUrl.searchParams.get('os_platform')).toBe('darwin');
   expect(requestUrl.searchParams.get('os_arch')).toBe('arm64');
+  expect(requestUrl.searchParams.get('uuid')).toBe('installation-uuid');
+  expect(requestUrl.searchParams.get('firstKeyfrom')).toBe('bilibili');
+  expect(requestUrl.searchParams.get('latestKeyfrom')).toBe('partner_a');
 });
 
 test('returns false when the event request is rejected', async () => {

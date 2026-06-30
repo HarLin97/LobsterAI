@@ -13,19 +13,31 @@ import UserMessageItem from '../cowork/UserMessageItem';
 interface RunSessionModalProps {
   sessionId?: string | null;
   sessionKey?: string | null;
+  runSummary?: string | null;
+  runError?: string | null;
   onClose: () => void;
 }
 
 const MAX_RETRIES = 5;
 const RETRY_INTERVAL_MS = 3000;
 
-const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey, onClose }) => {
+const RunSessionModal: React.FC<RunSessionModalProps> = ({
+  sessionId,
+  sessionKey,
+  runSummary,
+  runError,
+  onClose,
+}) => {
   const [session, setSession] = useState<CoworkSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
+  const runFallbackContent = useMemo(
+    () => runSummary?.trim() || runError?.trim() || '',
+    [runError, runSummary],
+  );
 
   const loadSession = useCallback(async (isRetry = false): Promise<boolean> => {
     if (!isRetry) {
@@ -51,7 +63,10 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
 
       // 2. If not found locally, try resolving via OpenClaw sessionKey
       if (!loadedSession && sessionKey) {
-        const result = await window.electron?.scheduledTasks?.resolveSession(sessionKey);
+        const result = await window.electron?.scheduledTasks?.resolveSession({
+          sessionId,
+          sessionKey,
+        });
         if (result?.success && result.session) {
           const s = result.session;
           loadedSession = {
@@ -70,11 +85,17 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
         setError(null);
         return true;
       }
+      if (runFallbackContent) {
+        setSession(null);
+        setLoading(false);
+        setError(null);
+        return true;
+      }
       return false;
     } catch {
       return false;
     }
-  }, [sessionId, sessionKey]);
+  }, [runFallbackContent, sessionId, sessionKey]);
 
   useEffect(() => {
     cancelledRef.current = false;
@@ -197,7 +218,15 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
             </div>
           )}
 
-          {!loading && !error && turns.length === 0 && (
+          {!loading && !error && turns.length === 0 && runFallbackContent && (
+            <div className="px-10 py-8">
+              <div className="whitespace-pre-wrap break-words text-sm leading-7 text-foreground">
+                {runFallbackContent}
+              </div>
+            </div>
+          )}
+
+          {!loading && !error && turns.length === 0 && !runFallbackContent && (
             <div className="flex items-center justify-center py-16">
               <span className="text-sm text-secondary">
                 {i18nService.t('scheduledTasksNoRuns')}

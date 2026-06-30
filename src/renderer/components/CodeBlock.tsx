@@ -40,6 +40,11 @@ import { createPortal } from 'react-dom';
 
 import { copyTextToClipboard } from '../services/clipboard';
 import { i18nService } from '../services/i18n';
+import {
+  bucketLength,
+  getMessageLineCount,
+  reportConversationBlockAction,
+} from './cowork/conversationAnalytics';
 import Tooltip, { TooltipAlign, TooltipPosition } from './ui/Tooltip';
 
 const CodeBlockIcon: React.FC<{
@@ -105,6 +110,18 @@ const FullscreenExitIcon: React.FC<{ className?: string }> = ({ className }) => 
     <path d="M19 14l-5 5" />
   </CodeBlockIcon>
 );
+
+const getCodeBlockAnalyticsParams = (
+  code: string,
+  lang: string | null,
+  isDiffBlock: boolean,
+) => ({
+  language: lang || 'text',
+  isDiffBlock,
+  codeLength: code.length,
+  codeLengthBucket: bucketLength(code.length),
+  codeLineCount: getMessageLineCount(code),
+});
 
 const CopyCodeIcon: React.FC<{ className?: string }> = ({ className }) => (
   <CodeBlockIcon className={className}>
@@ -897,10 +914,11 @@ interface CodeFullscreenModalProps {
   code: string;
   lang: string | null;
   isDark: boolean;
+  onAction?: (actionType: string, params?: Record<string, string | number | boolean>) => void;
   onClose: () => void;
 }
 
-const CodeFullscreenModal: React.FC<CodeFullscreenModalProps> = ({ code, lang, isDark, onClose }) => {
+const CodeFullscreenModal: React.FC<CodeFullscreenModalProps> = ({ code, lang, isDark, onAction, onClose }) => {
   const [wrap, setWrap] = useState(() => shouldWrapByDefault(lang));
   const [searchOpen, setSearchOpen] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
@@ -925,22 +943,38 @@ const CodeFullscreenModal: React.FC<CodeFullscreenModalProps> = ({ code, lang, i
 
   const handleCopy = useCallback(async () => {
     const copiedToClipboard = await copyTextToClipboard(code);
+    onAction?.('code_copy', {
+      result: copiedToClipboard ? 'success' : 'failed',
+      source: 'fullscreen',
+    });
     if (!copiedToClipboard) return;
     setIsCopied(true);
     if (copyTimeoutRef.current != null) window.clearTimeout(copyTimeoutRef.current);
     copyTimeoutRef.current = window.setTimeout(() => setIsCopied(false), 1500);
-  }, [code]);
+  }, [code, onAction]);
+
+  const handleToggleWrap = useCallback(() => {
+    setWrap(value => {
+      const nextWrap = !value;
+      onAction?.(nextWrap ? 'code_wrap_enabled' : 'code_wrap_disabled', {
+        source: 'fullscreen',
+      });
+      return nextWrap;
+    });
+  }, [onAction]);
 
   const handleToggleSearch = useCallback(() => {
     const view = viewRef.current;
     if (!view) return;
     if (searchPanelOpen(view.state)) {
       closeSearchPanel(view);
+      onAction?.('code_search_close', { source: 'fullscreen' });
     } else {
       openSearchPanel(view);
       view.focus();
+      onAction?.('code_search_open', { source: 'fullscreen' });
     }
-  }, []);
+  }, [onAction]);
 
   const handleViewReady = useCallback((view: EditorView | null) => {
     viewRef.current = view;
@@ -975,7 +1009,7 @@ const CodeFullscreenModal: React.FC<CodeFullscreenModalProps> = ({ code, lang, i
             </CodeBlockTooltip>
             <CodeBlockTooltip content={wrap ? t('codeBlockWordWrapOff') : t('codeBlockWordWrap')}>
               <HeaderButton
-                onClick={() => setWrap(v => !v)}
+                onClick={handleToggleWrap}
                 ariaLabel={wrap ? t('codeBlockWordWrapOff') : t('codeBlockWordWrap')}
                 active={wrap}
               >
@@ -1376,13 +1410,28 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
     [],
   );
 
+  const reportCodeBlockAction = useCallback((actionType: string, params?: Record<string, string | number | boolean>) => {
+    reportConversationBlockAction({
+      actionType,
+      blockType: 'code',
+      params: {
+        ...getCodeBlockAnalyticsParams(trimmedCodeText, rawLang, isDiffBlock),
+        ...params,
+      },
+    });
+  }, [isDiffBlock, rawLang, trimmedCodeText]);
+
   const handleCopy = useCallback(async () => {
     const copiedToClipboard = await copyTextToClipboard(trimmedCodeText);
+    reportCodeBlockAction('code_copy', {
+      result: copiedToClipboard ? 'success' : 'failed',
+      source: 'inline',
+    });
     if (!copiedToClipboard) return;
     setIsCopied(true);
     if (copyTimeoutRef.current != null) window.clearTimeout(copyTimeoutRef.current);
     copyTimeoutRef.current = window.setTimeout(() => setIsCopied(false), 1500);
-  }, [trimmedCodeText]);
+  }, [reportCodeBlockAction, trimmedCodeText]);
 
   const savedTimeoutRef = useRef<number | null>(null);
 
@@ -1409,14 +1458,46 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
       setIsSaved(true);
       if (savedTimeoutRef.current != null) window.clearTimeout(savedTimeoutRef.current);
       savedTimeoutRef.current = window.setTimeout(() => setIsSaved(false), 1500);
+      reportCodeBlockAction('code_download', {
+        result: 'success',
+      });
     } catch (error) {
       console.error('Failed to save code block: ', error);
+      reportCodeBlockAction('code_download', {
+        result: 'failed',
+      });
     }
-  }, [trimmedCodeText, rawLang]);
+  }, [reportCodeBlockAction, trimmedCodeText, rawLang]);
 
   const handleToggleCollapse = useCallback(() => {
-    setCollapsed((v) => !v);
-  }, []);
+    setCollapsed((value) => {
+      const nextCollapsed = !value;
+      reportCodeBlockAction(nextCollapsed ? 'code_collapse' : 'code_expand', {
+        source: 'inline',
+      });
+      return nextCollapsed;
+    });
+  }, [reportCodeBlockAction]);
+
+  const handleToggleWrap = useCallback(() => {
+    setWrap(value => {
+      const nextWrap = !value;
+      reportCodeBlockAction(nextWrap ? 'code_wrap_enabled' : 'code_wrap_disabled', {
+        source: 'inline',
+      });
+      return nextWrap;
+    });
+  }, [reportCodeBlockAction]);
+
+  const handleOpenFullscreen = useCallback(() => {
+    reportCodeBlockAction('code_fullscreen_open');
+    setFullscreen(true);
+  }, [reportCodeBlockAction]);
+
+  const handleCloseFullscreen = useCallback(() => {
+    reportCodeBlockAction('code_fullscreen_close');
+    setFullscreen(false);
+  }, [reportCodeBlockAction]);
 
   const ignoreCodeMirrorView = useCallback(() => undefined, []);
   const ignoreSearchOpenChange = useCallback(() => undefined, []);
@@ -1457,7 +1538,8 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
           code={trimmedCodeText}
           lang={rawLang}
           isDark={isDark}
-          onClose={() => setFullscreen(false)}
+          onAction={reportCodeBlockAction}
+          onClose={handleCloseFullscreen}
         />
       )}
       {/* Header */}
@@ -1481,7 +1563,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
           {/* Word wrap toggle */}
           <CodeBlockTooltip content={wrap ? i18nService.t('codeBlockWordWrapOff') : i18nService.t('codeBlockWordWrap')}>
             <HeaderButton
-              onClick={() => setWrap((v) => !v)}
+              onClick={handleToggleWrap}
               ariaLabel={wrap ? i18nService.t('codeBlockWordWrapOff') : i18nService.t('codeBlockWordWrap')}
               active={wrap}
             >
@@ -1490,7 +1572,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
           </CodeBlockTooltip>
           {/* Fullscreen expand */}
           <CodeBlockTooltip content={i18nService.t('codeBlockFullscreen')}>
-            <HeaderButton onClick={() => setFullscreen(true)} ariaLabel={i18nService.t('codeBlockFullscreen')}>
+            <HeaderButton onClick={handleOpenFullscreen} ariaLabel={i18nService.t('codeBlockFullscreen')}>
               <FullscreenIcon className="h-[18px] w-[18px]" />
             </HeaderButton>
           </CodeBlockTooltip>

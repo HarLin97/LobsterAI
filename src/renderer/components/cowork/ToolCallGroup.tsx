@@ -6,6 +6,11 @@ import { useSelector } from 'react-redux';
 import mediaGeneratingAnimation from '../../assets/lottie/media-generating.json';
 import { i18nService } from '../../services/i18n';
 import { selectIsStreaming } from '../../store/selectors/coworkSelectors';
+import {
+  bucketLength,
+  getMessageLineCount,
+  reportConversationBlockAction,
+} from './conversationAnalytics';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
 import {
   formatToolInput,
@@ -133,6 +138,26 @@ const ToolCallGroup: React.FC<{
     [rawToolName, toolInput],
   );
   const isEditWithDiff = diffDataList !== null && diffDataList.length > 0;
+  const reportToolToggle = (nextExpanded: boolean) => {
+    const resultLength = toolResultDisplayRaw.length || collapsedToolResult?.text?.length || 0;
+    reportConversationBlockAction({
+      actionType: nextExpanded ? 'tool_expand' : 'tool_collapse',
+      blockType: 'tool',
+      params: {
+        toolName: rawToolName,
+        displayToolName: toolName,
+        hasResult: Boolean(toolResult),
+        hasResultText: Boolean(collapsedToolResult?.hasText || hasExpandedToolResultText),
+        isError: isToolError,
+        isStreaming: isSessionStreaming,
+        resultLengthBucket: bucketLength(resultLength),
+        resultLineCount: getMessageLineCount(toolResultDisplayRaw || collapsedToolResult?.text || ''),
+        isBashTool,
+        isTodoWriteTool,
+        isEditWithDiff,
+      },
+    });
+  };
 
   return (
     <div className="relative py-1">
@@ -140,7 +165,11 @@ const ToolCallGroup: React.FC<{
         <div className="absolute left-[3.5px] top-[14px] bottom-[-8px] w-px bg-border" />
       )}
       <button
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={() => {
+          const nextExpanded = !isExpanded;
+          reportToolToggle(nextExpanded);
+          setIsExpanded(nextExpanded);
+        }}
         className="w-full flex items-start gap-2 text-left group relative z-10"
       >
         <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${

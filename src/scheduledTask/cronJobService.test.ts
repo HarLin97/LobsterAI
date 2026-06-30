@@ -286,6 +286,7 @@ describe('mapGatewayRun', () => {
     const run = mapGatewayRun(baseEntry);
     expect(run.status).toBe(TaskStatus.Success);
     expect(run.error).toBeNull();
+    expect(run.summary).toBe('All good');
   });
 
   test('maps error status to error', () => {
@@ -304,16 +305,19 @@ describe('mapGatewayRun', () => {
   });
 
   test('suppresses delivery-only error to success', () => {
+    const deliveryError = '⚠️ ✉️ Message failed';
     const run = mapGatewayRun({
       ...baseEntry,
       status: GatewayStatus.Error,
-      error: '⚠️ ✉️ Message failed',
+      error: deliveryError,
       deliveryStatus: 'not-delivered',
-      deliveryError: '⚠️ ✉️ Message failed',
+      deliveryError,
       summary: 'Agent produced a valid summary',
     });
     expect(run.status).toBe(TaskStatus.Success);
     expect(run.error).toBeNull();
+    expect(run.summary).toBe('Agent produced a valid summary');
+    expect(run.deliveryError).toBe(deliveryError);
   });
 
   test('does not suppress error when error differs from deliveryError', () => {

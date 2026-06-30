@@ -14,6 +14,15 @@ interface SubagentTaskRowProps {
   onSelect: () => void;
   onDelete: () => Promise<void>;
   onToggleSelection?: () => void;
+  onSidebarAction?: (actionType: string, params?: {
+    isCurrentSubagent?: boolean;
+    result?: 'success' | 'failed';
+    subagentStatus?: string;
+  }) => void;
+  analyticsParams?: {
+    isCurrentSubagent: boolean;
+    subagentStatus: string;
+  };
 }
 
 const formatDuration = (createdAt: number, endedAt: number | null): string => {
@@ -35,6 +44,8 @@ const SubagentTaskRow: React.FC<SubagentTaskRowProps> = ({
   onSelect,
   onDelete,
   onToggleSelection,
+  onSidebarAction,
+  analyticsParams,
 }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const displayName = subagent.label ?? subagent.agentId ?? i18nService.t('subagentUnnamed');
@@ -101,6 +112,7 @@ const SubagentTaskRow: React.FC<SubagentTaskRowProps> = ({
             type="button"
             onClick={(event) => {
               event.stopPropagation();
+              onSidebarAction?.('subagent_delete_confirm_open', analyticsParams);
               setShowConfirmDelete(true);
             }}
             className="absolute right-1 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-foreground opacity-0 transition-opacity hover:opacity-[0.46] group-hover:opacity-[0.3]"
@@ -133,7 +145,10 @@ const SubagentTaskRow: React.FC<SubagentTaskRowProps> = ({
           <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-border">
             <button
               type="button"
-              onClick={() => setShowConfirmDelete(false)}
+              onClick={() => {
+                onSidebarAction?.('subagent_delete_cancel', analyticsParams);
+                setShowConfirmDelete(false);
+              }}
               className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
             >
               {i18nService.t('cancel')}
@@ -141,6 +156,7 @@ const SubagentTaskRow: React.FC<SubagentTaskRowProps> = ({
             <button
               type="button"
               onClick={() => {
+                onSidebarAction?.('subagent_delete_submit', analyticsParams);
                 setShowConfirmDelete(false);
                 void onDelete();
               }}

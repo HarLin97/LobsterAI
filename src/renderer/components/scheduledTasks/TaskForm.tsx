@@ -8,6 +8,7 @@ import type {
   ScheduledTask,
   ScheduledTaskChannelOption,
   ScheduledTaskConversationOption,
+  ScheduledTaskDelivery,
   ScheduledTaskInput,
 } from '../../../scheduledTask/types';
 import { i18nService } from '../../services/i18n';
@@ -16,6 +17,14 @@ import { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
 import { resolveOpenClawModelRef, toOpenClawModelRef } from '../../utils/openclawModelRef';
 import ModelSelector from '../ModelSelector';
+import {
+  getDeliveryAnalyticsParams,
+  getFormScheduleAnalyticsParams,
+  getModelAnalyticsParams,
+  getPayloadAnalyticsParams,
+  reportScheduledTaskAction,
+  serializeAnalyticsList,
+} from './analytics';
 import ScheduledTaskTemplatePickerModal from './ScheduledTaskTemplatePickerModal';
 import { SCHEDULED_TASK_TEMPLATES, type ScheduledTaskTemplate } from './taskTemplates';
 import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
@@ -272,6 +281,11 @@ function previewCron(expr: string): { ok: true; label: string } | { ok: false } 
   }
 }
 
+function getErrorCode(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  return error.name && error.name !== 'Error' ? error.name : fallback;
+}
+
 const TaskForm: React.FC<TaskFormProps> = ({
   mode,
   task,
@@ -312,6 +326,9 @@ const TaskForm: React.FC<TaskFormProps> = ({
   >(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [appliedTemplate, setAppliedTemplate] = useState<ScheduledTaskTemplate | null>(
+    () => (mode === 'create' ? initialTemplate : null),
+  );
 
   const isDirty = JSON.stringify(form) !== initialFormRef.current;
 
@@ -333,7 +350,19 @@ const TaskForm: React.FC<TaskFormProps> = ({
     );
     initialFormRef.current = JSON.stringify(cleanForm);
     setForm(nextForm);
+    setAppliedTemplate(mode === 'create' ? initialTemplate : null);
   }, [task, fallbackModelRef, initialTemplate, mode]);
+
+  useEffect(() => {
+    reportScheduledTaskAction('form_open', {
+      source: 'scheduled_task_form',
+      mode,
+      hasInitialTemplate: Boolean(mode === 'create' && initialTemplate),
+      templateId: mode === 'create' ? initialTemplate?.id : undefined,
+      templateName: mode === 'create' && initialTemplate ? i18nService.t(initialTemplate.titleKey) : undefined,
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -401,7 +430,72 @@ const TaskForm: React.FC<TaskFormProps> = ({
     setForm(current => ({ ...current, ...patch }));
   };
 
+  const buildFormAnalyticsParams = (
+    currentForm: FormState,
+    scheduleKind?: ScheduledTaskInput['schedule']['kind'],
+  ) => {
+    const delivery: ScheduledTaskDelivery =
+      currentForm.notifyChannel === 'none'
+        ? { mode: DeliveryMode.None }
+        : {
+            mode: DeliveryMode.Announce,
+            channel: currentForm.notifyChannel,
+            ...(currentForm.notifyTo ? { to: currentForm.notifyTo } : {}),
+            ...(currentForm.notifyAccountId ? { accountId: currentForm.notifyAccountId } : {}),
+          };
+    const payload: ScheduledTaskInput['payload'] = isSystemEventTask
+      ? {
+          kind: PayloadKind.SystemEvent,
+          text: currentForm.payloadText.trim(),
+        }
+      : {
+          kind: PayloadKind.AgentTurn,
+          message: currentForm.payloadText.trim(),
+          model: currentForm.modelId,
+        };
+
+    return {
+      mode,
+      hasTemplate: Boolean(appliedTemplate),
+      templateId: appliedTemplate?.id,
+      templateName: appliedTemplate ? i18nService.t(appliedTemplate.titleKey) : undefined,
+      ...getFormScheduleAnalyticsParams({
+        cronExpr:
+          currentForm.cronMode === 'builder'
+            ? cronBuilderToExpr(currentForm.cronBuilder)
+            : currentForm.cronExpr.trim(),
+        cronMode: currentForm.cronMode,
+        cronTz: currentForm.cronTz.trim(),
+        hour: currentForm.hour,
+        minute: currentForm.minute,
+        monthDay: currentForm.monthDay,
+        planType: currentForm.planType,
+        scheduleKind,
+        weekdays: currentForm.weekdays,
+      }),
+      ...getPayloadAnalyticsParams(payload),
+      ...getDeliveryAnalyticsParams(delivery),
+      ...getModelAnalyticsParams(
+        payload.kind === PayloadKind.AgentTurn ? payload.model : undefined,
+        availableModels,
+      ),
+    };
+  };
+
   const handleApplyTemplate = (template: ScheduledTaskTemplate) => {
+    setAppliedTemplate(template);
+    reportScheduledTaskAction('template_selected', {
+      source: 'scheduled_task_form',
+      mode,
+      templateId: template.id,
+      templateName: i18nService.t(template.titleKey),
+      planType: template.schedule.planType,
+      hour: template.schedule.hour,
+      minute: template.schedule.minute,
+      weekdayCount: template.schedule.weekdays?.length ?? 0,
+      weekdays: serializeAnalyticsList(template.schedule.weekdays ?? []),
+      monthDay: template.schedule.monthDay,
+    });
     setForm(current => applyScheduledTaskTemplate(current, template));
     setErrors({});
     setSubmitError(null);
@@ -417,7 +511,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
       ? { id: '__invalid__', name: form.modelId.split('/').pop() || form.modelId } as Model
       : null);
 
-  const validate = (): boolean => {
+  const validate = (): Record<string, string> => {
     const nextErrors: Record<string, string> = {};
 
     if (!form.name.trim()) {
@@ -472,16 +566,31 @@ const TaskForm: React.FC<TaskFormProps> = ({
     }
 
     setErrors(nextErrors);
-    return Object.keys(nextErrors).length === 0;
+    return nextErrors;
   };
 
   const handleSubmit = async () => {
-    if (!validate()) return;
+    const validationErrors = validate();
+    const validationErrorKeys = Object.keys(validationErrors);
+    if (validationErrorKeys.length > 0) {
+      reportScheduledTaskAction('validation_failed', {
+        source: 'scheduled_task_form',
+        errorFields: validationErrorKeys.join(','),
+        errorFieldCount: validationErrorKeys.length,
+        ...buildFormAnalyticsParams(form),
+      });
+      return;
+    }
 
     setSubmitting(true);
     setSubmitError(null);
     try {
       const schedule = isAdvanced && task ? task.schedule : buildScheduleInput(form);
+      const submitActionType = mode === 'create' ? 'create_submit' : 'edit_submit';
+      reportScheduledTaskAction(submitActionType, {
+        source: 'scheduled_task_form',
+        ...buildFormAnalyticsParams(form, schedule.kind),
+      });
 
       const payload: ScheduledTaskInput['payload'] = isSystemEventTask
         ? {
@@ -515,15 +624,31 @@ const TaskForm: React.FC<TaskFormProps> = ({
 
       if (mode === 'create') {
         const newId = await scheduledTaskService.createTask(input);
+        reportScheduledTaskAction('create_success', {
+          source: 'scheduled_task_form',
+          result: 'success',
+          ...buildFormAnalyticsParams(form, schedule.kind),
+        });
         onSaved(newId ?? undefined);
       } else if (task) {
         await scheduledTaskService.updateTaskById(task.id, input);
+        reportScheduledTaskAction('edit_success', {
+          source: 'scheduled_task_form',
+          result: 'success',
+          ...buildFormAnalyticsParams(form, schedule.kind),
+        });
         onSaved();
       }
       initialFormRef.current = JSON.stringify(form);
       onDirtyChange?.(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      reportScheduledTaskAction(mode === 'create' ? 'create_failed' : 'edit_failed', {
+        source: 'scheduled_task_form',
+        result: 'failed',
+        errorCode: getErrorCode(err, mode === 'create' ? 'create_failed' : 'edit_failed'),
+        ...buildFormAnalyticsParams(form),
+      });
       setSubmitError(msg);
     } finally {
       setSubmitting(false);
@@ -1322,7 +1447,13 @@ const TaskForm: React.FC<TaskFormProps> = ({
             {mode === 'create' && (
               <button
                 type="button"
-                onClick={() => setShowTemplatePicker(true)}
+                onClick={() => {
+                  reportScheduledTaskAction('template_picker_open', {
+                    source: 'scheduled_task_form',
+                    ...buildFormAnalyticsParams(form),
+                  });
+                  setShowTemplatePicker(true);
+                }}
                 className="h-8 shrink-0 rounded-lg border border-border bg-surface px-3 text-sm font-medium text-foreground hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('scheduledTasksTemplateUse')}
@@ -1423,7 +1554,14 @@ const TaskForm: React.FC<TaskFormProps> = ({
         <div className={`${formContentClass} flex items-center justify-end gap-2`}>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={() => {
+              reportScheduledTaskAction('form_cancel', {
+                source: 'scheduled_task_form',
+                isDirty,
+                ...buildFormAnalyticsParams(form),
+              });
+              onCancel();
+            }}
             className="px-3 py-1.5 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors"
           >
             {i18nService.t('cancel')}
@@ -1446,8 +1584,22 @@ const TaskForm: React.FC<TaskFormProps> = ({
     {mode === 'create' && showTemplatePicker && (
       <ScheduledTaskTemplatePickerModal
         templates={SCHEDULED_TASK_TEMPLATES}
-        onClose={() => setShowTemplatePicker(false)}
-        onNew={() => setShowTemplatePicker(false)}
+        onClose={() => {
+          reportScheduledTaskAction('template_picker_close', {
+            source: 'scheduled_task_form',
+            mode,
+            closeReason: 'close',
+          });
+          setShowTemplatePicker(false);
+        }}
+        onNew={() => {
+          reportScheduledTaskAction('template_picker_close', {
+            source: 'scheduled_task_form',
+            mode,
+            closeReason: 'new_blank',
+          });
+          setShowTemplatePicker(false);
+        }}
         onSelect={handleApplyTemplate}
       />
     )}

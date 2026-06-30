@@ -3,16 +3,17 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { TaskStatus } from '../../../scheduledTask/constants';
-import type { RunFilter, ScheduledTaskRun } from '../../../scheduledTask/types';
+import type { RunFilter, ScheduledTask, ScheduledTaskRun } from '../../../scheduledTask/types';
 import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
+import { getFilterAnalyticsParams, getRunAnalyticsParams, getTaskAnalyticsParams, reportScheduledTaskAction } from './analytics';
 import DateInput from './DateInput';
 import RunSessionModal from './RunSessionModal';
 import { formatDateTime, formatDuration } from './utils';
 
 interface TaskRunHistoryProps {
-  taskId: string;
+  task: ScheduledTask;
   runs: ScheduledTaskRun[];
 }
 
@@ -55,7 +56,9 @@ function applyClientFilter(runs: ScheduledTaskRun[], filter: RunFilter): Schedul
 
 const EMPTY_FILTER: RunFilter = {};
 
-const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
+const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ task, runs }) => {
+  const taskId = task.id;
+  const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const hasMore = useSelector(
     (state: RootState) => state.scheduledTask.runsHasMore[taskId] ?? false,
   );
@@ -67,6 +70,10 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
   const displayedRuns = useMemo(
     () => (hasActiveFilter ? applyClientFilter(runs, filter) : runs),
     [runs, filter, hasActiveFilter],
+  );
+  const taskAnalyticsParams = useMemo(
+    () => getTaskAnalyticsParams(task, availableModels),
+    [availableModels, task],
   );
 
   const loadInitial = useCallback(
@@ -87,18 +94,49 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
   };
 
   const handleClearFilter = () => {
+    reportScheduledTaskAction('task_history_filter_clear', {
+      source: 'scheduled_task_history',
+      resultCount: displayedRuns.length,
+      ...taskAnalyticsParams,
+      ...getFilterAnalyticsParams(filter),
+    });
     handleFilterChange(EMPTY_FILTER);
   };
 
   const handleStatusToggle = (status: TaskStatus) => {
-    handleFilterChange({
+    const nextFilter = {
       ...filter,
       status: filter.status === status ? undefined : status,
+    };
+    reportScheduledTaskAction('task_history_filter_status', {
+      source: 'scheduled_task_history',
+      targetStatus: status,
+      selected: nextFilter.status === status,
+      resultCount: displayedRuns.length,
+      ...taskAnalyticsParams,
+      ...getFilterAnalyticsParams(nextFilter),
     });
+    handleFilterChange(nextFilter);
   };
 
   const handleLoadMore = async () => {
+    reportScheduledTaskAction('task_history_load_more', {
+      source: 'scheduled_task_history',
+      loadedCount: runs.length,
+      ...taskAnalyticsParams,
+      ...getFilterAnalyticsParams(filter),
+    });
     await scheduledTaskService.loadRuns(taskId, 50, runs.length, filter);
+  };
+
+  const handleDateFilterChange = (newFilter: RunFilter) => {
+    reportScheduledTaskAction('task_history_filter_date', {
+      source: 'scheduled_task_history',
+      resultCount: displayedRuns.length,
+      ...taskAnalyticsParams,
+      ...getFilterAnalyticsParams(newFilter),
+    });
+    handleFilterChange(newFilter);
   };
 
   return (
@@ -131,14 +169,14 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
           <DateInput
             value={filter.startDate ?? ''}
             max={filter.endDate}
-            onChange={v => handleFilterChange({ ...filter, startDate: v || undefined })}
+            onChange={v => handleDateFilterChange({ ...filter, startDate: v || undefined })}
             placeholder={i18nService.t('scheduledTasksFilterStartDate')}
           />
           <span className="text-xs text-secondary/50">–</span>
           <DateInput
             value={filter.endDate ?? ''}
             min={filter.startDate}
-            onChange={v => handleFilterChange({ ...filter, endDate: v || undefined })}
+            onChange={v => handleDateFilterChange({ ...filter, endDate: v || undefined })}
             placeholder={i18nService.t('scheduledTasksFilterEndDate')}
           />
           {hasActiveFilter && (
@@ -183,10 +221,17 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
                       {run.error}
                     </span>
                   )}
-                  {(run.sessionId || run.sessionKey) && (
+                  {(run.sessionId || run.sessionKey || run.summary || run.error) && (
                     <button
                       type="button"
-                      onClick={() => setViewingRun(run)}
+                      onClick={() => {
+                        reportScheduledTaskAction('task_history_view_session', {
+                          source: 'scheduled_task_history',
+                          ...taskAnalyticsParams,
+                          ...getRunAnalyticsParams(run),
+                        });
+                        setViewingRun(run);
+                      }}
                       className="text-xs text-primary hover:text-primary-hover transition-colors"
                     >
                       {i18nService.t('scheduledTasksViewSession')}
@@ -213,6 +258,8 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
         <RunSessionModal
           sessionId={viewingRun.sessionId}
           sessionKey={viewingRun.sessionKey}
+          runSummary={viewingRun.summary}
+          runError={viewingRun.error}
           onClose={() => setViewingRun(null)}
         />
       )}

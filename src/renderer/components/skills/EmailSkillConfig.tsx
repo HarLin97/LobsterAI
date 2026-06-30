@@ -10,6 +10,7 @@ import {
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
+import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import { skillService } from '../../services/skill';
 
 const SKILL_ID = 'imap-smtp-email';
@@ -36,6 +37,8 @@ type EmailConnectivityTestResult = {
   verdict: 'pass' | 'fail';
   checks: EmailConnectivityCheck[];
 };
+
+const EMAIL_ANALYTICS_SOURCE = 'settings_email';
 
 const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   gmail: {
@@ -129,6 +132,71 @@ const configsEqual = (a: Record<string, string>, b: Record<string, string>): boo
   }
   return true;
 };
+
+const resolveAnalyticsProvider = (
+  config: Record<string, string>,
+  selectedProvider: string,
+): string => {
+  if (selectedProvider && Object.prototype.hasOwnProperty.call(PROVIDER_PRESETS, selectedProvider)) {
+    return selectedProvider;
+  }
+  return detectProvider(config);
+};
+
+const getChangedEmailConfigKeys = (
+  previousConfig: Record<string, string>,
+  nextConfig: Record<string, string>,
+  previousProvider: string,
+  nextProvider: string,
+): string => {
+  const changedKeys = new Set<string>();
+  if (previousProvider !== nextProvider) {
+    changedKeys.add('provider');
+  }
+
+  const fieldMappings: Array<[string, string]> = [
+    ['IMAP_USER', 'email'],
+    ['SMTP_USER', 'email'],
+    ['SMTP_FROM', 'email'],
+    ['IMAP_PASS', 'password'],
+    ['SMTP_PASS', 'password'],
+    ['IMAP_HOST', 'imap_host'],
+    ['IMAP_PORT', 'imap_port'],
+    ['IMAP_TLS', 'imap_tls'],
+    ['SMTP_HOST', 'smtp_host'],
+    ['SMTP_PORT', 'smtp_port'],
+    ['SMTP_SECURE', 'smtp_secure'],
+    ['IMAP_REJECT_UNAUTHORIZED', 'allow_insecure_cert'],
+    ['SMTP_REJECT_UNAUTHORIZED', 'allow_insecure_cert'],
+    ['IMAP_MAILBOX', 'mailbox'],
+  ];
+
+  fieldMappings.forEach(([configKey, analyticsKey]) => {
+    if ((previousConfig[configKey] ?? '') !== (nextConfig[configKey] ?? '')) {
+      changedKeys.add(analyticsKey);
+    }
+  });
+
+  return Array.from(changedKeys).join(',');
+};
+
+const buildEmailSkillAnalyticsParams = (
+  config: Record<string, string>,
+  selectedProvider: string,
+) => ({
+  source: EMAIL_ANALYTICS_SOURCE,
+  skillId: SKILL_ID,
+  provider: resolveAnalyticsProvider(config, selectedProvider),
+  hasEmail: (config.IMAP_USER || '').trim().length > 0,
+  hasPassword: (config.IMAP_PASS || '').trim().length > 0,
+  hasImapHost: (config.IMAP_HOST || '').trim().length > 0,
+  hasSmtpHost: (config.SMTP_HOST || '').trim().length > 0,
+  imapTlsEnabled: config.IMAP_TLS !== 'false',
+  smtpSslEnabled: config.SMTP_SECURE === 'true',
+  allowInsecureCert: config.IMAP_REJECT_UNAUTHORIZED === 'false'
+    || config.SMTP_REJECT_UNAUTHORIZED === 'false',
+  mailboxCustomized: Boolean(config.IMAP_MAILBOX && config.IMAP_MAILBOX !== 'INBOX'),
+});
 
 interface EmailSkillConfigProps {
   onClose?: () => void;
@@ -255,13 +323,30 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
     while (persistQueuedRef.current) {
       persistQueuedRef.current = false;
       const configToPersist = latestConfigRef.current;
+      const previousConfig = lastPersistedConfigRef.current;
       const success = await skillService.setSkillConfig(SKILL_ID, configToPersist);
       if (!isMountedRef.current) {
         continue;
       }
       if (success) {
+        const previousProvider = detectProvider(previousConfig);
+        const nextProvider = resolveAnalyticsProvider(configToPersist, provider);
+        const changedKeys = getChangedEmailConfigKeys(
+          previousConfig,
+          configToPersist,
+          previousProvider,
+          nextProvider,
+        );
         lastPersistedConfigRef.current = configToPersist;
         setPersistError(null);
+        if (changedKeys) {
+          console.debug('[EmailSkillConfig] reporting email skill settings saved analytics');
+          void reportYdAnalyzer({
+            action: LogReporterAction.EmailSkillSettingsSaved,
+            ...buildEmailSkillAnalyticsParams(configToPersist, provider),
+            changedKeys,
+          });
+        }
       } else {
         setPersistError(i18nService.t('emailConfigError'));
       }
@@ -276,7 +361,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
         persistIndicatorTimerRef.current = null;
       }
     }
-  }, []);
+  }, [provider]);
 
   const queuePersist = useCallback(() => {
     const nextConfig = buildConfig();
@@ -318,11 +403,32 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
     setConnectivityError(null);
     setConnectivityResult(null);
     setIsTesting(true);
-    const result = await skillService.testEmailConnectivity(SKILL_ID, buildConfig());
+    const configForTest = buildConfig();
+    const result = await skillService.testEmailConnectivity(SKILL_ID, configForTest);
     if (result) {
       setConnectivityResult(result);
+      const imapCheck = result.checks.find(check => check.code === 'imap_connection');
+      const smtpCheck = result.checks.find(check => check.code === 'smtp_connection');
+      console.debug('[EmailSkillConfig] reporting email skill connection test analytics');
+      void reportYdAnalyzer({
+        action: LogReporterAction.EmailSkillConnectionTested,
+        ...buildEmailSkillAnalyticsParams(configForTest, provider),
+        result: result.verdict,
+        imapResult: imapCheck?.level ?? '',
+        smtpResult: smtpCheck?.level ?? '',
+        checkCount: result.checks.length,
+      });
     } else {
       setConnectivityError(i18nService.t('connectionFailed'));
+      console.debug('[EmailSkillConfig] reporting failed email skill connection test analytics');
+      void reportYdAnalyzer({
+        action: LogReporterAction.EmailSkillConnectionTested,
+        ...buildEmailSkillAnalyticsParams(configForTest, provider),
+        result: 'fail',
+        imapResult: '',
+        smtpResult: '',
+        checkCount: 0,
+      });
     }
     setIsTesting(false);
   };
