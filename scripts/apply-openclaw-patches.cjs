@@ -134,6 +134,38 @@ const strongPatchValidators = {
       snippets: ['prompt-cache byte-identity', 'turn1AsCurrent', 'turn1AsHistorical'],
     },
   ],
+  'openclaw-live-tool-result-cache-stability.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.ts',
+      snippets: [
+        'truncateOversizedToolResultsInMessages(\n            activeSession.messages,',
+        'promptToolResultMaxChars,\n            null,',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/tool-result-truncation.ts',
+      snippets: [
+        'aggregateMaxCharsOverride?: number | null',
+        'aggregateMaxCharsOverride === null',
+        'Number.POSITIVE_INFINITY',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/tool-result-truncation.test.ts',
+      snippets: ['keeps prompt projections byte-stable as history grows'],
+    },
+  ],
+  'zz-openclaw-deepseek-cache-probe.patch': [
+    {
+      file: 'src/agents/openai-transport-stream.ts',
+      snippets: [
+        'DEEPSEEK_CACHE_PROBE_LOG_PREFIX = "[DeepSeekCacheProbe]"',
+        'logDeepSeekCacheRequestProbe',
+        'logDeepSeekCacheProbeResult',
+        'cacheRead / promptTokens',
+      ],
+    },
+  ],
 };
 
 function collectMissingStrongPatchSnippets(patchFile) {
