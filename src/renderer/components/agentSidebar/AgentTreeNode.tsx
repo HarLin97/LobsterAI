@@ -33,6 +33,7 @@ interface AgentTreeNodeProps {
   onSelectTask: (task: AgentSidebarTaskNode) => void;
   onDeleteTask: (task: AgentSidebarTaskNode) => Promise<void>;
   onShareTask: (task: AgentSidebarTaskNode) => Promise<void>;
+  onExportTaskDiagnostics: (task: AgentSidebarTaskNode) => Promise<void>;
   onToggleTaskPin: (task: AgentSidebarTaskNode, pinned: boolean) => Promise<void>;
   onRenameTask: (task: AgentSidebarTaskNode, title: string) => Promise<void>;
   onToggleSelection: (selectionKey: string, agentId: string) => void;
@@ -96,6 +97,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   onSelectTask,
   onDeleteTask,
   onShareTask,
+  onExportTaskDiagnostics,
   onToggleTaskPin,
   onRenameTask,
   onToggleSelection,
@@ -452,6 +454,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                     onSelect={() => onSelectTask(task)}
                     onDelete={() => onDeleteTask(task)}
                     onShare={() => onShareTask(task)}
+                    onExportDiagnostics={() => onExportTaskDiagnostics(task)}
                     onTogglePin={(pinned) => onToggleTaskPin(task, pinned)}
                     onRename={(title) => onRenameTask(task, title)}
                     onToggleSelection={() => onToggleSelection(createSessionBatchKey(task.id), task.agentId)}
