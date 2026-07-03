@@ -2,7 +2,7 @@
 name: imap-smtp-email
 description: Read and send email via IMAP/SMTP. Check for new/unread messages, fetch content, search mailboxes, mark as read/unread, and send emails with attachments. Works with any IMAP/SMTP server including Gmail, Outlook, 163.com, vip.163.com, 126.com, vip.126.com, 188.com, and vip.188.com.
 official: true
-version: 1.0.1
+version: 1.0.3
 ---
 
 # IMAP/SMTP Email Tool
@@ -15,12 +15,18 @@ The `accounts.json` configuration file is automatically managed by LobsterAI Set
 
 The configuration files are located in this skill's directory (same folder as this SKILL.md file). The scripts load them automatically via absolute paths, regardless of the current working directory.
 
+Use the provided scripts as the only email transport interface. Do not write temporary IMAP/SMTP scripts, do not use raw sockets, OpenSSL, `net`, `tls`, or alternate mail clients, and do not inspect `.env`, `accounts.json`, or script source unless the official command output explicitly reports missing configuration and the user asks you to diagnose it. If an official command fails or times out, report that command result and suggest checking LobsterAI Settings; do not implement a fallback protocol client.
+
+Do not claim that `node-imap`, `nodemailer`, or another dependency is broken unless an official script or verified stack trace proves it. A successful command means the configured email account works; a timeout means the current command timed out, not that the dependency is defective.
+
+Command results intentionally redact account metadata. In user-facing replies, use the redacted account label/email from the JSON result and do not repeat full configured email addresses unless the user explicitly asks for the exact address. Email content fields such as sender, subject, and message body may still be shown when they are the requested result.
+
 For multi-account setups:
 - Run `node scripts/imap.js accounts` or `node scripts/smtp.js accounts` to list configured account IDs without exposing secrets.
 - Omit `--account` to use the default enabled account.
 - Pass `--account <id>` to use a specific account.
 - Pass `--all-accounts` only for read/list commands that support fan-out (`check`, `search`, `list-mailboxes`).
-- Every JSON result includes account metadata when a multi-account command is used.
+- JSON results for read/list commands include `success`, redacted account metadata, `command`, `count`, and result arrays such as `messages` or `mailboxes`.
 
 For sending email, always review recipient, subject, sender account, and body with the user first. Sending is blocked unless `--confirmed` is passed.
 

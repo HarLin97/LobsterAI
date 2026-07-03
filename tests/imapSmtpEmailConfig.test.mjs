@@ -104,12 +104,41 @@ test('loads accounts.json and lists redacted account metadata', withTempDir(asyn
     assert.equal(listed.defaultAccountId, 'work');
     assert.equal(listed.accounts.length, 2);
     assert.equal(listed.accounts[1].id, 'work');
+    assert.equal(listed.accounts[1].email, 'wo***@example.com');
     assert.equal(listed.accounts[1].hasPassword, true);
     assert.equal(listed.accounts[1].password, undefined);
     assert.equal(listed.accounts[1].isDefault, true);
     assert.equal(listed.accounts[1].hasImapConfig, true);
     assert.equal(listed.accounts[1].hasSmtpConfig, true);
     assert.equal(listed.accounts[1].requireSendConfirmation, false);
+  } finally {
+    restore();
+  }
+}));
+
+test('redacts email-like account names in public metadata', withTempDir(async tempDir => {
+  const { module, restore } = await loadConfigModule(tempDir);
+  try {
+    const account = {
+      id: 'qq',
+      name: '1036829855@qq.com',
+      enabled: true,
+      email: '1036829855@qq.com',
+      password: 'secret',
+      imapHost: 'imap.qq.com',
+      imapPort: 993,
+      smtpHost: 'smtp.qq.com',
+      smtpPort: 587,
+    };
+
+    const listed = module.redactAccount(account);
+    assert.equal(listed.name, '10***@qq.com');
+    assert.equal(listed.email, '10***@qq.com');
+    assert.equal(listed.password, undefined);
+
+    const result = module.withAccountResult(account, { success: true });
+    assert.equal(result.accountName, '10***@qq.com');
+    assert.equal(result.email, '10***@qq.com');
   } finally {
     restore();
   }
@@ -176,8 +205,11 @@ test('deduplicates repeated account ids while preserving account order', withTem
   try {
     const listed = module.listAccountsConfig();
     assert.deepEqual(listed.accounts.map(account => account.id), ['work', 'work-2']);
-    assert.equal(listed.accounts[0].email, 'first@example.com');
-    assert.equal(listed.accounts[1].email, 'second@example.com');
+    assert.equal(listed.accounts[0].email, 'fi***@example.com');
+    assert.equal(listed.accounts[1].email, 'se***@example.com');
+    const config = module.loadAccountsConfig();
+    assert.equal(config.accounts[0].email, 'first@example.com');
+    assert.equal(config.accounts[1].email, 'second@example.com');
   } finally {
     restore();
   }

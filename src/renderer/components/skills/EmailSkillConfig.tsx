@@ -139,6 +139,13 @@ const nextAccountId = (accounts: EmailSkillAccountConfig[]): string => {
   return `account-${index}`;
 };
 
+const getAccountDisplayName = (account: EmailSkillAccountConfig): string => {
+  if (account.id === 'default' && (account.name === 'Default' || account.name === 'default')) {
+    return i18nService.t('emailDefaultAccountDisplayName');
+  }
+  return account.name || account.email || account.id;
+};
+
 const getChangedAccountKeys = (patch: Partial<EmailSkillAccountConfig>): string => {
   const fieldMappings: Array<[keyof EmailSkillAccountConfig, string]> = [
     ['provider', 'provider'],
@@ -389,25 +396,40 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
       hasImapHost: Boolean(activeAccount.imapHost),
       hasSmtpHost: Boolean(activeAccount.smtpHost),
     });
-    const result = await skillService.testEmailAccountConnectivity(SKILL_ID, activeAccount);
-    if (!isMountedRef.current) return;
-    setTestingAccountId(null);
-    if (result) {
-      setConnectivityResults(prev => ({ ...prev, [activeAccount.id]: result }));
-      const imapCheck = result.checks.find(check => check.code === 'imap_connection');
-      const smtpCheck = result.checks.find(check => check.code === 'smtp_connection');
-      void reportYdAnalyzer({
-        action: LogReporterAction.EmailSkillConnectionTested,
-        ...buildEmailSkillAnalyticsParams(config, activeAccount),
-        result: result.verdict,
-        imapResult: imapCheck?.level ?? '',
-        smtpResult: smtpCheck?.level ?? '',
-      });
-      console.debug('[EmailSkillConfig] email account connectivity test completed', {
-        accountId: activeAccount.id,
-        verdict: result.verdict,
-      });
-    } else {
+    try {
+      const result = await skillService.testEmailAccountConnectivity(SKILL_ID, activeAccount);
+      if (!isMountedRef.current) return;
+      if (result) {
+        setConnectivityResults(prev => ({ ...prev, [activeAccount.id]: result }));
+        const imapCheck = result.checks.find(check => check.code === 'imap_connection');
+        const smtpCheck = result.checks.find(check => check.code === 'smtp_connection');
+        void reportYdAnalyzer({
+          action: LogReporterAction.EmailSkillConnectionTested,
+          ...buildEmailSkillAnalyticsParams(config, activeAccount),
+          result: result.verdict,
+          imapResult: imapCheck?.level ?? '',
+          smtpResult: smtpCheck?.level ?? '',
+        });
+        console.debug('[EmailSkillConfig] email account connectivity test completed', {
+          accountId: activeAccount.id,
+          verdict: result.verdict,
+        });
+      } else {
+        setConnectivityError(i18nService.t('connectionFailed'));
+        void reportYdAnalyzer({
+          action: LogReporterAction.EmailSkillConnectionTested,
+          ...buildEmailSkillAnalyticsParams(config, activeAccount),
+          result: 'fail',
+          imapResult: '',
+          smtpResult: '',
+        });
+        console.warn('[EmailSkillConfig] email account connectivity test returned no result', {
+          accountId: activeAccount.id,
+        });
+      }
+    } catch (error) {
+      console.error('[EmailSkillConfig] email account connectivity test failed:', error);
+      if (!isMountedRef.current) return;
       setConnectivityError(i18nService.t('connectionFailed'));
       void reportYdAnalyzer({
         action: LogReporterAction.EmailSkillConnectionTested,
@@ -416,9 +438,10 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
         imapResult: '',
         smtpResult: '',
       });
-      console.warn('[EmailSkillConfig] email account connectivity test returned no result', {
-        accountId: activeAccount.id,
-      });
+    } finally {
+      if (isMountedRef.current) {
+        setTestingAccountId(null);
+      }
     }
   };
 
@@ -427,7 +450,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
     const lines: string[] = [];
     lines.push('我在配置邮件的 IMAP/SMTP 连接时遇到了问题，请帮我排查并给出解决方案。');
     if (account) {
-      lines.push(`邮箱账号：${account.name}`);
+      lines.push(`邮箱账号：${getAccountDisplayName(account)}`);
       lines.push(`邮箱地址：${account.email}`);
       lines.push(`IMAP 服务器：${account.imapHost}:${account.imapPort}`);
       lines.push(`SMTP 服务器：${account.smtpHost}:${account.smtpPort}`);
@@ -450,8 +473,8 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
   };
 
   const inputClassName =
-    'block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs';
-  const labelClassName = 'block text-xs font-medium text-foreground mb-1';
+    'block h-9 w-full rounded-lg bg-surface-inset border border-border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 text-xs';
+  const labelClassName = 'block text-[11px] font-medium text-secondary mb-1.5';
 
   if (loading) {
     return <div className="p-4 text-xs text-secondary">{i18nService.t('loading')}...</div>;
@@ -462,56 +485,60 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
   const currentPreset = activeAccount?.provider ? PROVIDER_PRESETS[activeAccount.provider] : null;
 
   return (
-    <div className="space-y-4 p-4 rounded-xl border border-border-subtle bg-surface">
-      <div className="flex items-center justify-between gap-3">
-        <div>
+    <div className="rounded-lg border border-border-subtle bg-surface overflow-hidden">
+      <div className="flex items-start justify-between gap-4 border-b border-border-subtle px-5 py-4">
+        <div className="min-w-0">
           <h4 className="text-sm font-medium text-foreground">{i18nService.t('emailConfig')}</h4>
-          <p className="text-xs text-secondary mt-1">{i18nService.t('emailAccountsHint')}</p>
+          <p className="mt-1 text-xs leading-5 text-secondary">{i18nService.t('emailAccountsHint')}</p>
         </div>
         {onClose && (
           <button
             type="button"
             onClick={onClose}
-            className="text-xs text-secondary hover:text-primary transition-colors"
+            className="flex-shrink-0 text-xs text-secondary hover:text-primary transition-colors"
           >
             {i18nService.t('collapse')}
           </button>
         )}
       </div>
 
-      <div className="min-h-[18px] text-xs">
-        {loadError ? (
-          <span className="text-red-600 dark:text-red-400">{loadError}</span>
-        ) : persistError ? (
-          <span className="text-red-600 dark:text-red-400">{persistError}</span>
-        ) : persisting ? (
-          <span className="text-secondary">{i18nService.t('saving')}...</span>
-        ) : null}
-      </div>
+      {(loadError || persistError || persisting) && (
+        <div className="border-b border-border-subtle px-5 py-2 text-xs">
+          {loadError ? (
+            <span className="text-red-600 dark:text-red-400">{loadError}</span>
+          ) : persistError ? (
+            <span className="text-red-600 dark:text-red-400">{persistError}</span>
+          ) : persisting ? (
+            <span className="text-secondary">{i18nService.t('saving')}...</span>
+          ) : null}
+        </div>
+      )}
 
-      <div className="grid grid-cols-[minmax(160px,220px)_1fr] gap-4 max-md:grid-cols-1">
-        <div className="space-y-2 max-h-[min(520px,65vh)] overflow-y-auto pr-1">
+      <div className="grid grid-cols-[240px_minmax(0,1fr)] gap-0 max-md:grid-cols-1">
+        <div className="border-r border-border-subtle bg-surface-raised/30 p-4 max-md:border-r-0 max-md:border-b">
+          <div className="space-y-2 max-h-[min(460px,60vh)] overflow-y-auto pr-1">
           {config.accounts.map(account => {
             const isActive = account.id === activeAccountId;
             const isDefault = account.id === config.defaultAccountId;
             const result = connectivityResults[account.id];
+            const accountDisplayName = getAccountDisplayName(account);
             return (
               <button
                 type="button"
                 key={account.id}
                 onClick={() => setActiveAccountId(account.id)}
-                className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                className={`w-full rounded-lg border px-3 py-2.5 text-left transition-colors ${
                   isActive
-                    ? 'border-primary bg-primary/10'
-                    : 'border-border-subtle hover:bg-surface-raised'
+                    ? 'border-primary/80 bg-primary/5 shadow-sm ring-1 ring-primary/10'
+                    : 'border-border-subtle bg-surface hover:border-border hover:bg-surface-raised'
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-xs font-medium text-foreground">{account.name}</span>
+                  <span className="truncate text-xs font-medium text-foreground">{accountDisplayName}</span>
                   {isDefault && <StarIcon className="h-3.5 w-3.5 text-yellow-500 flex-shrink-0" />}
                 </div>
-                <div className="mt-1 truncate text-[11px] text-secondary">{account.email || account.id}</div>
-                <div className="mt-1 flex items-center gap-1 text-[11px] text-secondary">
+                <div className="mt-1 truncate text-[11px] leading-4 text-secondary">{account.email || account.id}</div>
+                <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-secondary">
                   <span>{account.enabled ? i18nService.t('enabled') : i18nService.t('disabled')}</span>
                   {result && <span>{result.verdict === 'pass' ? i18nService.t('connectionSuccess') : i18nService.t('connectionFailed')}</span>}
                 </div>
@@ -522,25 +549,26 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
           <button
             type="button"
             onClick={() => void handleAddAccount()}
-            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-secondary hover:text-primary hover:bg-surface-raised transition-colors"
+            className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border bg-surface px-3 text-xs text-secondary transition-colors hover:bg-surface-raised hover:text-primary"
           >
             <PlusIcon className="h-3.5 w-3.5" />
             {i18nService.t('emailAddAccount')}
           </button>
+          </div>
         </div>
 
         {activeAccount ? (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3">
+          <div className="space-y-4 p-5">
+            <div className="flex items-start justify-between gap-4 border-b border-border-subtle pb-4">
               <div className="min-w-0">
-                <div className="text-sm font-medium text-foreground truncate">{activeAccount.name}</div>
-                <div className="text-xs text-secondary truncate">{activeAccount.id}</div>
+                <div className="text-sm font-medium text-foreground truncate">{getAccountDisplayName(activeAccount)}</div>
+                <div className="mt-0.5 text-xs text-secondary truncate">{activeAccount.id}</div>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => void handleSetDefault(activeAccount.id)}
-                  className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-foreground hover:bg-surface-raised transition-colors"
+                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2.5 text-xs text-foreground transition-colors hover:bg-surface-raised"
                 >
                   <StarIcon className="h-3.5 w-3.5" />
                   {activeAccount.id === config.defaultAccountId ? i18nService.t('emailDefaultAccount') : i18nService.t('emailSetDefault')}
@@ -548,21 +576,21 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
                 <button
                   type="button"
                   onClick={() => void persistActiveAccount({ enabled: !activeAccount.enabled })}
-                  className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-foreground hover:bg-surface-raised transition-colors"
+                  className="h-8 rounded-lg border border-border px-2.5 text-xs text-foreground transition-colors hover:bg-surface-raised"
                 >
                   {activeAccount.enabled ? i18nService.t('disable') : i18nService.t('enable')}
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleDeleteAccount(activeAccount.id)}
-                  className="rounded-lg border border-red-500/40 px-2.5 py-1.5 text-xs text-red-600 hover:bg-red-500/10 transition-colors"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-500/40 text-red-600 transition-colors hover:bg-red-500/10"
                 >
                   <TrashIcon className="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3 max-md:grid-cols-1">
               <div>
                 <label className={labelClassName}>{i18nService.t('emailAccountName')}</label>
                 <input
@@ -597,7 +625,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3 max-md:grid-cols-1">
               <div>
                 <label className={labelClassName}>{i18nService.t('emailAddress')}<span className="text-red-500 ml-0.5">*</span></label>
                 <input
@@ -648,14 +676,14 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
             <button
               type="button"
               onClick={() => setShowAdvanced(!showAdvanced)}
-              className="text-xs text-secondary hover:text-primary transition-colors"
+              className="text-xs text-secondary transition-colors hover:text-primary"
             >
               {showAdvanced ? i18nService.t('collapse') : i18nService.t('emailAdvancedSettings')}
             </button>
 
             {showAdvanced && (
-              <div className="space-y-3 pl-2 border-l-2 border-border">
-                <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
+              <div className="space-y-3 border-l border-border-subtle pl-4">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3 max-md:grid-cols-1">
                   <div>
                     <label className={labelClassName}>{i18nService.t('emailImapHost')}</label>
                     <input
@@ -710,7 +738,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 max-md:grid-cols-1">
-                  <label className="flex items-center gap-2 text-xs text-foreground">
+                  <label className="flex min-h-8 items-center gap-2 rounded-lg border border-border-subtle px-3 text-xs text-foreground">
                     <input
                       type="checkbox"
                       checked={activeAccount.imapTls !== false}
@@ -723,7 +751,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
                     />
                     IMAP TLS
                   </label>
-                  <label className="flex items-center gap-2 text-xs text-foreground">
+                  <label className="flex min-h-8 items-center gap-2 rounded-lg border border-border-subtle px-3 text-xs text-foreground">
                     <input
                       type="checkbox"
                       checked={activeAccount.smtpSecure === true}
@@ -736,7 +764,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
                     />
                     SMTP SSL
                   </label>
-                  <label className="flex items-center gap-2 text-xs text-foreground">
+                  <label className="flex min-h-8 items-center gap-2 rounded-lg border border-border-subtle px-3 text-xs text-foreground">
                     <input
                       type="checkbox"
                       checked={activeAccount.imapRejectUnauthorized === false || activeAccount.smtpRejectUnauthorized === false}
@@ -755,7 +783,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
                     />
                     {i18nService.t('emailAllowInsecureCert')}
                   </label>
-                  <label className="flex items-center gap-2 text-xs text-foreground">
+                  <label className="flex min-h-8 items-center gap-2 rounded-lg border border-border-subtle px-3 text-xs text-foreground">
                     <input
                       type="checkbox"
                       checked={activeAccount.requireSendConfirmation !== false}
@@ -772,12 +800,12 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
               </div>
             )}
 
-            <div className="space-y-3 pt-1">
+            <div className="space-y-3 border-t border-border-subtle pt-4">
               <button
                 type="button"
                 onClick={() => void handleConnectivityTest()}
                 disabled={testingAccountId === activeAccount.id || !canTest}
-                className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border border-border text-foreground hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                className="inline-flex h-8 items-center rounded-lg border border-border px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98]"
               >
                 <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
                 {testingAccountId === activeAccount.id ? i18nService.t('imConnectivityTesting') : i18nService.t('imConnectivityTest')}
@@ -835,7 +863,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
             </div>
           </div>
         ) : (
-          <div className="rounded-xl border border-dashed border-border p-6 text-center">
+          <div className="m-5 rounded-lg border border-dashed border-border p-6 text-center">
             <div className="text-sm text-foreground">{i18nService.t('emailNoAccounts')}</div>
             <button
               type="button"

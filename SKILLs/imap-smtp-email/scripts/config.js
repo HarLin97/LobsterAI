@@ -27,6 +27,16 @@ function slugifyAccountId(value, fallback = 'default') {
   return normalized || fallback;
 }
 
+function redactEmail(value) {
+  if (!value) return value;
+  return String(value).replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, email => {
+    const [local, domain] = email.split('@');
+    if (!domain) return '[redacted-email]';
+    const prefix = local.slice(0, Math.min(2, local.length));
+    return `${prefix}${local.length > 2 ? '***' : '*'}@${domain}`;
+  });
+}
+
 function loadLegacyEnv() {
   const parsed = fs.existsSync(ENV_PATH) ? dotenv.parse(fs.readFileSync(ENV_PATH)) : {};
   return { ...parsed, ...process.env };
@@ -219,9 +229,9 @@ function createSmtpConfig(account) {
 function redactAccount(account) {
   return {
     id: account.id,
-    name: account.name,
+    name: redactEmail(account.name),
     enabled: account.enabled,
-    email: account.email,
+    email: redactEmail(account.email),
     imapHost: account.imapHost,
     imapPort: account.imapPort,
     smtpHost: account.smtpHost,
@@ -253,8 +263,8 @@ function listAccountsConfig() {
 function withAccountResult(account, result) {
   return {
     accountId: account.id,
-    accountName: account.name,
-    email: account.email,
+    accountName: redactEmail(account.name),
+    email: redactEmail(account.email),
     ...result,
   };
 }
@@ -271,6 +281,7 @@ module.exports = {
   normalizeAccount,
   normalizeAccounts,
   redactAccount,
+  redactEmail,
   slugifyAccountId,
   withAccountResult,
 };

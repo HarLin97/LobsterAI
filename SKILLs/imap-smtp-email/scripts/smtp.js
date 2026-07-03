@@ -13,6 +13,7 @@ const {
   getTargetAccounts,
   listAccountsConfig,
   redactAccount,
+  redactEmail,
 } = require('./config');
 
 // Parse command-line arguments
@@ -41,7 +42,7 @@ function parseArgs() {
 function createTransporter(account) {
   const config = createSmtpConfig(account);
   console.error(`[smtp-debug] Account: ${JSON.stringify(redactAccount(account))}`);
-  console.error(`[smtp-debug] Config: host=${config.host}, port=${config.port}, user=${config.auth.user}, secure=${config.secure}, rejectUnauthorized=${config.tls.rejectUnauthorized}, hasPassword=${!!config.auth.pass}`);
+  console.error(`[smtp-debug] Config: host=${config.host}, port=${config.port}, user=${redactEmail(config.auth.user)}, secure=${config.secure}, rejectUnauthorized=${config.tls.rejectUnauthorized}, hasPassword=${!!config.auth.pass}`);
 
   return nodemailer.createTransport(config);
 }

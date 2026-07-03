@@ -94,6 +94,34 @@ function normalizePathKey(env: Record<string, string | undefined>): void {
   env.PATH = merged.join(';');
 }
 
+const EMAIL_ADDRESS_LOG_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+
+function redactEmailValueForLog(value: string): string {
+  return value.replace(EMAIL_ADDRESS_LOG_PATTERN, email => {
+    const [local, domain] = email.split('@');
+    if (!domain) return '[redacted-email]';
+    const prefix = local.slice(0, Math.min(2, local.length));
+    return `${prefix}${local.length > 2 ? '***' : '*'}@${domain}`;
+  });
+}
+
+function buildSafeEmailConnectivityConfigForLog(
+  config: Record<string, string>
+): Record<string, string> {
+  const safeConfig = { ...config };
+  const secretKeys = ['IMAP_PASS', 'SMTP_PASS'];
+  const emailKeys = ['IMAP_USER', 'SMTP_USER', 'SMTP_FROM'];
+
+  secretKeys.forEach(key => {
+    if (safeConfig[key]) safeConfig[key] = '***';
+  });
+  emailKeys.forEach(key => {
+    if (safeConfig[key]) safeConfig[key] = redactEmailValueForLog(safeConfig[key]);
+  });
+
+  return safeConfig;
+}
+
 /**
  * Resolve the latest Windows system PATH from the registry.
  * When an Electron app is launched from Start Menu or Explorer,
@@ -1446,11 +1474,7 @@ export class SkillManager {
   }
 
   syncBundledSkillsToUserData(): void {
-    if (!app.isPackaged) {
-      return;
-    }
-
-    console.log('[skills] syncBundledSkillsToUserData: start');
+    console.log('[skills] syncBundledSkillsToUserData: start', { packaged: app.isPackaged });
     const userRoot = this.ensureSkillsRoot();
     console.log('[skills] syncBundledSkillsToUserData: userRoot =', userRoot);
     const bundledRoot = this.getBundledSkillsRoot();
@@ -3007,10 +3031,7 @@ export class SkillManager {
         return { success: false, error: 'Email connectivity scripts not found' };
       }
 
-      // Mask password for logging
-      const safeConfig = { ...config };
-      if (safeConfig.IMAP_PASS) safeConfig.IMAP_PASS = '***';
-      if (safeConfig.SMTP_PASS) safeConfig.SMTP_PASS = '***';
+      const safeConfig = buildSafeEmailConnectivityConfigForLog(config);
       console.log('[email-connectivity] Testing with config:', JSON.stringify(safeConfig, null, 2));
 
       const envOverrides = Object.fromEntries(
