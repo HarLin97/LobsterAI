@@ -79,6 +79,11 @@ export interface SubagentChildSessionMaterializeParams {
   createdAt: number;
 }
 
+export type SubagentChildSessionCandidateParams = Omit<
+  SubagentChildSessionMaterializeParams,
+  'childCoworkSessionId'
+>;
+
 const GATEWAY_SESSION_DELETE_CONCURRENCY = 2;
 const GATEWAY_SESSION_DELETE_MAX_ATTEMPTS = 3;
 const GATEWAY_SESSION_DELETE_BASE_DELAY_MS = 5_000;
@@ -121,6 +126,7 @@ export class SubagentTracker {
     private readonly messageStore: SubagentMessageStore | null,
     private readonly getGatewayClient: () => GatewayClientLike | null,
     private readonly onChildSessionMaterialized?: (params: SubagentChildSessionMaterializeParams) => void,
+    private readonly shouldMaterializeChildSession?: (params: SubagentChildSessionCandidateParams) => boolean,
   ) {}
 
   // ── Event hooks (called by adapter at key points) ──────────────────────
@@ -486,8 +492,9 @@ export class SubagentTracker {
     if (this.deletedSubagentRunIds.has(toolCallId)) return;
     if (!this.store) return;
     const childSessionKey = typeof parsed?.childSessionKey === 'string' ? parsed.childSessionKey : '';
-    const isError = parsed?.status === 'error';
-    const status = isError ? 'error' : 'running';
+    const isAccepted = parsed?.status === 'accepted' && Boolean(childSessionKey);
+    const isError = !isAccepted;
+    const status: SubagentChildSessionCandidateParams['status'] = isError ? 'error' : 'running';
 
     // Store session key in memory
     const hadSessionKey = this.subagentSessionKeys.has(toolCallId);
@@ -501,6 +508,10 @@ export class SubagentTracker {
       if (childSessionKey && !hadSessionKey) {
         this.store.updateSubagentRunSessionKey(toolCallId, childSessionKey);
       }
+      if (isError && this.subagentStatus.get(toolCallId) !== 'error') {
+        this.subagentStatus.set(toolCallId, 'error');
+        this.store.updateSubagentRunStatus(toolCallId, 'error', Date.now());
+      }
       return;
     }
 
@@ -508,25 +519,35 @@ export class SubagentTracker {
       ? this.store.getSubagentRun(toolCallId)
       : null;
     if (existingRun) {
-      this.subagentStatus.set(toolCallId, existingRun.status);
+      const nextStatus = isError && existingRun.status !== 'done' ? 'error' : existingRun.status;
+      this.subagentStatus.set(toolCallId, nextStatus);
+      if (nextStatus !== existingRun.status) {
+        this.store.updateSubagentRunStatus(toolCallId, nextStatus, Date.now());
+      }
       if (childSessionKey && existingRun.sessionKey !== childSessionKey) {
         this.store.updateSubagentRunSessionKey(toolCallId, childSessionKey);
       }
-      if (childSessionKey) {
+      const candidate = {
+        runId: toolCallId,
+        parentSessionId: existingRun.parentSessionId,
+        childSessionKey,
+        agentId: existingRun.agentId || this.resolveSpawnAgentId({}, childSessionKey, toolCallId),
+        task: existingRun.task,
+        label: existingRun.label,
+        status: nextStatus,
+        createdAt: existingRun.createdAt,
+      };
+      const shouldMaterialize = !isError
+        && Boolean(childSessionKey)
+        && (this.shouldMaterializeChildSession?.(candidate) ?? true);
+      if (shouldMaterialize) {
         const childCoworkSessionId = existingRun.childCoworkSessionId || crypto.randomUUID();
         if (!existingRun.childCoworkSessionId && typeof this.store.updateSubagentRunChildSession === 'function') {
           this.store.updateSubagentRunChildSession(toolCallId, childCoworkSessionId);
         }
         this.materializeChildSession({
-          runId: toolCallId,
+          ...candidate,
           childCoworkSessionId,
-          parentSessionId: existingRun.parentSessionId,
-          childSessionKey,
-          agentId: existingRun.agentId || this.resolveSpawnAgentId({}, childSessionKey, toolCallId),
-          task: existingRun.task,
-          label: existingRun.label,
-          status: existingRun.status,
-          createdAt: existingRun.createdAt,
         });
       }
       return;
@@ -536,7 +557,20 @@ export class SubagentTracker {
     this.subagentStatus.set(toolCallId, status);
     const pending = this.pendingSpawnInfo.get(toolCallId);
     if (pending) {
-      const childCoworkSessionId = childSessionKey ? crypto.randomUUID() : null;
+      const candidate = {
+        runId: toolCallId,
+        parentSessionId: pending.parentSessionId,
+        childSessionKey,
+        agentId: pending.agentId,
+        task: pending.task,
+        label: pending.label,
+        status,
+        createdAt: pending.createdAt,
+      };
+      const shouldMaterialize = !isError
+        && Boolean(childSessionKey)
+        && (this.shouldMaterializeChildSession?.(candidate) ?? true);
+      const childCoworkSessionId = shouldMaterialize ? crypto.randomUUID() : null;
       this.store.insertSubagentRun({
         id: toolCallId,
         parentSessionId: pending.parentSessionId,
@@ -549,17 +583,10 @@ export class SubagentTracker {
         createdAt: pending.createdAt,
         endedAt: isError ? Date.now() : null,
       });
-      if (childSessionKey && childCoworkSessionId) {
+      if (shouldMaterialize && childCoworkSessionId) {
         this.materializeChildSession({
-          runId: toolCallId,
+          ...candidate,
           childCoworkSessionId,
-          parentSessionId: pending.parentSessionId,
-          childSessionKey,
-          agentId: pending.agentId,
-          task: pending.task,
-          label: pending.label,
-          status,
-          createdAt: pending.createdAt,
         });
       }
       this.pendingSpawnInfo.delete(toolCallId);

@@ -2695,6 +2695,108 @@ test('reconcileWithHistory: content mismatch — triggers replace', async () => 
   expect((args.authoritative[1] as Record<string, unknown>).text).toBe('Full complete response from the model.');
 });
 
+test('subagent history sync preserves visible local user text instead of raw outbound prompt', async () => {
+  const rawOutboundPrompt = `[LobsterAI system instructions]
+hidden setup
+
+[Context bridge from previous LobsterAI conversation]
+previous context
+
+[Current user request]
+换一颗树再来一次`;
+  const { session, store, getLastReplaceArgs } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: rawOutboundPrompt, timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: '新的作文内容', timestamp: 2, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: rawOutboundPrompt, timestamp: 10 },
+        { role: 'assistant', content: '新的作文内容', timestamp: 20 },
+      ],
+    }),
+  };
+
+  await adapter.syncSessionHistoryFromGateway(session.id, 'agent:writer:subagent:abc');
+
+  expect(getLastReplaceArgs()?.authoritative).toEqual([
+    { role: 'user', text: '换一颗树再来一次', timestamp: 1, metadata: {} },
+    { role: 'assistant', text: '新的作文内容', timestamp: 20 },
+  ]);
+});
+
+test('self-target subagent run is kept in parent panel without child cowork session', () => {
+  const insertedRuns: Array<Record<string, unknown>> = [];
+  const upsertSubagentChildSession = vi.fn();
+  const store = {
+    getSession: vi.fn((sessionId: string) => (
+      sessionId === 'parent-main' ? { id: sessionId, agentId: 'main' } : null
+    )),
+    upsertSubagentChildSession,
+  };
+  const subagentRunStore = {
+    insertSubagentRun: vi.fn((run: Record<string, unknown>) => insertedRuns.push(run)),
+    listSubagentRuns: () => [],
+  };
+  const adapter = new OpenClawRuntimeAdapter(store as never, {}, {}, subagentRunStore as never);
+
+  adapter.subagentTracker.onToolStart(
+    'call-self',
+    { agentId: 'main', taskName: 'essay-writer-1', task: 'write essay' },
+    'parent-main',
+  );
+  adapter.subagentTracker.onSpawnResult('call-self', JSON.stringify({
+    status: 'accepted',
+    childSessionKey: 'agent:main:subagent:self-1',
+  }), {});
+
+  expect(insertedRuns).toHaveLength(1);
+  expect(insertedRuns[0].childCoworkSessionId).toBeNull();
+  expect(upsertSubagentChildSession).not.toHaveBeenCalled();
+});
+
+test('delegated subagent run materializes a child cowork session', () => {
+  const insertedRuns: Array<Record<string, unknown>> = [];
+  const upsertSubagentChildSession = vi.fn((options: Record<string, unknown>) => ({
+    id: options.id,
+    agentId: options.agentId,
+  }));
+  const store = {
+    getSession: vi.fn((sessionId: string) => (
+      sessionId === 'parent-main' ? { id: sessionId, agentId: 'main' } : null
+    )),
+    upsertSubagentChildSession,
+  };
+  const subagentRunStore = {
+    insertSubagentRun: vi.fn((run: Record<string, unknown>) => insertedRuns.push(run)),
+    listSubagentRuns: () => [],
+  };
+  const adapter = new OpenClawRuntimeAdapter(store as never, {}, {}, subagentRunStore as never);
+
+  adapter.subagentTracker.onToolStart(
+    'call-product',
+    { agentId: 'product-analyst', taskName: 'analysis', task: 'analyze product' },
+    'parent-main',
+  );
+  adapter.subagentTracker.onSpawnResult('call-product', JSON.stringify({
+    status: 'accepted',
+    childSessionKey: 'agent:product-analyst:subagent:child-1',
+  }), {});
+
+  expect(insertedRuns).toHaveLength(1);
+  expect(insertedRuns[0].childCoworkSessionId).toEqual(expect.any(String));
+  expect(upsertSubagentChildSession).toHaveBeenCalledWith(expect.objectContaining({
+    id: insertedRuns[0].childCoworkSessionId,
+    parentSessionId: 'parent-main',
+    childSessionKey: 'agent:product-analyst:subagent:child-1',
+    agentId: 'product-analyst',
+  }));
+});
+
 test('lifecycle fallback repairs managed session assistant text from history', async () => {
   const brokenTable = [
     'OpenClaw 优缺点总结',

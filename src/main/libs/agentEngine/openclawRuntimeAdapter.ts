@@ -103,7 +103,11 @@ import {
   hasCronRunHistoryForSession,
   shouldReplaceLocalConversationWithCronHistory,
 } from './openclawCronRunHistorySync';
-import { type SubagentChildSessionMaterializeParams, SubagentTracker } from './subagentTracker';
+import {
+  type SubagentChildSessionCandidateParams,
+  type SubagentChildSessionMaterializeParams,
+  SubagentTracker,
+} from './subagentTracker';
 import type {
   CoworkContextUsage,
   CoworkContinueOptions,
@@ -1645,6 +1649,32 @@ const collectSessionsSpawnHistoryEntries = (messages: unknown[]): SessionsSpawnH
 };
 
 const isSubagentSessionKey = (sessionKey: string): boolean => sessionKey.includes(':subagent:');
+
+const parseAgentIdFromSubagentSessionKey = (sessionKey: string): string | null => {
+  const match = sessionKey.match(/^agent:([^:]+):subagent:/);
+  return match?.[1]?.trim() || null;
+};
+
+const normalizeSubagentVisibleUserText = (text: string): string => {
+  const currentRequestMarker = '[Current user request]';
+  const currentRequestIndex = text.lastIndexOf(currentRequestMarker);
+  if (currentRequestIndex >= 0) {
+    const visible = text.slice(currentRequestIndex + currentRequestMarker.length).trim();
+    if (visible) return visible;
+  }
+
+  const taskMarker = '[Subagent Task]';
+  const taskIndex = text.lastIndexOf(taskMarker);
+  if (taskIndex >= 0) {
+    const taskStart = taskIndex + taskMarker.length;
+    const taskTail = text.slice(taskStart);
+    const beginMatch = /\n\s*Begin\. Execute the assigned task to completion\./.exec(taskTail);
+    const visible = (beginMatch ? taskTail.slice(0, beginMatch.index) : taskTail).trim();
+    if (visible) return visible;
+  }
+
+  return text;
+};
 
 /**
  * Extract and concatenate all assistant text from the current turn in chat.history.
@@ -3347,6 +3377,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         subagentMessageStore ?? null,
         () => this.gatewayClient,
         (params) => this.materializeSubagentChildSession(params),
+        (params) => this.shouldMaterializeSubagentChildSession(params),
       );
     } else {
       // Fallback: create a no-op tracker (should not happen in production)
@@ -3386,6 +3417,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     } catch (error) {
       console.warn('[OpenClawRuntime] failed to materialize subagent child session:', error);
     }
+  }
+
+  private shouldMaterializeSubagentChildSession(params: SubagentChildSessionCandidateParams): boolean {
+    const childAgentId = parseAgentIdFromSubagentSessionKey(params.childSessionKey);
+    if (!childAgentId) return true;
+    const parentSession = this.store.getSession(params.parentSessionId, 0);
+    const parentAgentId = parentSession?.agentId?.trim() || 'main';
+    return childAgentId !== parentAgentId;
   }
 
   private buildSubagentChildSessionTitle(params: SubagentChildSessionMaterializeParams): string {
@@ -8772,12 +8811,154 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     sessionKey: string,
     options?: { isFullSync?: boolean },
   ): Promise<void> {
+    if (isSubagentSessionKey(sessionKey)) {
+      await this.syncSubagentChildHistory(sessionId, sessionKey, options);
+      return;
+    }
+
     if (isCronSessionKey(sessionKey)) {
       await this.syncCronRunHistory(sessionId, sessionKey, options);
       return;
     }
 
     await this.reconcileWithHistory(sessionId, sessionKey, options);
+  }
+
+  private async syncSubagentChildHistory(
+    sessionId: string,
+    sessionKey: string,
+    options?: { isFullSync?: boolean },
+  ): Promise<void> {
+    const client = this.gatewayClient;
+    if (!client) {
+      console.log('[SubagentHistorySync] no gateway client, skipping - sessionId:', sessionId);
+      return;
+    }
+
+    const limit = options?.isFullSync
+      ? OpenClawRuntimeAdapter.FULL_HISTORY_SYNC_LIMIT
+      : FINAL_HISTORY_SYNC_LIMIT;
+
+    try {
+      const history = await client.request<{ messages?: unknown[] }>('chat.history', {
+        sessionKey,
+        limit,
+      }, { timeoutMs: 10_000 });
+      if (!Array.isArray(history?.messages) || history.messages.length === 0) {
+        this.channelSyncCursor.set(sessionId, 0);
+        return;
+      }
+
+      const previousHistoryCountKnown = this.gatewayHistoryCountBySession.has(sessionId);
+      const previousHistoryCount = this.gatewayHistoryCountBySession.get(sessionId) ?? 0;
+      this.gatewayHistoryCountBySession.set(sessionId, history.messages.length);
+      this.syncSystemMessagesFromHistory(sessionId, history.messages, {
+        previousCountKnown: previousHistoryCountKnown,
+        previousCount: previousHistoryCount,
+      });
+
+      const session = this.store.getSession(sessionId);
+      if (!session) return;
+
+      let normalizedLocalUserContent = false;
+      const localEntries = session.messages
+        .filter((message) => message.type === 'user' || message.type === 'assistant')
+        .map((message) => {
+          const text = message.type === 'user'
+            ? normalizeSubagentVisibleUserText(message.content)
+            : message.content;
+          if (message.type === 'user' && text !== message.content) {
+            normalizedLocalUserContent = true;
+          }
+          return {
+            role: message.type as 'user' | 'assistant',
+            text,
+            timestamp: message.timestamp,
+            metadata: message.metadata,
+          };
+        })
+        .filter((entry) => entry.text.trim());
+      const localUsers = localEntries.filter((entry) => entry.role === 'user');
+      let localUserIndex = 0;
+      const mergedEntries: ReconciledConversationEntry[] = [];
+
+      for (const entry of extractGatewayHistoryEntries(history.messages)) {
+        if (entry.role === 'user') {
+          const localUser = localUsers[localUserIndex++];
+          if (localUser) {
+            mergedEntries.push(localUser);
+            continue;
+          }
+          const visibleText = normalizeSubagentVisibleUserText(entry.text).trim();
+          if (visibleText && !shouldSuppressHeartbeatText('user', visibleText)) {
+            mergedEntries.push({
+              role: 'user',
+              text: visibleText,
+              ...(entry.timestamp != null && { timestamp: entry.timestamp }),
+            });
+          }
+          continue;
+        }
+
+        if (entry.role !== 'assistant') continue;
+        const text = entry.text.trim();
+        if (!text || shouldSuppressHeartbeatText('assistant', text)) continue;
+        let metadata: Record<string, unknown> | undefined;
+        if (entry.usage || entry.model) {
+          metadata = {};
+          if (entry.usage) {
+            metadata.usage = {
+              ...(entry.usage.input != null && { inputTokens: entry.usage.input }),
+              ...(entry.usage.output != null && { outputTokens: entry.usage.output }),
+            };
+          }
+          if (entry.model) {
+            metadata.model = entry.model;
+          }
+        }
+        mergedEntries.push({
+          role: 'assistant',
+          text,
+          ...(metadata && { metadata }),
+          ...(entry.timestamp != null && { timestamp: entry.timestamp }),
+        });
+      }
+
+      for (; localUserIndex < localUsers.length; localUserIndex += 1) {
+        mergedEntries.push(localUsers[localUserIndex]);
+      }
+
+      if (mergedEntries.length === 0) {
+        this.channelSyncCursor.set(sessionId, 0);
+        return;
+      }
+
+      const isInSync = !normalizedLocalUserContent
+        && localEntries.length === mergedEntries.length
+        && localEntries.every((entry, index) =>
+          entry.role === mergedEntries[index].role
+          && entry.text === mergedEntries[index].text
+          && isSameReconciledEntry(entry, mergedEntries[index]),
+        );
+      if (isInSync) {
+        this.channelSyncCursor.set(sessionId, mergedEntries.length);
+        return;
+      }
+
+      this.store.replaceConversationMessages(
+        sessionId,
+        applyLocalTimestampsToEntries(mergedEntries, localEntries),
+      );
+      this.channelSyncCursor.set(sessionId, mergedEntries.length);
+
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send('cowork:sessions:changed');
+        }
+      }
+    } catch (error) {
+      console.warn('[SubagentHistorySync] failed - sessionId:', sessionId, 'error:', error);
+    }
   }
 
   /**

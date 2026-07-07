@@ -295,3 +295,33 @@ test('onHistorySpawnResult inserts a run without realtime tool state', () => {
     endedAt: null,
   });
 });
+
+test('forbidden spawn result is recorded as error', () => {
+  const tracker = new SubagentTracker(runStore, messageStore, () => null);
+
+  tracker.onToolStart('call-forbidden', {
+    taskName: 'essay-writer-1',
+    task: 'write an essay',
+  }, 'parent-1');
+
+  tracker.onSpawnResult('call-forbidden', JSON.stringify({
+    status: 'forbidden',
+    error: 'sessions_spawn requires explicit agentId when requireAgentId is configured.',
+  }), {
+    taskName: 'essay-writer-1',
+    task: 'write an essay',
+  });
+
+  expect(runStore.getSubagentRun('call-forbidden')).toEqual({
+    id: 'call-forbidden',
+    parentSessionId: 'parent-1',
+    sessionKey: null,
+    childCoworkSessionId: null,
+    agentId: 'essay-writer-1',
+    task: 'write an essay',
+    label: null,
+    status: 'error',
+    createdAt: expect.any(Number),
+    endedAt: expect.any(Number),
+  });
+});
