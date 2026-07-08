@@ -1854,30 +1854,35 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
           workspace: path.resolve(mainWorkspacePath),
           mediaMaxMb: 30,
           ...(taskWorkingDirectory ? { cwd: path.resolve(taskWorkingDirectory) } : {}),
-          ...(coworkConfig.embeddingEnabled ? {
-            memorySearch: {
-              enabled: true,
-              provider: (['openai', 'gemini', 'voyage', 'mistral', 'ollama'].includes(coworkConfig.embeddingProvider)
+          memorySearch: {
+            enabled: true,
+            provider: coworkConfig.embeddingEnabled
+              ? (['openai', 'gemini', 'voyage', 'mistral', 'ollama'].includes(coworkConfig.embeddingProvider)
                 ? coworkConfig.embeddingProvider
-                : 'openai'),
-              ...(coworkConfig.embeddingModel ? { model: coworkConfig.embeddingModel } : {}),
+                : 'openai')
+              : 'none',
+            ...(coworkConfig.embeddingEnabled && coworkConfig.embeddingModel ? { model: coworkConfig.embeddingModel } : {}),
+            ...(coworkConfig.embeddingEnabled ? {
               remote: {
                 ...(coworkConfig.embeddingRemoteBaseUrl ? { baseUrl: coworkConfig.embeddingRemoteBaseUrl } : {}),
                 ...(coworkConfig.embeddingRemoteApiKey ? { apiKey: coworkConfig.embeddingRemoteApiKey } : {}),
-              },
-              store: {
-                // Use trigram tokenizer for FTS5 — unicode61 (the openclaw default)
-                // cannot tokenize CJK characters, so Chinese/Japanese/Korean memory
-                // content is invisible to keyword search.
-                fts: { tokenizer: 'trigram' },
               },
               query: {
                 hybrid: {
                   vectorWeight: coworkConfig.embeddingVectorWeight ?? 0.7,
                 },
               },
+            } : {
+              fallback: 'none',
+            }),
+            store: {
+              // Use trigram tokenizer for FTS5 — unicode61 (the openclaw default)
+              // cannot tokenize CJK characters, so Chinese/Japanese/Korean memory
+              // content is invisible to keyword search.
+              fts: { tokenizer: 'trigram' },
+              ...(!coworkConfig.embeddingEnabled ? { vector: { enabled: false } } : {}),
             },
-          } : {}),
+          },
           heartbeat: {
             every: coworkConfig.openClawHeartbeatEnabled === false
               ? OPENCLAW_HEARTBEAT_EVERY_DISABLED

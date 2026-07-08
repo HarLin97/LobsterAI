@@ -221,6 +221,45 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.models.pricing).toEqual({ enabled: false });
   });
 
+  test('defaults memory search to local FTS-only when embeddings are disabled', async () => {
+    const sync = await createSync({
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: true,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+        embeddingEnabled: false,
+        embeddingProvider: 'openai',
+        embeddingModel: '',
+        embeddingLocalModelPath: '',
+        embeddingVectorWeight: 0.7,
+        embeddingRemoteBaseUrl: '',
+        embeddingRemoteApiKey: '',
+      }),
+    });
+
+    const result = sync.sync('memory-search-default-fts');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.agents.defaults.memorySearch).toMatchObject({
+      enabled: true,
+      provider: 'none',
+      fallback: 'none',
+      store: {
+        fts: { tokenizer: 'trigram' },
+        vector: { enabled: false },
+      },
+    });
+    expect(config.agents.defaults.memorySearch.remote).toBeUndefined();
+  });
+
   test('configures OpenClaw chat image attachment limit to 30MB', async () => {
     const sync = await createSync();
 
