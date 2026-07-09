@@ -7,9 +7,14 @@ import type {
 export const ShareDeploymentIpc = {
   DetectProjectCandidates: 'shareDeployment:detectProjectCandidates',
   AnalyzeProjectDirectory: 'shareDeployment:analyzeProjectDirectory',
+  SelectPersistencePath: 'shareDeployment:selectPersistencePath',
   CreateNodeDeployment: 'shareDeployment:createNodeDeployment',
   Get: 'shareDeployment:get',
   GetByLocalService: 'shareDeployment:getByLocalService',
+  GetPersistence: 'shareDeployment:getPersistence',
+  DownloadPersistenceArchive: 'shareDeployment:downloadPersistenceArchive',
+  ClearPersistenceData: 'shareDeployment:clearPersistenceData',
+  ImportPersistenceData: 'shareDeployment:importPersistenceData',
 } as const;
 
 export type ShareDeploymentIpc = (typeof ShareDeploymentIpc)[keyof typeof ShareDeploymentIpc];
@@ -61,6 +66,50 @@ export const ShareDeploymentKind = {
 export type ShareDeploymentKind =
   (typeof ShareDeploymentKind)[keyof typeof ShareDeploymentKind];
 
+export const ShareDeploymentPersistenceProvider = {
+  Filesystem: 'filesystem',
+} as const;
+
+export type ShareDeploymentPersistenceProvider =
+  (typeof ShareDeploymentPersistenceProvider)[keyof typeof ShareDeploymentPersistenceProvider];
+
+export const ShareDeploymentPersistenceBindingKind = {
+  File: 'file',
+  Directory: 'directory',
+} as const;
+
+export type ShareDeploymentPersistenceBindingKind =
+  (typeof ShareDeploymentPersistenceBindingKind)[keyof typeof ShareDeploymentPersistenceBindingKind];
+
+export interface ShareDeploymentPersistenceBinding {
+  appPath: string;
+  dataPath: string;
+  kind: ShareDeploymentPersistenceBindingKind;
+  sizeBytes?: number;
+}
+
+export interface ShareDeploymentPersistence {
+  enabled: boolean;
+  provider: ShareDeploymentPersistenceProvider;
+  mountPath?: string;
+  remoteRoot?: string;
+  quotaBytes?: number;
+  usedBytes?: number | null;
+  usedBytesEstimated?: boolean;
+  status?: string;
+  bindings: ShareDeploymentPersistenceBinding[];
+}
+
+export interface ShareDeploymentSelectPersistencePathInput {
+  projectDirectory: string;
+}
+
+export interface ShareDeploymentSelectPersistencePathResult {
+  success: boolean;
+  binding?: ShareDeploymentPersistenceBinding;
+  error?: string;
+}
+
 export interface ShareDeploymentProjectCandidate {
   directory: string;
   source: ShareDeploymentCandidateSource;
@@ -108,6 +157,7 @@ export interface ShareDeploymentProjectAnalysis {
   totalFiles: number;
   totalBytes: number;
   excludedCount: number;
+  persistence?: ShareDeploymentPersistence;
   warnings: string[];
   blockers: string[];
   error?: string;
@@ -125,12 +175,51 @@ export interface ShareDeploymentCreateNodeInput {
   buildCommand: string;
   startCommand: string;
   port: number;
+  persistence?: ShareDeploymentPersistence;
 }
 
 export interface ShareDeploymentGetByLocalServiceInput {
   sessionId: string;
   localServiceUrl: string;
   projectDirectory?: string;
+}
+
+export interface ShareDeploymentPersistenceInfoResult {
+  success: boolean;
+  persistence?: ShareDeploymentPersistence | null;
+  error?: string;
+  code?: number;
+}
+
+export interface ShareDeploymentDownloadPersistenceInput {
+  deploymentId: string;
+  projectDirectory?: string;
+  shareId?: string;
+}
+
+export interface ShareDeploymentDownloadPersistenceResult {
+  success: boolean;
+  filePath?: string;
+  error?: string;
+  code?: number;
+}
+
+export interface ShareDeploymentClearPersistenceInput {
+  deploymentId: string;
+  confirmText: string;
+}
+
+export interface ShareDeploymentImportPersistenceInput {
+  deploymentId: string;
+  archivePath: string;
+  confirmText: string;
+}
+
+export interface ShareDeploymentPersistenceMutationResult {
+  success: boolean;
+  persistence?: ShareDeploymentPersistence | null;
+  error?: string;
+  code?: number;
 }
 
 export interface ShareDeploymentEvent {
@@ -165,6 +254,7 @@ export interface ShareDeploymentRecord {
   providerRegion?: string;
   providerFunctionId?: string;
   providerEndpoint?: string;
+  persistence?: ShareDeploymentPersistence;
   deployedAt?: string;
   expiresAt?: string;
   lastAccessedAt?: string;

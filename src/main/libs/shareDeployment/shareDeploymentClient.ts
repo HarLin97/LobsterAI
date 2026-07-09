@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -8,9 +9,15 @@ import {
   HtmlShareStatus,
 } from '../../../shared/htmlShare/constants';
 import {
+  type ShareDeploymentClearPersistenceInput,
   type ShareDeploymentCreateNodeInput,
+  type ShareDeploymentDownloadPersistenceInput,
+  type ShareDeploymentDownloadPersistenceResult,
   type ShareDeploymentGetByLocalServiceInput,
+  type ShareDeploymentImportPersistenceInput,
   ShareDeploymentKind,
+  type ShareDeploymentPersistenceInfoResult,
+  type ShareDeploymentPersistenceMutationResult,
   type ShareDeploymentProjectAnalysis,
   type ShareDeploymentRecord,
   type ShareDeploymentResult,
@@ -50,6 +57,7 @@ interface ServerShareDeploymentResponse {
   region?: string;
   providerResourceId?: string;
   runtimeUrlMasked?: string;
+  persistence?: ShareDeploymentRecord['persistence'];
   expiresAt?: string;
   lastAccessedAt?: string;
   failureMessage?: string;
@@ -276,6 +284,7 @@ function buildDeploymentRecord(
     providerRegion: data.region,
     providerFunctionId: data.providerResourceId,
     providerEndpoint: data.runtimeUrlMasked,
+    persistence: data.persistence,
     expiresAt: data.expiresAt,
     lastAccessedAt: data.lastAccessedAt,
     errorMessage: data.failureMessage,
@@ -309,6 +318,7 @@ function buildManifest(input: UploadNodeDeploymentInput | UploadStaticDeployment
     includedFileCount: input.analysis.totalFiles,
     estimatedSourceArchiveBytes: input.archiveBytes,
     localServiceUrl: input.localServiceUrl,
+    persistence: isStaticDeployment ? undefined : input.analysis.persistence,
     env: [],
   };
 }
@@ -430,6 +440,122 @@ export async function getNodeDeployment(
   };
 }
 
+export async function getDeploymentPersistence(
+  serverBaseUrl: string,
+  fetchWithAuth: FetchWithAuth,
+  deploymentId: string,
+): Promise<ShareDeploymentPersistenceInfoResult> {
+  const response = await fetchWithAuth(
+    `${serverBaseUrl}/api/share-deployments/${encodeURIComponent(deploymentId)}/persistence`,
+  );
+  const payload = (await response.json().catch((): null => null)) as
+    | ApiResponse<ShareDeploymentRecord['persistence']>
+    | null;
+  if (!response.ok || payload?.code !== 0) {
+    return {
+      success: false,
+      error: payload?.message || `Service data lookup failed: ${response.status}`,
+      code: payload?.code,
+    };
+  }
+  return {
+    success: true,
+    persistence: payload.data ?? null,
+  };
+}
+
+export async function downloadDeploymentPersistenceArchive(
+  serverBaseUrl: string,
+  fetchWithAuth: FetchWithAuth,
+  input: ShareDeploymentDownloadPersistenceInput,
+): Promise<ShareDeploymentDownloadPersistenceResult> {
+  const response = await fetchWithAuth(
+    `${serverBaseUrl}/api/share-deployments/${encodeURIComponent(input.deploymentId)}/persistence/archive`,
+  );
+  if (!response.ok) {
+    const payload = (await response.json().catch((): null => null)) as ApiResponse<unknown> | null;
+    return {
+      success: false,
+      error: payload?.message || `Service data download failed: ${response.status}`,
+      code: payload?.code,
+    };
+  }
+
+  const archiveBuffer = Buffer.from(await response.arrayBuffer());
+  const fileName = buildPersistenceArchiveFileName(input.shareId || input.deploymentId);
+  const backupRoot = input.projectDirectory?.trim()
+    ? path.join(input.projectDirectory, '.lobster', 'service-data-backups')
+    : path.join(os.homedir(), 'Downloads');
+  await fs.promises.mkdir(backupRoot, { recursive: true });
+  const filePath = path.join(backupRoot, fileName);
+  await fs.promises.writeFile(filePath, archiveBuffer);
+  return {
+    success: true,
+    filePath,
+  };
+}
+
+export async function clearDeploymentPersistenceData(
+  serverBaseUrl: string,
+  fetchWithAuth: FetchWithAuth,
+  input: ShareDeploymentClearPersistenceInput,
+): Promise<ShareDeploymentPersistenceMutationResult> {
+  const response = await fetchWithAuth(
+    `${serverBaseUrl}/api/share-deployments/${encodeURIComponent(input.deploymentId)}/persistence/clear`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmText: input.confirmText }),
+    },
+  );
+  const payload = (await response.json().catch((): null => null)) as
+    | ApiResponse<ShareDeploymentRecord['persistence']>
+    | null;
+  if (!response.ok || payload?.code !== 0) {
+    return {
+      success: false,
+      error: payload?.message || `Service data clear failed: ${response.status}`,
+      code: payload?.code,
+    };
+  }
+  return {
+    success: true,
+    persistence: payload.data ?? null,
+  };
+}
+
+export async function importDeploymentPersistenceData(
+  serverBaseUrl: string,
+  fetchWithAuth: FetchWithAuth,
+  input: ShareDeploymentImportPersistenceInput,
+): Promise<ShareDeploymentPersistenceMutationResult> {
+  const archiveBlob = await readArchiveBlob(input.archivePath);
+  const form = new FormData();
+  form.set('confirmText', input.confirmText);
+  form.set('archive', archiveBlob, path.basename(input.archivePath) || 'service-data.zip');
+  const response = await fetchWithAuth(
+    `${serverBaseUrl}/api/share-deployments/${encodeURIComponent(input.deploymentId)}/persistence/import`,
+    {
+      method: 'POST',
+      body: form,
+    },
+  );
+  const payload = (await response.json().catch((): null => null)) as
+    | ApiResponse<ShareDeploymentRecord['persistence']>
+    | null;
+  if (!response.ok || payload?.code !== 0) {
+    return {
+      success: false,
+      error: payload?.message || `Service data import failed: ${response.status}`,
+      code: payload?.code,
+    };
+  }
+  return {
+    success: true,
+    persistence: payload.data ?? null,
+  };
+}
+
 export async function getNodeDeploymentByLocalService(
   serverBaseUrl: string,
   publicBaseUrl: string,
@@ -492,4 +618,10 @@ export async function getNodeDeploymentByLocalService(
       disabledSource: matchedShare.disabledSource ?? deployment.disabledSource,
     },
   };
+}
+
+function buildPersistenceArchiveFileName(id: string): string {
+  const safeId = id.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'service';
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `${safeId}-service-data-${timestamp}.zip`;
 }

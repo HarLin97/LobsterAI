@@ -42,12 +42,20 @@ import type {
 } from '../../shared/openclawEngine/constants';
 import type {
   ShareDeploymentAnalyzeProjectInput,
+  ShareDeploymentClearPersistenceInput,
   ShareDeploymentCreateNodeInput,
   ShareDeploymentDetectCandidatesInput,
   ShareDeploymentDetectCandidatesResult,
+  ShareDeploymentDownloadPersistenceInput,
+  ShareDeploymentDownloadPersistenceResult,
   ShareDeploymentGetByLocalServiceInput,
+  ShareDeploymentImportPersistenceInput,
+  ShareDeploymentPersistenceInfoResult,
+  ShareDeploymentPersistenceMutationResult,
   ShareDeploymentProjectAnalysis,
   ShareDeploymentResult,
+  ShareDeploymentSelectPersistencePathInput,
+  ShareDeploymentSelectPersistencePathResult,
 } from '../../shared/shareDeployment/constants';
 import type {
   ShellGetBrowserAppsInput,
@@ -1097,11 +1105,24 @@ interface IElectronAPI {
     analyzeProjectDirectory: (
       options: ShareDeploymentAnalyzeProjectInput,
     ) => Promise<ShareDeploymentProjectAnalysis>;
+    selectPersistencePath: (
+      options: ShareDeploymentSelectPersistencePathInput,
+    ) => Promise<ShareDeploymentSelectPersistencePathResult>;
     createNodeDeployment: (
       options: ShareDeploymentCreateNodeInput,
     ) => Promise<ShareDeploymentResult>;
     get: (deploymentId: string) => Promise<ShareDeploymentResult>;
     getByLocalService: (options: ShareDeploymentGetByLocalServiceInput) => Promise<ShareDeploymentResult>;
+    getPersistence: (deploymentId: string) => Promise<ShareDeploymentPersistenceInfoResult>;
+    downloadPersistenceArchive: (
+      options: ShareDeploymentDownloadPersistenceInput,
+    ) => Promise<ShareDeploymentDownloadPersistenceResult>;
+    clearPersistenceData: (
+      options: ShareDeploymentClearPersistenceInput,
+    ) => Promise<ShareDeploymentPersistenceMutationResult>;
+    importPersistenceData: (
+      options: ShareDeploymentImportPersistenceInput,
+    ) => Promise<ShareDeploymentPersistenceMutationResult>;
   };
   asr: {
     createRealtimeSession: (options: AsrRealtimeSessionRequest) => Promise<AsrRealtimeSessionResult>;

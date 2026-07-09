@@ -104,13 +104,20 @@ import { PlatformRegistry } from '../shared/platform';
 import { OpenClawProviderId, ProviderName } from '../shared/providers';
 import {
   ShareDeploymentCandidateSource,
+  type ShareDeploymentClearPersistenceInput,
   type ShareDeploymentCreateNodeInput,
   type ShareDeploymentDetectCandidatesInput,
+  type ShareDeploymentDownloadPersistenceInput,
   type ShareDeploymentGetByLocalServiceInput,
+  type ShareDeploymentImportPersistenceInput,
   ShareDeploymentIpc,
   ShareDeploymentKind,
   ShareDeploymentPackageManager,
+  type ShareDeploymentPersistence,
+  ShareDeploymentPersistenceBindingKind,
+  ShareDeploymentPersistenceProvider,
   type ShareDeploymentProjectCandidate,
+  type ShareDeploymentSelectPersistencePathInput,
 } from '../shared/shareDeployment/constants';
 import type { ShellOpenFailureReason as ShellOpenFailureReasonType } from '../shared/shell/constants';
 import { type ShellGetBrowserAppsInput, ShellIpc, ShellOpenFailureReason } from '../shared/shell/constants';
@@ -294,8 +301,12 @@ import {
 import {
   buildNodeDeploymentClientSourceKey,
   buildStaticDeploymentClientSourceKey,
+  clearDeploymentPersistenceData,
+  downloadDeploymentPersistenceArchive,
+  getDeploymentPersistence,
   getNodeDeployment,
   getNodeDeploymentByLocalService,
+  importDeploymentPersistenceData,
   uploadNodeDeployment,
   uploadStaticDeployment,
 } from './libs/shareDeployment/shareDeploymentClient';
@@ -818,6 +829,49 @@ function sanitizeShareDeploymentAnalyzeProjectDirectoryInput(
   };
 }
 
+function sanitizeShareDeploymentPersistenceBinding(value: unknown): ShareDeploymentPersistence['bindings'][number] | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const appPath = sanitizeOptionalHtmlShareString(source.appPath, 'appPath', 256);
+  const dataPath = sanitizeOptionalHtmlShareString(source.dataPath, 'dataPath', 256);
+  if (!appPath || !dataPath) return null;
+  const kind = source.kind === ShareDeploymentPersistenceBindingKind.Directory
+    ? ShareDeploymentPersistenceBindingKind.Directory
+    : ShareDeploymentPersistenceBindingKind.File;
+  const sizeBytes = typeof source.sizeBytes === 'number'
+    ? Math.max(0, Math.round(source.sizeBytes))
+    : undefined;
+  return {
+    appPath,
+    dataPath,
+    kind,
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+  };
+}
+
+function sanitizeShareDeploymentPersistence(value: unknown): ShareDeploymentPersistence | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid service data settings.');
+  }
+  const source = value as Record<string, unknown>;
+  const bindings = Array.isArray(source.bindings)
+    ? source.bindings
+        .slice(0, 8)
+        .map(sanitizeShareDeploymentPersistenceBinding)
+        .filter((binding): binding is ShareDeploymentPersistence['bindings'][number] => Boolean(binding))
+    : [];
+  return {
+    enabled: Boolean(source.enabled) && bindings.length > 0,
+    provider: ShareDeploymentPersistenceProvider.Filesystem,
+    mountPath: sanitizeOptionalHtmlShareString(source.mountPath, 'mountPath', 256),
+    quotaBytes: typeof source.quotaBytes === 'number' && source.quotaBytes > 0
+      ? Math.round(source.quotaBytes)
+      : undefined,
+    bindings,
+  };
+}
+
 function sanitizeShareDeploymentPort(value: unknown): number {
   const port = typeof value === 'number' ? value : Number(value);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -843,6 +897,7 @@ function sanitizeShareDeploymentCreateNodeInput(input: unknown): ShareDeployment
     buildCommand: sanitizeOptionalShareDeploymentCommand(source.buildCommand, 'buildCommand'),
     startCommand: sanitizeOptionalShareDeploymentCommand(source.startCommand, 'startCommand'),
     port: sanitizeShareDeploymentPort(source.port),
+    persistence: sanitizeShareDeploymentPersistence(source.persistence),
   };
 }
 
@@ -857,6 +912,141 @@ function sanitizeShareDeploymentGetByLocalServiceInput(
     sessionId: sanitizeHtmlShareString(source.sessionId, 'sessionId', 128),
     localServiceUrl: sanitizeHtmlShareString(source.localServiceUrl, 'localServiceUrl', 2048),
     projectDirectory: sanitizeOptionalHtmlShareString(source.projectDirectory, 'projectDirectory', 4096),
+  };
+}
+
+function sanitizeShareDeploymentSelectPersistencePathInput(
+  input: unknown,
+): ShareDeploymentSelectPersistencePathInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid service data path selection request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    projectDirectory: sanitizeHtmlShareString(source.projectDirectory, 'projectDirectory', 4096),
+  };
+}
+
+function sanitizeShareDeploymentPersistenceDeploymentIdInput(value: unknown): string {
+  return sanitizeHtmlShareString(value, 'deploymentId', 128);
+}
+
+function sanitizeShareDeploymentDownloadPersistenceInput(
+  input: unknown,
+): ShareDeploymentDownloadPersistenceInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid service data download request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    deploymentId: sanitizeShareDeploymentPersistenceDeploymentIdInput(source.deploymentId),
+    projectDirectory: sanitizeOptionalHtmlShareString(source.projectDirectory, 'projectDirectory', 4096),
+    shareId: sanitizeOptionalHtmlShareString(source.shareId, 'shareId', 128),
+  };
+}
+
+function sanitizeShareDeploymentClearPersistenceInput(
+  input: unknown,
+): ShareDeploymentClearPersistenceInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid service data clear request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    deploymentId: sanitizeShareDeploymentPersistenceDeploymentIdInput(source.deploymentId),
+    confirmText: sanitizeHtmlShareString(source.confirmText, 'confirmText', 32),
+  };
+}
+
+function sanitizeShareDeploymentImportPersistenceInput(
+  input: unknown,
+): ShareDeploymentImportPersistenceInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid service data import request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    deploymentId: sanitizeShareDeploymentPersistenceDeploymentIdInput(source.deploymentId),
+    archivePath: sanitizeHtmlShareString(source.archivePath, 'archivePath', 4096),
+    confirmText: sanitizeHtmlShareString(source.confirmText, 'confirmText', 32),
+  };
+}
+
+const SHARE_DEPLOYMENT_PERSISTENCE_EXCLUDED_SEGMENTS = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  '.next',
+  '.output',
+]);
+
+async function estimateShareDeploymentPersistencePathBytes(filePath: string): Promise<number | undefined> {
+  const maxVisited = 2000;
+  let visited = 0;
+  let total = 0;
+  async function visit(currentPath: string): Promise<void> {
+    if (visited >= maxVisited) return;
+    visited += 1;
+    const stats = await fs.promises.lstat(currentPath);
+    if (stats.isSymbolicLink()) return;
+    if (stats.isFile()) {
+      total += stats.size;
+      return;
+    }
+    if (!stats.isDirectory()) return;
+    const entries = await fs.promises.readdir(currentPath);
+    await Promise.all(entries.map(entry => visit(path.join(currentPath, entry))));
+  }
+  try {
+    await visit(filePath);
+    return total;
+  } catch {
+    return undefined;
+  }
+}
+
+async function buildShareDeploymentPersistenceBindingFromPath(
+  projectDirectory: string,
+  selectedPath: string,
+): Promise<ShareDeploymentPersistence['bindings'][number]> {
+  const projectRoot = await fs.promises.realpath(projectDirectory);
+  const targetPath = await fs.promises.realpath(selectedPath);
+  const relativePath = path.relative(projectRoot, targetPath).replace(/\\/g, '/');
+  if (
+    !relativePath ||
+    relativePath === '.' ||
+    relativePath.startsWith('../') ||
+    path.isAbsolute(relativePath)
+  ) {
+    throw new Error('Selected service data must be inside the project directory.');
+  }
+  const segments = relativePath.split('/').filter(Boolean);
+  if (
+    segments.length === 0 ||
+    segments.some(segment => SHARE_DEPLOYMENT_PERSISTENCE_EXCLUDED_SEGMENTS.has(segment)) ||
+    segments.some(segment => segment === '..' || segment.startsWith('.env'))
+  ) {
+    throw new Error('Selected service data path is not supported.');
+  }
+  const stats = await fs.promises.lstat(targetPath);
+  if (stats.isSymbolicLink()) {
+    throw new Error('Symbolic links cannot be used as service data.');
+  }
+  const kind = stats.isDirectory()
+    ? ShareDeploymentPersistenceBindingKind.Directory
+    : stats.isFile()
+      ? ShareDeploymentPersistenceBindingKind.File
+      : null;
+  if (!kind) {
+    throw new Error('Selected service data must be a file or directory.');
+  }
+  const sizeBytes = await estimateShareDeploymentPersistencePathBytes(targetPath);
+  return {
+    appPath: relativePath,
+    dataPath: relativePath,
+    kind,
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
   };
 }
 
@@ -5593,6 +5783,48 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle(ShareDeploymentIpc.SelectPersistencePath, async (event, input: unknown) => {
+    try {
+      const options = sanitizeShareDeploymentSelectPersistencePathInput(input);
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      let defaultPath: string | undefined;
+      try {
+        const stats = await fs.promises.stat(options.projectDirectory);
+        if (stats.isDirectory()) {
+          defaultPath = options.projectDirectory;
+        }
+      } catch {
+        defaultPath = undefined;
+      }
+      const dialogOptions = {
+        properties: ['openDirectory'] as 'openDirectory'[],
+        defaultPath,
+      };
+      const result = ownerWindow
+        ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      if (result.canceled || result.filePaths.length === 0) {
+        return {
+          success: true,
+        };
+      }
+      const binding = await buildShareDeploymentPersistenceBindingFromPath(
+        options.projectDirectory,
+        result.filePaths[0],
+      );
+      return {
+        success: true,
+        binding,
+      };
+    } catch (error) {
+      console.error('[ShareDeployment] failed to select service data path:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to select service data path',
+      };
+    }
+  });
+
   ipcMain.handle(ShareDeploymentIpc.CreateNodeDeployment, async (_event, input: unknown) => {
     let archivePath: string | undefined;
     try {
@@ -5609,6 +5841,12 @@ if (!gotTheLock) {
         port: options.port,
       });
       archivePath = packaged.archivePath;
+      const analysis = options.persistence
+        ? {
+            ...packaged.analysis,
+            persistence: options.persistence,
+          }
+        : packaged.analysis;
       const isStaticDeployment = packaged.deploymentKind === ShareDeploymentKind.StaticSite;
       const clientSourceKey = isStaticDeployment
         ? buildStaticDeploymentClientSourceKey({
@@ -5630,7 +5868,7 @@ if (!gotTheLock) {
               ...options,
               archivePath: packaged.archivePath,
               sourceSha256: packaged.sourceSha256,
-              analysis: packaged.analysis,
+              analysis,
               archiveBytes: packaged.archiveBytes,
               clientSourceKey,
               deploymentKind: ShareDeploymentKind.StaticSite,
@@ -5646,7 +5884,7 @@ if (!gotTheLock) {
               ...options,
               archivePath: packaged.archivePath,
               sourceSha256: packaged.sourceSha256,
-              analysis: packaged.analysis,
+              analysis,
               archiveBytes: packaged.archiveBytes,
               clientSourceKey,
               deploymentKind: ShareDeploymentKind.NodeService,
@@ -5692,6 +5930,70 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to load deployment',
+      };
+    }
+  });
+
+  ipcMain.handle(ShareDeploymentIpc.GetPersistence, async (_event, deploymentId: unknown) => {
+    try {
+      const id = sanitizeShareDeploymentPersistenceDeploymentIdInput(deploymentId);
+      return await getDeploymentPersistence(getServerApiBaseUrl(), fetchWithAuth, id);
+    } catch (error) {
+      console.error('[ShareDeployment] failed to load service data:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to load service data',
+      };
+    }
+  });
+
+  ipcMain.handle(ShareDeploymentIpc.DownloadPersistenceArchive, async (_event, input: unknown) => {
+    try {
+      const options = sanitizeShareDeploymentDownloadPersistenceInput(input);
+      return await downloadDeploymentPersistenceArchive(
+        getServerApiBaseUrl(),
+        fetchWithAuth,
+        options,
+      );
+    } catch (error) {
+      console.error('[ShareDeployment] failed to download service data:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to download service data',
+      };
+    }
+  });
+
+  ipcMain.handle(ShareDeploymentIpc.ClearPersistenceData, async (_event, input: unknown) => {
+    try {
+      const options = sanitizeShareDeploymentClearPersistenceInput(input);
+      return await clearDeploymentPersistenceData(
+        getServerApiBaseUrl(),
+        fetchWithAuth,
+        options,
+      );
+    } catch (error) {
+      console.error('[ShareDeployment] failed to clear service data:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to clear service data',
+      };
+    }
+  });
+
+  ipcMain.handle(ShareDeploymentIpc.ImportPersistenceData, async (_event, input: unknown) => {
+    try {
+      const options = sanitizeShareDeploymentImportPersistenceInput(input);
+      return await importDeploymentPersistenceData(
+        getServerApiBaseUrl(),
+        fetchWithAuth,
+        options,
+      );
+    } catch (error) {
+      console.error('[ShareDeployment] failed to import service data:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to import service data',
       };
     }
   });

@@ -16,6 +16,8 @@ import {
   ShareDeploymentCandidateSource,
   ShareDeploymentKind,
   ShareDeploymentPackageManager,
+  type ShareDeploymentPersistence,
+  ShareDeploymentPersistenceProvider,
   type ShareDeploymentProjectAnalysis,
   type ShareDeploymentProjectCandidate,
   type ShareDeploymentRecord,
@@ -234,6 +236,8 @@ interface NodeDeploymentDialogState {
   localService?: LocalWebService;
   projectDirectory?: string;
   analysis?: ShareDeploymentProjectAnalysis;
+  persistence?: ShareDeploymentPersistence;
+  isPersistenceExpanded?: boolean;
   accessMode?: HtmlShareAccessModeValue;
   nodeVersion?: string;
   installCommand?: string;
@@ -783,6 +787,51 @@ function formatDeploymentBytes(bytes?: number): string {
     unitIndex += 1;
   }
   return `${value >= 10 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function cloneNodeDeploymentPersistence(
+  persistence?: ShareDeploymentPersistence,
+): ShareDeploymentPersistence | undefined {
+  if (!persistence) return undefined;
+  return {
+    ...persistence,
+    bindings: persistence.bindings.map(binding => ({ ...binding })),
+  };
+}
+
+function createDisabledNodeDeploymentPersistence(): ShareDeploymentPersistence {
+  return {
+    enabled: false,
+    provider: ShareDeploymentPersistenceProvider.Filesystem,
+    bindings: [],
+  };
+}
+
+function normalizeNodeDeploymentPersistenceForSubmit(
+  persistence?: ShareDeploymentPersistence,
+): ShareDeploymentPersistence | undefined {
+  if (!persistence?.enabled || persistence.bindings.length === 0) {
+    return createDisabledNodeDeploymentPersistence();
+  }
+  return {
+    enabled: true,
+    provider: ShareDeploymentPersistenceProvider.Filesystem,
+    quotaBytes: persistence.quotaBytes,
+    bindings: persistence.bindings.slice(0, 8).map(binding => ({
+      appPath: binding.appPath,
+      dataPath: binding.dataPath,
+      kind: binding.kind,
+      sizeBytes: binding.sizeBytes,
+    })),
+  };
+}
+
+function hasNodeDeploymentDataFile(persistence?: ShareDeploymentPersistence): boolean {
+  return Boolean(
+    persistence?.bindings.some(binding =>
+      /\.(db|sqlite|sqlite3)$/i.test(binding.appPath),
+    ),
+  );
 }
 
 function shouldContinueArtifactShareAfterLookupFailure(
@@ -2113,6 +2162,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       | 'buildCommand'
       | 'startCommand'
       | 'port'
+      | 'persistence'
     >>,
   ) => {
     setNodeDeploymentDialog({
@@ -2144,6 +2194,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       localService,
       projectDirectory,
       analysis,
+      persistence: cloneNodeDeploymentPersistence(analysis?.persistence)
+        ?? createDisabledNodeDeploymentPersistence(),
+      isPersistenceExpanded: false,
       accessMode: HtmlShareAccessMode.Code,
       nodeVersion: '20',
       installCommand: analysis?.installCommand ?? 'npm install',
@@ -2297,6 +2350,26 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
   const handleShareLocalServiceDeployment = useCallback(async () => {
     if (!browserLocalService || isHtmlSharing) return;
+    const storedProjectDirectory =
+      browserLocalServiceProjectDirectory ||
+      readNodeDeploymentProjectDirectory(
+        sessionId,
+        browserLocalService.url,
+      );
+    const currentDialogDeployment =
+      !isNodeDeploymentBusy &&
+      isNodeDeploymentDialogForLocalService(nodeDeploymentDialog, browserLocalService)
+        ? nodeDeploymentDialog?.deployment
+        : undefined;
+    const existingDeployment = selectedNodeDeployment ?? currentDialogDeployment;
+    if (!isNodeDeploymentBusy && existingDeployment) {
+      setIsNodeDeploymentDialogOpen(true);
+      openNodeDeploymentStatusDialog(existingDeployment, {
+        localService: browserLocalService,
+        projectDirectory: nodeDeploymentDialog?.projectDirectory || storedProjectDirectory,
+      });
+      return;
+    }
     if (
       nodeDeploymentDialog &&
       (isNodeDeploymentBusy ||
@@ -2309,20 +2382,6 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     if (!(await ensureHtmlShareAllowed())) return;
     const runId = nodeDeploymentActionRunIdRef.current + 1;
     nodeDeploymentActionRunIdRef.current = runId;
-    const storedProjectDirectory =
-      browserLocalServiceProjectDirectory ||
-      readNodeDeploymentProjectDirectory(
-        sessionId,
-        browserLocalService.url,
-      );
-    if (selectedNodeDeployment) {
-      setIsNodeDeploymentDialogOpen(true);
-      openNodeDeploymentStatusDialog(selectedNodeDeployment, {
-        localService: browserLocalService,
-        projectDirectory: storedProjectDirectory,
-      });
-      return;
-    }
 
     if (!(await checkLocalServiceAvailable(browserLocalService))) {
       openLocalServiceUnavailableDialog(browserLocalService, storedProjectDirectory);
@@ -2450,6 +2509,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         accessMode: normalizeHtmlShareAccessMode(
           currentDialog?.accessMode ?? deployment?.accessMode ?? confirmDialog.accessMode,
         ),
+        persistence: currentDialog?.persistence ?? confirmDialog.persistence,
+        isPersistenceExpanded: currentDialog?.isPersistenceExpanded,
+        deployment,
       });
     } catch (error) {
       if (nodeDeploymentActionRunIdRef.current !== runId) return;
@@ -2489,11 +2551,12 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
     setNodeDeploymentDialog(previous => previous
       ? {
-          ...previous,
-          projectDirectory: result.path || previous.projectDirectory,
-          analysis: undefined,
-          error: undefined,
-        }
+        ...previous,
+        projectDirectory: result.path || previous.projectDirectory,
+        analysis: undefined,
+        persistence: createDisabledNodeDeploymentPersistence(),
+        error: undefined,
+      }
       : previous);
   }, [
     isNodeDeploymentBusy,
@@ -2520,7 +2583,100 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         ...previous,
         projectDirectory,
         analysis: undefined,
+        persistence: createDisabledNodeDeploymentPersistence(),
         error: undefined,
+      };
+    });
+  }, []);
+
+  const toggleNodeDeploymentPersistenceEnabled = useCallback((enabled: boolean) => {
+    setNodeDeploymentDialog(previous => {
+      if (!previous || previous.kind !== NodeDeploymentDialogKind.Confirm) return previous;
+      const currentPersistence = previous.persistence
+        ?? cloneNodeDeploymentPersistence(previous.analysis?.persistence)
+        ?? createDisabledNodeDeploymentPersistence();
+      return {
+        ...previous,
+        persistence: {
+          ...currentPersistence,
+          enabled: enabled && currentPersistence.bindings.length > 0,
+        },
+        isPersistenceExpanded: enabled ? true : previous.isPersistenceExpanded,
+      };
+    });
+  }, []);
+
+  const toggleNodeDeploymentPersistenceExpanded = useCallback(() => {
+    setNodeDeploymentDialog(previous => {
+      if (!previous || previous.kind !== NodeDeploymentDialogKind.Confirm) return previous;
+      return {
+        ...previous,
+        isPersistenceExpanded: !previous.isPersistenceExpanded,
+      };
+    });
+  }, []);
+
+  const addNodeDeploymentPersistenceDirectory = useCallback(async () => {
+    const currentDialog = nodeDeploymentDialog;
+    if (
+      !currentDialog ||
+      currentDialog.kind !== NodeDeploymentDialogKind.Confirm ||
+      !currentDialog.projectDirectory ||
+      isNodeDeploymentBusy
+    ) {
+      return;
+    }
+    const result = await window.electron?.shareDeployment?.selectPersistencePath({
+      projectDirectory: currentDialog.projectDirectory,
+    });
+    if (!result?.success || !result.binding) {
+      if (result?.error) {
+        setNodeDeploymentDialog(previous => previous
+          ? { ...previous, error: result.error }
+          : previous);
+      }
+      return;
+    }
+    const selectedBinding = result.binding;
+    setNodeDeploymentDialog(previous => {
+      if (!previous || previous.kind !== NodeDeploymentDialogKind.Confirm) return previous;
+      const currentPersistence = previous.persistence
+        ?? cloneNodeDeploymentPersistence(previous.analysis?.persistence)
+        ?? createDisabledNodeDeploymentPersistence();
+      const nextBindings = [
+        selectedBinding,
+        ...currentPersistence.bindings.filter(binding => binding.appPath !== selectedBinding.appPath),
+      ].slice(0, 8);
+      return {
+        ...previous,
+        persistence: {
+          ...currentPersistence,
+          enabled: true,
+          bindings: nextBindings,
+        },
+        isPersistenceExpanded: true,
+        error: undefined,
+      };
+    });
+  }, [
+    isNodeDeploymentBusy,
+    nodeDeploymentDialog,
+  ]);
+
+  const removeNodeDeploymentPersistenceBinding = useCallback((appPath: string) => {
+    setNodeDeploymentDialog(previous => {
+      if (!previous || previous.kind !== NodeDeploymentDialogKind.Confirm) return previous;
+      const currentPersistence = previous.persistence
+        ?? cloneNodeDeploymentPersistence(previous.analysis?.persistence)
+        ?? createDisabledNodeDeploymentPersistence();
+      const bindings = currentPersistence.bindings.filter(binding => binding.appPath !== appPath);
+      return {
+        ...previous,
+        persistence: {
+          ...currentPersistence,
+          enabled: bindings.length > 0 && currentPersistence.enabled,
+          bindings,
+        },
       };
     });
   }, []);
@@ -2589,6 +2745,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             return {
               ...nextDialog,
               accessMode: previous.accessMode ?? nextDialog.accessMode,
+              persistence: previous.persistence ?? nextDialog.persistence,
+              isPersistenceExpanded: previous.isPersistenceExpanded,
             };
           });
         })
@@ -2727,6 +2885,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         buildCommand,
         startCommand,
         port,
+        persistence: normalizeNodeDeploymentPersistenceForSubmit(currentDialog.persistence),
       });
       if (nodeDeploymentActionRunIdRef.current !== runId) return;
       if (!result?.success || !result.deployment) {
@@ -2755,6 +2914,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         buildCommand: currentDialog.buildCommand,
         startCommand: currentDialog.startCommand,
         port: currentDialog.port,
+        persistence: currentDialog.persistence,
       });
     } catch (error) {
       if (nodeDeploymentActionRunIdRef.current !== runId) return;
@@ -2772,6 +2932,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         buildCommand: currentDialog.buildCommand,
         startCommand: currentDialog.startCommand,
         port: currentDialog.port,
+        persistence: currentDialog.persistence,
       });
     } finally {
       if (nodeDeploymentActionRunIdRef.current === runId) {
@@ -2980,6 +3141,167 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     retryNodeDeployment,
     selectedNodeDeploymentLookupKey,
     sessionId,
+  ]);
+
+  const updateNodeDeploymentPersistenceState = useCallback((
+    deploymentId: string,
+    persistence: ShareDeploymentPersistence | null | undefined,
+    message: string,
+  ) => {
+    setNodeDeploymentDialog(previous => {
+      if (
+        !previous ||
+        previous.kind !== NodeDeploymentDialogKind.Status ||
+        previous.deployment?.deploymentId !== deploymentId
+      ) {
+        return previous;
+      }
+      return {
+        ...previous,
+        message,
+        deployment: {
+          ...previous.deployment,
+          persistence: persistence ?? previous.deployment.persistence,
+        },
+        error: undefined,
+      };
+    });
+  }, []);
+
+  const downloadNodeDeploymentPersistenceArchive = useCallback(async () => {
+    const currentDialog = nodeDeploymentDialog;
+    const deployment = currentDialog?.deployment;
+    if (
+      currentDialog?.kind !== NodeDeploymentDialogKind.Status ||
+      !deployment?.deploymentId ||
+      isNodeDeploymentStatusUpdating
+    ) {
+      return;
+    }
+    setIsNodeDeploymentStatusUpdating(true);
+    setNodeDeploymentDialog(previous => previous ? { ...previous, error: undefined } : previous);
+    try {
+      const result = await window.electron?.shareDeployment?.downloadPersistenceArchive({
+        deploymentId: deployment.deploymentId,
+        shareId: deployment.shareId,
+        projectDirectory: currentDialog.projectDirectory,
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || t('nodeDeploymentPersistenceDownloadFailed'));
+      }
+      setNodeDeploymentDialog(previous => previous
+        ? {
+            ...previous,
+            message: t('nodeDeploymentPersistenceDownloadComplete')
+              .replace('{path}', result.filePath || ''),
+            error: undefined,
+          }
+        : previous);
+    } catch (error) {
+      setNodeDeploymentDialog(previous => previous
+        ? {
+            ...previous,
+            error: error instanceof Error ? error.message : t('nodeDeploymentPersistenceDownloadFailed'),
+          }
+        : previous);
+    } finally {
+      setIsNodeDeploymentStatusUpdating(false);
+    }
+  }, [
+    isNodeDeploymentStatusUpdating,
+    nodeDeploymentDialog,
+  ]);
+
+  const clearNodeDeploymentPersistenceData = useCallback(async () => {
+    const currentDialog = nodeDeploymentDialog;
+    const deployment = currentDialog?.deployment;
+    if (
+      currentDialog?.kind !== NodeDeploymentDialogKind.Status ||
+      !deployment?.deploymentId ||
+      isNodeDeploymentStatusUpdating
+    ) {
+      return;
+    }
+    const confirmText = window.prompt(t('nodeDeploymentPersistenceClearPrompt'));
+    if (confirmText !== t('nodeDeploymentPersistenceClearConfirmText')) return;
+    setIsNodeDeploymentStatusUpdating(true);
+    setNodeDeploymentDialog(previous => previous ? { ...previous, error: undefined } : previous);
+    try {
+      const result = await window.electron?.shareDeployment?.clearPersistenceData({
+        deploymentId: deployment.deploymentId,
+        confirmText,
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || t('nodeDeploymentPersistenceClearFailed'));
+      }
+      updateNodeDeploymentPersistenceState(
+        deployment.deploymentId,
+        result.persistence,
+        t('nodeDeploymentPersistenceClearComplete'),
+      );
+    } catch (error) {
+      setNodeDeploymentDialog(previous => previous
+        ? {
+            ...previous,
+            error: error instanceof Error ? error.message : t('nodeDeploymentPersistenceClearFailed'),
+          }
+        : previous);
+    } finally {
+      setIsNodeDeploymentStatusUpdating(false);
+    }
+  }, [
+    isNodeDeploymentStatusUpdating,
+    nodeDeploymentDialog,
+    updateNodeDeploymentPersistenceState,
+  ]);
+
+  const importNodeDeploymentPersistenceData = useCallback(async () => {
+    const currentDialog = nodeDeploymentDialog;
+    const deployment = currentDialog?.deployment;
+    if (
+      currentDialog?.kind !== NodeDeploymentDialogKind.Status ||
+      !deployment?.deploymentId ||
+      isNodeDeploymentStatusUpdating
+    ) {
+      return;
+    }
+    const fileResult = await window.electron?.dialog?.selectFile({
+      title: t('nodeDeploymentPersistenceImportSelectTitle'),
+      filters: [{ name: 'ZIP', extensions: ['zip'] }],
+    });
+    if (!fileResult?.success || !fileResult.path) return;
+    const confirmText = window.prompt(t('nodeDeploymentPersistenceImportPrompt'));
+    if (confirmText !== t('nodeDeploymentPersistenceImportConfirmText')) return;
+    setIsNodeDeploymentStatusUpdating(true);
+    setNodeDeploymentDialog(previous => previous ? { ...previous, error: undefined } : previous);
+    try {
+      const result = await window.electron?.shareDeployment?.importPersistenceData({
+        deploymentId: deployment.deploymentId,
+        archivePath: fileResult.path,
+        confirmText,
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || t('nodeDeploymentPersistenceImportFailed'));
+      }
+      updateNodeDeploymentPersistenceState(
+        deployment.deploymentId,
+        result.persistence,
+        t('nodeDeploymentPersistenceImportComplete'),
+      );
+    } catch (error) {
+      setNodeDeploymentDialog(previous => previous
+        ? {
+            ...previous,
+            error: error instanceof Error ? error.message : t('nodeDeploymentPersistenceImportFailed'),
+          }
+        : previous);
+    } finally {
+      setIsNodeDeploymentStatusUpdating(false);
+    }
+  }, [
+    isNodeDeploymentStatusUpdating,
+    nodeDeploymentDialog,
+    updateNodeDeploymentPersistenceState,
   ]);
 
   const pollingDeploymentId = nodeDeploymentDialog?.deployment?.deploymentId;
@@ -3814,6 +4136,22 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     nodeDeploymentDialog?.phase,
     nodeDeployment?.status,
   );
+  const nodeDeploymentPersistence =
+    nodeDeploymentDialog?.kind === NodeDeploymentDialogKind.Confirm
+      ? nodeDeploymentDialog.persistence
+      : nodeDeployment?.persistence;
+  const nodeDeploymentPersistenceBindings = nodeDeploymentPersistence?.bindings ?? [];
+  const isNodeDeploymentPersistenceEnabled = Boolean(
+    nodeDeploymentPersistence?.enabled && nodeDeploymentPersistenceBindings.length > 0,
+  );
+  const nodeDeploymentPersistenceUsedBytes = nodeDeploymentPersistence?.usedBytes ?? undefined;
+  const nodeDeploymentPersistenceQuotaBytes = nodeDeploymentPersistence?.quotaBytes ?? undefined;
+  const canManageNodeDeploymentPersistence = Boolean(
+    isNodeDeploymentStatusDialog &&
+      nodeDeployment?.deploymentId &&
+      isNodeDeploymentPersistenceEnabled &&
+      !isNodeDeploymentStatusUpdating,
+  );
 
   return (
     <>
@@ -4463,6 +4801,91 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                       )}
                     </div>
 
+                    {!isStaticNodeDeployment && (
+                      <div className="rounded-lg border border-border bg-surface px-3 py-2 text-xs leading-5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-medium text-foreground">
+                              {t('nodeDeploymentPersistenceTitle')}
+                            </div>
+                            <div className="mt-1 text-secondary">
+                              {isNodeDeploymentPersistenceEnabled
+                                ? t('nodeDeploymentPersistenceEnabledHint')
+                                : t('nodeDeploymentPersistenceDisabledHint')}
+                            </div>
+                          </div>
+                          <label className="inline-flex shrink-0 items-center gap-1.5 text-xs text-secondary">
+                            <input
+                              type="checkbox"
+                              checked={isNodeDeploymentPersistenceEnabled}
+                              onChange={event => toggleNodeDeploymentPersistenceEnabled(event.target.checked)}
+                              disabled={
+                                isNodeDeploymentBusy ||
+                                (nodeDeploymentPersistenceBindings.length === 0 &&
+                                  !isNodeDeploymentPersistenceEnabled)
+                              }
+                            />
+                            {t('nodeDeploymentPersistenceEnable')}
+                          </label>
+                        </div>
+                        {hasNodeDeploymentDataFile(nodeDeploymentPersistence) && (
+                          <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                            {t('nodeDeploymentPersistenceDataFileHint')}
+                          </div>
+                        )}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={toggleNodeDeploymentPersistenceExpanded}
+                            className="inline-flex h-7 items-center rounded-md border border-border px-2 text-xs text-secondary transition-colors hover:bg-background hover:text-foreground"
+                          >
+                            {nodeDeploymentDialog.isPersistenceExpanded
+                              ? t('nodeDeploymentPersistenceHideItems')
+                              : t('nodeDeploymentPersistenceShowItems')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void addNodeDeploymentPersistenceDirectory()}
+                            disabled={isNodeDeploymentBusy || nodeDeploymentPersistenceBindings.length >= 8}
+                            className="inline-flex h-7 items-center rounded-md border border-border px-2 text-xs text-secondary transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {t('nodeDeploymentPersistenceAddDirectory')}
+                          </button>
+                        </div>
+                        {nodeDeploymentDialog.isPersistenceExpanded && (
+                          <div className="mt-2 space-y-1.5">
+                            {nodeDeploymentPersistenceBindings.length === 0 ? (
+                              <div className="text-muted">
+                                {t('nodeDeploymentPersistenceNoItems')}
+                              </div>
+                            ) : (
+                              nodeDeploymentPersistenceBindings.map(binding => (
+                                <div
+                                  key={binding.appPath}
+                                  className="flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5"
+                                >
+                                  <span className="min-w-0 flex-1 truncate text-secondary">
+                                    {binding.appPath}
+                                    {binding.sizeBytes !== undefined
+                                      ? ` · ${formatDeploymentBytes(binding.sizeBytes)}`
+                                      : ''}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeNodeDeploymentPersistenceBinding(binding.appPath)}
+                                    disabled={isNodeDeploymentBusy}
+                                    className="shrink-0 rounded px-1.5 py-0.5 text-xs text-muted transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {t('nodeDeploymentPersistenceRemove')}
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {nodeDeploymentAnalysis && (
                       <div className="rounded-lg border border-border bg-surface px-3 py-2 text-xs leading-5">
                         <div className="font-medium text-foreground">
@@ -4473,6 +4896,27 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                             .replace('{files}', String(nodeDeploymentAnalysis.totalFiles))
                             .replace('{size}', formatDeploymentBytes(nodeDeploymentAnalysis.totalBytes))}
                         </div>
+                        {isNodeDeploymentPersistenceEnabled && (
+                            <div className="mt-2 rounded-md border border-border bg-background px-2 py-1.5">
+                              <div className="font-medium text-foreground">
+                                {t('nodeDeploymentPersistenceSummary')}
+                              </div>
+                              <div className="mt-1 text-secondary">
+                                {t('nodeDeploymentPersistenceSummaryValue')
+                                  .replace(
+                                    '{count}',
+                                    String(nodeDeploymentPersistenceBindings.length),
+                                  )
+                                  .replace(
+                                    '{paths}',
+                                    nodeDeploymentPersistenceBindings
+                                      .slice(0, 4)
+                                      .map(binding => binding.appPath)
+                                      .join(', '),
+                                  )}
+                              </div>
+                            </div>
+                          )}
                         {nodeDeploymentAnalysis.warnings.length > 0 && (
                           <div className="mt-2 text-amber-700 dark:text-amber-200">
                             {nodeDeploymentAnalysis.warnings.slice(0, 3).join('\n')}
@@ -4510,6 +4954,69 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                         statusLabel={nodeDeploymentStatusLabel}
                         message={nodeDeploymentDialog.message}
                       />
+                    )}
+                    {isNodeDeploymentStatusDialog && nodeDeployment && isNodeDeploymentPersistenceEnabled && (
+                      <div className="rounded-lg border border-border bg-surface px-3 py-2 text-xs leading-5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-medium text-foreground">
+                              {t('nodeDeploymentPersistenceTitle')}
+                            </div>
+                            <div className="mt-1 text-secondary">
+                              {t('nodeDeploymentPersistenceUsage')
+                                .replace(
+                                  '{used}',
+                                  formatDeploymentBytes(nodeDeploymentPersistenceUsedBytes),
+                                )
+                                .replace(
+                                  '{quota}',
+                                  formatDeploymentBytes(nodeDeploymentPersistenceQuotaBytes),
+                                )}
+                            </div>
+                          </div>
+                          {nodeDeploymentPersistence?.usedBytesEstimated && (
+                            <span className="shrink-0 rounded bg-background px-1.5 py-0.5 text-muted">
+                              {t('nodeDeploymentPersistenceEstimated')}
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-2 space-y-1">
+                          {nodeDeploymentPersistenceBindings.slice(0, 5).map(binding => (
+                            <div
+                              key={binding.appPath}
+                              className="truncate rounded-md border border-border bg-background px-2 py-1 text-secondary"
+                            >
+                              {binding.appPath}
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void downloadNodeDeploymentPersistenceArchive()}
+                            disabled={!canManageNodeDeploymentPersistence}
+                            className="inline-flex h-7 items-center rounded-md border border-border px-2 text-xs text-secondary transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {t('nodeDeploymentPersistenceDownload')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void importNodeDeploymentPersistenceData()}
+                            disabled={!canManageNodeDeploymentPersistence}
+                            className="inline-flex h-7 items-center rounded-md border border-border px-2 text-xs text-secondary transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {t('nodeDeploymentPersistenceImport')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void clearNodeDeploymentPersistenceData()}
+                            disabled={!canManageNodeDeploymentPersistence}
+                            className="inline-flex h-7 items-center rounded-md border border-red-200 px-2 text-xs text-red-500 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-500/30 dark:hover:bg-red-500/10"
+                          >
+                            {t('nodeDeploymentPersistenceClear')}
+                          </button>
+                        </div>
+                      </div>
                     )}
                     {isNodeDeploymentStatusDialog && nodeDeployment && (
                       <>

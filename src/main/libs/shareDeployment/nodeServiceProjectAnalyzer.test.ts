@@ -7,6 +7,8 @@ import {
   ShareDeploymentCandidateSource,
   ShareDeploymentKind,
   ShareDeploymentPackageManager,
+  ShareDeploymentPersistenceBindingKind,
+  ShareDeploymentPersistenceProvider,
 } from '../../../shared/shareDeployment/constants';
 import {
   buildNodeServiceProjectPackagePlan,
@@ -15,6 +17,8 @@ import {
 } from './nodeServiceProjectAnalyzer';
 
 const tempDirectories: string[] = [];
+const BROTATO_PROJECT_DIR = process.env.SHARE_DEPLOYMENT_BROTATO_PROJECT_DIR ||
+  '/Users/admin/lobsterai/project/brotato-clone';
 
 async function makeTempProjectWithPackageJson(packageJson: Record<string, unknown>): Promise<string> {
   const projectDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobster-node-analyzer-test-'));
@@ -142,6 +146,70 @@ describe('buildNodeServiceProjectPackagePlan', () => {
     expect(plan.analysis.installCommand).toBe('npm install');
     expect(plan.analysis.warnings.join('\n')).toContain('No npm lockfile');
   });
+
+  test('detects lightweight filesystem persistence candidates', async () => {
+    const projectDirectory = await makeTempProjectWithPackageJson({
+      name: 'sqlite-scoreboard-service',
+      scripts: {
+        start: 'node server.js',
+      },
+    });
+    await writeFile(projectDirectory, 'server.js', 'console.log("server");');
+    await writeFile(projectDirectory, 'db.sqlite', 'sqlite');
+    await writeFile(projectDirectory, 'uploads/avatar.txt', 'avatar');
+
+    const plan = await buildNodeServiceProjectPackagePlan({
+      projectDirectory,
+      localServiceUrl: 'http://localhost:3000',
+    });
+
+    expect(plan.analysis.persistence).toEqual({
+      enabled: true,
+      provider: ShareDeploymentPersistenceProvider.Filesystem,
+      quotaBytes: 100 * 1024 * 1024,
+      bindings: [
+        {
+          appPath: 'db.sqlite',
+          dataPath: 'db.sqlite',
+          kind: ShareDeploymentPersistenceBindingKind.File,
+          sizeBytes: 6,
+        },
+        {
+          appPath: 'uploads',
+          dataPath: 'uploads',
+          kind: ShareDeploymentPersistenceBindingKind.Directory,
+          sizeBytes: 6,
+        },
+      ],
+    });
+  });
+
+  test.skipIf(!fs.existsSync(BROTATO_PROJECT_DIR))(
+    'detects brotato leaderboard data as a user-manageable persistence directory',
+    async () => {
+      const plan = await buildNodeServiceProjectPackagePlan({
+        projectDirectory: BROTATO_PROJECT_DIR,
+        localServiceUrl: 'http://localhost:3000',
+      });
+
+      expect(plan.analysis.success).toBe(true);
+      expect(plan.analysis.deploymentKind).toBe(ShareDeploymentKind.NodeService);
+      expect(plan.analysis.packageManager).toBe(ShareDeploymentPackageManager.Npm);
+      expect(plan.analysis.persistence?.enabled).toBe(true);
+      expect(plan.analysis.persistence?.provider).toBe(ShareDeploymentPersistenceProvider.Filesystem);
+      expect(plan.analysis.persistence?.bindings).toEqual([
+        {
+          appPath: 'data',
+          dataPath: 'data',
+          kind: ShareDeploymentPersistenceBindingKind.Directory,
+          sizeBytes: expect.any(Number),
+        },
+      ]);
+      expect(plan.analysis.persistence?.bindings[0]?.sizeBytes ?? 0).toBeGreaterThan(0);
+      expect(plan.entries.some(entry => entry.archiveName === 'data/leaderboard.json')).toBe(true);
+      expect(plan.entries.some(entry => entry.archiveName.startsWith('node_modules/'))).toBe(false);
+    },
+  );
 
   test('allows plain static site directories without package.json', async () => {
     const projectDirectory = await makeTempStaticSiteProject();

@@ -10,6 +10,8 @@ import {
   type ShareDeploymentDetectCandidatesInput,
   ShareDeploymentKind,
   ShareDeploymentPackageManager,
+  ShareDeploymentPersistenceBindingKind,
+  ShareDeploymentPersistenceProvider,
   type ShareDeploymentProjectAnalysis,
   type ShareDeploymentProjectCandidate,
 } from '../../../shared/shareDeployment/constants';
@@ -26,6 +28,9 @@ export const NODE_SERVICE_DEPLOYMENT_LIMITS = {
 
 const PACKAGE_JSON_FILE_NAME = 'package.json';
 const STATIC_SITE_ENTRY_FILE = 'index.html';
+const DEFAULT_PERSISTENCE_QUOTA_BYTES = 100 * 1024 * 1024;
+const PERSISTENCE_ROOT_DIRECTORY_NAMES = new Set(['data', 'uploads', 'storage']);
+const PERSISTENCE_DATABASE_EXTENSIONS = new Set(['.db', '.sqlite', '.sqlite3']);
 
 const COMMON_BLOCKED_DIRECTORY_NAMES = [
   '.git',
@@ -145,8 +150,15 @@ export interface NodeServicePackageCollection {
   entries: NodeServicePackageEntry[];
   totalBytes: number;
   excludedCount: number;
+  persistence?: ShareDeploymentProjectAnalysis['persistence'];
   warnings: string[];
   blockers: string[];
+}
+
+interface PersistenceCandidate {
+  appPath: string;
+  kind: ShareDeploymentPersistenceBindingKind;
+  sizeBytes: number;
 }
 
 function normalizeArchiveName(value: string): string {
@@ -175,6 +187,18 @@ function isSecretLikeFileName(name: string): boolean {
 
 function isBlockedFileName(name: string): boolean {
   return BLOCKED_FILE_NAMES.has(name) || isEnvFileName(name) || isSecretLikeFileName(name);
+}
+
+function isRootPersistenceDirectory(relativeParts: string[]): boolean {
+  return relativeParts.length === 1 && PERSISTENCE_ROOT_DIRECTORY_NAMES.has(relativeParts[0]);
+}
+
+function isPersistenceDatabaseFile(relativeParts: string[], fileName: string): boolean {
+  return relativeParts.length <= 2 && PERSISTENCE_DATABASE_EXTENSIONS.has(path.extname(fileName).toLowerCase());
+}
+
+function persistenceDataPath(relativePath: string): string {
+  return normalizeArchiveName(relativePath);
 }
 
 function isBlockedPathPart(part: string, blockedDirectoryNames: Set<string>): boolean {
@@ -530,10 +554,29 @@ async function collectPackageEntries(
   maxTotalBytes: number,
 ): Promise<NodeServicePackageCollection> {
   const entries: NodeServicePackageEntry[] = [];
+  const persistenceCandidates = new Map<string, PersistenceCandidate>();
   const warnings: string[] = [];
   const blockers: string[] = [];
   let totalBytes = 0;
   let excludedCount = 0;
+
+  function addPersistenceCandidate(
+    relativePath: string,
+    kind: ShareDeploymentPersistenceBindingKind,
+    sizeBytes: number,
+  ): void {
+    const archiveName = normalizeArchiveName(relativePath);
+    const previous = persistenceCandidates.get(archiveName);
+    if (previous) {
+      previous.sizeBytes += sizeBytes;
+      return;
+    }
+    persistenceCandidates.set(archiveName, {
+      appPath: archiveName,
+      kind,
+      sizeBytes,
+    });
+  }
 
   async function walk(directory: string): Promise<void> {
     if (blockers.length > 0) return;
@@ -566,6 +609,11 @@ async function collectPackageEntries(
 
       const stat = await fs.promises.stat(absolutePath);
       totalBytes += stat.size;
+      if (isPersistenceDatabaseFile(relativeParts, child.name)) {
+        addPersistenceCandidate(relativePath, ShareDeploymentPersistenceBindingKind.File, stat.size);
+      } else if (relativeParts.length > 1 && isRootPersistenceDirectory([relativeParts[0]])) {
+        addPersistenceCandidate(relativeParts[0], ShareDeploymentPersistenceBindingKind.Directory, stat.size);
+      }
       entries.push({
         absolutePath,
         archiveName: normalizeArchiveName(relativePath),
@@ -590,10 +638,27 @@ async function collectPackageEntries(
     warnings.push(`${excludedCount} files or directories will be excluded from the deployment package.`);
   }
 
+  const persistenceBindings = Array.from(persistenceCandidates.values())
+    .sort((a, b) => a.appPath.localeCompare(b.appPath))
+    .map(candidate => ({
+      appPath: candidate.appPath,
+      dataPath: persistenceDataPath(candidate.appPath),
+      kind: candidate.kind,
+      sizeBytes: candidate.sizeBytes,
+    }));
+
   return {
     entries: entries.sort((a, b) => a.archiveName.localeCompare(b.archiveName)),
     totalBytes,
     excludedCount,
+    persistence: persistenceBindings.length
+      ? {
+          enabled: true,
+          provider: ShareDeploymentPersistenceProvider.Filesystem,
+          quotaBytes: DEFAULT_PERSISTENCE_QUOTA_BYTES,
+          bindings: persistenceBindings,
+        }
+      : undefined,
     warnings,
     blockers,
   };
@@ -752,6 +817,7 @@ export async function buildNodeServiceProjectPackagePlan(
         entries: [],
         totalBytes: 0,
         excludedCount: 0,
+        persistence: undefined,
         warnings: [],
         blockers: [],
       };
@@ -773,6 +839,7 @@ export async function buildNodeServiceProjectPackagePlan(
     totalFiles: collected.entries.length,
     totalBytes: collected.totalBytes,
     excludedCount: collected.excludedCount,
+    persistence: collected.persistence,
     warnings: [...warnings, ...collected.warnings],
     blockers: [...blockers, ...collected.blockers],
   };
