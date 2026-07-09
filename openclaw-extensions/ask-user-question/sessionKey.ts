@@ -3,7 +3,7 @@ const AGENT_SESSION_PREFIX = 'agent:';
 const LOBSTERAI_SESSION_MARKER = 'lobsterai';
 const SUBAGENT_SESSION_MARKER = 'subagent';
 
-export function isLobsterAiDesktopSessionKey(sessionKey: string | undefined | null): boolean {
+export function isAskUserQuestionCandidateSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = (sessionKey ?? '').trim();
   if (!raw) return false;
 
@@ -22,8 +22,10 @@ export function isLobsterAiDesktopSessionKey(sessionKey: string | undefined | nu
 
   const agentId = parts[1]?.trim() ?? '';
   const source = parts[2]?.trim() ?? '';
-  const sessionId = parts.slice(3).join(':').trim();
-  return agentId.length > 0
-    && sessionId.length > 0
-    && (source === LOBSTERAI_SESSION_MARKER || source === SUBAGENT_SESSION_MARKER);
+  const rest = parts.slice(3).join(':').trim();
+  if (!agentId || !rest) {
+    return false;
+  }
+
+  return source === LOBSTERAI_SESSION_MARKER || source === SUBAGENT_SESSION_MARKER;
 }

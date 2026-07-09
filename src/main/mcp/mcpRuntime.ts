@@ -14,9 +14,9 @@ import {
   type MediaGenerationRequest,
   type MediaGenerationResponse,
 } from '../libs/mcpBridgeServer';
-import { parseManagedSessionKey } from '../libs/openclawChannelSessionSync';
 import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
 import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
+import { resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey } from '../libs/openclawLocalSessionResolver';
 import { resolveStdioCommand } from '../libs/resolveStdioCommand';
 import type { SqliteStore } from '../sqliteStore';
 import { createMcpLaunchSourceFingerprint, McpLaunchResolutionStatus } from './mcpLaunchResolution';
@@ -118,8 +118,16 @@ export class McpRuntime {
 
     this.bridgeServer.onAskUser(request => {
       const sessionId = request.sessionKey
-        ? parseManagedSessionKey(request.sessionKey)?.sessionId ?? '__askuser__'
+        ? resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey(
+            this.deps.getStore().getDatabase(),
+            request.sessionKey,
+          )
         : '__askuser__';
+      if (!sessionId) {
+        console.warn('[AskUser] denied request for non-desktop or unknown session:', request.sessionKey);
+        this.resolveAskUser(request.requestId, { behavior: 'deny' });
+        return;
+      }
       const windows = BrowserWindow.getAllWindows();
       windows.forEach(win => {
         if (win.isDestroyed()) return;

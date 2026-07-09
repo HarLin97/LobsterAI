@@ -253,7 +253,6 @@ import {
   buildManagedSessionKey,
   DEFAULT_MANAGED_AGENT_ID,
   OpenClawChannelSessionSync,
-  parseManagedSessionKey,
 } from './libs/openclawChannelSessionSync';
 import {
   classifyAppConfigChange,
@@ -270,6 +269,10 @@ import {
   backupOpenClawConfig,
   getOpenClawGatewayRepairBusyError,
 } from './libs/openclawGatewayRepair';
+import {
+  getCoworkParentSessionId,
+  resolveCoworkSessionIdByOpenClawSessionKey,
+} from './libs/openclawLocalSessionResolver';
 import {
   addMemoryEntry,
   deleteMemoryEntry,
@@ -3144,6 +3147,30 @@ const normalizeMediaSelectionState = (selection?: MediaSelectionState): MediaSel
   return normalized;
 };
 
+const resolveMediaSelectionForSession = (sessionId: string | null): MediaSelectionState | undefined => {
+  let current = sessionId?.trim() || null;
+  const seen = new Set<string>();
+
+  for (let depth = 0; current && depth < 16; depth++) {
+    if (seen.has(current)) return undefined;
+    seen.add(current);
+
+    const selection = normalizeMediaSelectionState(mediaSelectionBySession.get(current));
+    if (selection && selection.mode !== 'none') {
+      return selection;
+    }
+
+    try {
+      current = getCoworkParentSessionId(getStore().getDatabase(), current);
+    } catch (error) {
+      console.warn('[MediaGeneration] failed to resolve parent media selection:', error);
+      return undefined;
+    }
+  }
+
+  return undefined;
+};
+
 const mediaModelIdForOutput = (model: unknown, fallback?: string): string => {
   const rawModel = typeof model === 'string' && model.trim() ? model : fallback;
   return mediaModelDisplayName(rawModel, rawModel) || 'default';
@@ -3943,7 +3970,7 @@ if (!gotTheLock) {
   };
 
   const extractSessionIdFromKey = (sessionKey: string): string | null =>
-    parseManagedSessionKey(sessionKey)?.sessionId ?? null;
+    resolveCoworkSessionIdByOpenClawSessionKey(getStore().getDatabase(), sessionKey);
 
   /**
    * Handle media generation tool callbacks from the OpenClaw plugin.
@@ -3957,7 +3984,7 @@ if (!gotTheLock) {
     const action = (args.action as string) || 'generate';
     const serverBaseUrl = getServerApiBaseUrl();
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);
-    const selection = normalizeMediaSelectionState(sessionId ? mediaSelectionBySession.get(sessionId) : undefined);
+    const selection = resolveMediaSelectionForSession(sessionId);
     const prompt = typeof args.prompt === 'string' ? args.prompt : '';
     const explicitModel = canonicalizeMediaModelId(typeof args.model === 'string' ? args.model : '');
     const resolvedModelFromSelection = tool === MediaGenerationTool.Image

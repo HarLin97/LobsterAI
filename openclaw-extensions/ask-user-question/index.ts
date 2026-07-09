@@ -1,6 +1,8 @@
 import { Type } from '@sinclair/typebox';
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 
+import { isAskUserQuestionCandidateSessionKey } from './sessionKey';
+
 /**
  * AskUserQuestion plugin for OpenClaw.
  *
@@ -139,15 +141,14 @@ const plugin = {
       return;
     }
 
-    // Use a factory so the tool is only available for desktop (webchat) sessions.
+    // Use a factory so the tool is only available for LobsterAI local-session candidates.
     // IM channel sessions (qqbot, dingtalk, weixin, feishu, etc.) get null → tool hidden.
     api.registerTool((ctx) => {
-      // Only enable for LobsterAI desktop sessions (sessionKey starts with 'agent:main:lobsterai:').
+      // Enable for LobsterAI desktop sessions across agents and delegated child sessions.
       // IM channel sessions (dingtalk, qqbot, weixin, feishu, wecom, etc.) should not have this tool
       // so the model executes delete commands directly without confirmation on IM.
       const sessionKey = ctx.sessionKey ?? '';
-      const isLocalDesktop = sessionKey.startsWith('agent:main:lobsterai:');
-      if (!isLocalDesktop) {
+      if (!isAskUserQuestionCandidateSessionKey(sessionKey)) {
         return null;
       }
 
