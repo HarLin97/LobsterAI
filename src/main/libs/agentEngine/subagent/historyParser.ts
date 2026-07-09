@@ -43,6 +43,28 @@ const getToolName = (value: Record<string, unknown>): string => {
   return '';
 };
 
+const parseHistoryTimestamp = (value: unknown): number | undefined => {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value !== 'string' || !value.trim()) {
+    return undefined;
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const getHistoryMessageTimestamp = (value: Record<string, unknown>): number | undefined => (
+  parseHistoryTimestamp(value.timestamp)
+  ?? parseHistoryTimestamp(value.createdAt)
+  ?? parseHistoryTimestamp(value.created_at)
+  ?? parseHistoryTimestamp(value.time)
+);
+
 const isToolCallBlock = (value: Record<string, unknown>): boolean => {
   const blockType = typeof value.type === 'string' ? value.type.trim() : '';
   return blockType === 'tool_use'
@@ -198,6 +220,18 @@ export const parseSubagentGatewayHistoryMessages = (
   const createId = options.createId ?? (() => crypto.randomUUID());
   let timestamp = options.startTimestamp ?? Date.now() - historyMessages.length * 1000;
   const messages: SubagentCoworkMessage[] = [];
+  const rawTimestampOffsets = new WeakMap<Record<string, unknown>, number>();
+  const nextTimestamp = (raw?: Record<string, unknown>): number => {
+    const parsed = raw ? getHistoryMessageTimestamp(raw) : undefined;
+    if (parsed != null) {
+      const offset = rawTimestampOffsets.get(raw) ?? 0;
+      rawTimestampOffsets.set(raw, offset + 1);
+      const value = parsed + offset;
+      timestamp = Math.max(timestamp, value + 1);
+      return value;
+    }
+    return timestamp++;
+  };
 
   for (const raw of historyMessages) {
     if (!isRecord(raw)) continue;
@@ -212,11 +246,11 @@ export const parseSubagentGatewayHistoryMessages = (
             id: createId(),
             type: 'assistant',
             content: text,
-            timestamp: timestamp++,
+            timestamp: nextTimestamp(raw),
           });
         }
         for (const block of collectToolCallBlocks(raw)) {
-          messages.push(createToolUseMessage(block, createId, timestamp++));
+          messages.push(createToolUseMessage(block, createId, nextTimestamp(raw)));
         }
       } else if (role === 'user' && Array.isArray(raw.content)) {
         for (const block of raw.content as unknown[]) {
@@ -233,7 +267,7 @@ export const parseSubagentGatewayHistoryMessages = (
                 id: createId(),
                 type: 'tool_result',
                 content: resultText,
-                timestamp: timestamp++,
+                timestamp: nextTimestamp(raw),
                 metadata: {
                   toolResult: resultText,
                   toolUseId,
@@ -248,7 +282,7 @@ export const parseSubagentGatewayHistoryMessages = (
             id: createId(),
             type: 'user',
             content: text,
-            timestamp: timestamp++,
+            timestamp: nextTimestamp(raw),
           });
         }
       } else if (text && !shouldSuppressHeartbeatText(role as 'user' | 'assistant' | 'system', text)) {
@@ -256,7 +290,7 @@ export const parseSubagentGatewayHistoryMessages = (
           id: createId(),
           type: role === 'system' ? 'system' : role as 'user' | 'assistant',
           content: text,
-          timestamp: timestamp++,
+          timestamp: nextTimestamp(raw),
         });
       }
       continue;
@@ -271,7 +305,7 @@ export const parseSubagentGatewayHistoryMessages = (
           id: createId(),
           type: 'tool_result',
           content: text,
-          timestamp: timestamp++,
+          timestamp: nextTimestamp(raw),
           metadata: { toolName: toolName || undefined, toolResult: text, toolUseId },
         });
       }
@@ -283,13 +317,13 @@ export const parseSubagentGatewayHistoryMessages = (
         if (!isRecord(block)) continue;
         const blockType = typeof block.type === 'string' ? block.type : '';
         if (isToolCallBlock(block)) {
-          messages.push(createToolUseMessage(block, createId, timestamp++));
+          messages.push(createToolUseMessage(block, createId, nextTimestamp(raw)));
         } else if (blockType === 'text' && typeof block.text === 'string' && block.text.trim()) {
           messages.push({
             id: createId(),
             type: 'assistant',
             content: block.text.trim(),
-            timestamp: timestamp++,
+            timestamp: nextTimestamp(raw),
           });
         }
       }

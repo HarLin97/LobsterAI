@@ -43,7 +43,7 @@ rewrite the intro`;
       {
         type: 'assistant',
         content: 'new intro',
-        timestamp: expect.any(Number),
+        timestamp: 20,
         metadata: { isStreaming: false, isFinal: true },
       },
     ]);
