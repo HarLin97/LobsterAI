@@ -1,4 +1,4 @@
-import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ExclamationTriangleIcon, MinusIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
@@ -71,6 +71,9 @@ function detectDangerLevelFromCommand(command: string): DangerLevel {
 interface CoworkPermissionModalProps {
   permission: CoworkPermissionRequest;
   onRespond: (result: CoworkPermissionResult) => void;
+  onMinimize?: () => void;
+  /** Keep the modal mounted (so in-progress answers survive) but visually hidden while minimized. */
+  hidden?: boolean;
 }
 
 type QuestionOption = {
@@ -185,6 +188,8 @@ const resolveConfirmModeButtons = (question: QuestionItem): { primary: QuestionO
 const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   permission,
   onRespond,
+  onMinimize,
+  hidden = false,
 }) => {
   const toolInput = useMemo(() => permission.toolInput ?? {}, [permission.toolInput]);
 
@@ -412,7 +417,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
+    <div className={`fixed inset-0 z-50 items-center justify-center modal-backdrop ${hidden ? 'hidden' : 'flex'}`}>
       <div className="modal-content w-fit min-w-[28rem] max-w-[calc(100vw-2rem)] mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
@@ -442,10 +447,23 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                   : i18nService.t('coworkPermissionDescription')}
             </p>
           </div>
+          {onMinimize && (
+            <button
+              type="button"
+              onClick={onMinimize}
+              className="p-2 rounded-lg hover:bg-surface-raised text-secondary transition-colors"
+              aria-label={i18nService.t('coworkPermissionMinimize')}
+              title={i18nService.t('coworkPermissionMinimize')}
+            >
+              <MinusIcon className="h-5 w-5" />
+            </button>
+          )}
           <button
+            type="button"
             onClick={handleDeny}
             className="p-2 rounded-lg hover:bg-surface-raised text-secondary transition-colors"
-            aria-label="Close"
+            aria-label={i18nService.t('coworkPermissionCancel')}
+            title={i18nService.t('coworkPermissionCancel')}
           >
             <XMarkIcon className="h-5 w-5" />
           </button>

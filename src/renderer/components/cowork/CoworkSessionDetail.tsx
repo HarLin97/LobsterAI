@@ -3,7 +3,9 @@ import {
   ArrowDownIcon,
   ChatBubbleLeftIcon,
   DocumentArrowDownIcon,
+  ExclamationTriangleIcon,
   PhotoIcon,
+  QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -63,7 +65,14 @@ import { setActiveKitIds } from '../../store/slices/kitSlice';
 import { setActiveSkillIds } from '../../store/slices/skillSlice';
 import type { Artifact } from '../../types/artifact';
 import { ArtifactTypeValue, PREVIEWABLE_ARTIFACT_TYPES } from '../../types/artifact';
-import type { CoworkImageAttachment, CoworkMessage, CoworkMessageMetadata, SubagentSessionSummary } from '../../types/cowork';
+import type {
+  CoworkImageAttachment,
+  CoworkMessage,
+  CoworkMessageMetadata,
+  CoworkPermissionRequest,
+  CoworkPermissionResult,
+  SubagentSessionSummary,
+} from '../../types/cowork';
 import {
   CoworkCollaborationMode,
   type CoworkCollaborationMode as CoworkCollaborationModeType,
@@ -83,7 +92,6 @@ import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
-import WindowTitleBar from '../window/WindowTitleBar';
 import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlock';
 import { type CoworkOpenShareOptionsEventDetail, CoworkUiEvent } from './constants';
 import ContextUsageIndicator from './ContextUsageIndicator';
@@ -135,6 +143,9 @@ interface CoworkSessionDetailProps {
   onToggleSidebar?: () => void;
   onNewChat?: () => void;
   updateBadge?: React.ReactNode;
+  minimizedPermission?: CoworkPermissionRequest | null;
+  onRestorePermission?: () => void;
+  onRespondToPermission?: (result: CoworkPermissionResult) => void;
 }
 
 interface BrowserLocalServiceContext {
@@ -170,6 +181,32 @@ const RAIL_LINE_HOVER_STEPS = [28, 18, 13, 10] as const;
 const RAIL_LINE_HEIGHT = 3;
 const RAIL_TARGET_RENDER_RELEASE_DELAY = 2400;
 const RAIL_TARGET_SCROLL_RETRY_LIMIT = 6;
+
+const getPermissionPreviewText = (permission: CoworkPermissionRequest): string => {
+  const toolInput = permission.toolInput ?? {};
+  if (permission.toolName === 'AskUserQuestion') {
+    const rawQuestions = (toolInput as Record<string, unknown>).questions;
+    if (Array.isArray(rawQuestions)) {
+      const firstQuestion = rawQuestions.find((question): question is Record<string, unknown> => (
+        !!question && typeof question === 'object' && !Array.isArray(question)
+      ));
+      if (typeof firstQuestion?.question === 'string') {
+        return firstQuestion.question;
+      }
+    }
+  }
+
+  const command = (toolInput as Record<string, unknown>).command;
+  if (typeof command === 'string' && command.trim()) {
+    return command.trim();
+  }
+
+  try {
+    return JSON.stringify(toolInput);
+  } catch {
+    return permission.toolName;
+  }
+};
 
 const getRailLineWidth = (
   index: number,
@@ -1092,9 +1129,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   onToggleSidebar,
   onNewChat,
   updateBadge,
+  minimizedPermission,
+  onRestorePermission,
+  onRespondToPermission,
 }) => {
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
+  const isWindows = window.electron.platform === 'win32';
   const currentSession = useSelector(selectCurrentSession);
   const isStreaming = useSelector(selectIsStreaming);
   const remoteManaged = useSelector(selectRemoteManaged);
@@ -1119,6 +1160,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const planConfirmation = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.planConfirmations[currentSession.id] : undefined
   );
+  const queuedSteerCount = useSelector((state: RootState) => {
+    if (!currentSession?.id) return 0;
+    return (
+      (state.cowork.pendingSteers[currentSession.id]?.length ?? 0)
+      + (state.cowork.rejectedSteers[currentSession.id]?.length ?? 0)
+    );
+  });
   const messageRailIndex = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.messageRailIndexBySessionId[currentSession.id] ?? [] : []
   );
@@ -1148,6 +1196,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const scrollToBottomIntentRef = useRef(false);
   const scrollToBottomSettleTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const suppressSelectedTextActionUntilRef = useRef(0);
+  const minimizedPermissionPreview = minimizedPermission
+    ? getPermissionPreviewText(minimizedPermission)
+    : '';
+  // AskUserQuestion is the agent asking for input, not a risky action awaiting
+  // approval — style it neutrally instead of as an amber warning.
+  const isMinimizedQuestionPermission = minimizedPermission?.toolName === 'AskUserQuestion';
+  const handleDenyMinimizedPermission = useCallback(() => {
+    onRespondToPermission?.({
+      behavior: 'deny',
+      message: 'Permission denied',
+    });
+  }, [onRespondToPermission]);
 
   const clearScrollToBottomSettleTimers = useCallback(() => {
     scrollToBottomSettleTimersRef.current.forEach(timer => clearTimeout(timer));
@@ -1634,6 +1694,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [isArtifactPanelExpanded, setIsArtifactPanelExpanded] = useState(false);
   const [isExpandedPromptInputHidden, setIsExpandedPromptInputHidden] = useState(false);
   const [isExpandedConversationPreviewOpen, setIsExpandedConversationPreviewOpen] = useState(false);
+  const [goalStatusBarPortalTarget, setGoalStatusBarPortalTarget] = useState<HTMLDivElement | null>(null);
+  const [steerPreviewPortalTarget, setSteerPreviewPortalTarget] = useState<HTMLDivElement | null>(null);
   const previousArtifactPanelOpenRef = useRef(isPanelOpen);
   const fileListPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
   const browserPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
@@ -1694,6 +1756,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         task: run.task,
         label: run.label,
         sessionKey: run.sessionKey,
+        childCoworkSessionId: run.childCoworkSessionId,
         parentSessionId: targetSessionId,
         status: run.status,
         createdAt: run.createdAt,
@@ -2123,6 +2186,34 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Subagents);
     dispatch(activateArtifactSubagentTab({ sessionId }));
     void fetchSubagents(sessionId, { showLoading: subagents.length === 0 });
+  }, [
+    dispatch,
+    fetchSubagents,
+    sessionId,
+    setSessionActiveSpecialPreviewTab,
+    setSessionSubagentPreviewTabOpen,
+    subagents.length,
+  ]);
+
+  useEffect(() => {
+    const handleSelectSubagentEvent = (event: Event) => {
+      const detail = (event as CustomEvent<SubagentSessionSummary | null>).detail;
+      if (!detail) {
+        setSelectedSubagent(null);
+        return;
+      }
+      if (!sessionId || detail.parentSessionId !== sessionId) return;
+      setSelectedSubagent(detail);
+      setSessionSubagentPreviewTabOpen(true);
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Subagents);
+      dispatch(activateArtifactSubagentTab({ sessionId }));
+      void fetchSubagents(sessionId, { showLoading: subagents.length === 0 });
+    };
+
+    window.addEventListener(CoworkUiEvent.SelectSubagent, handleSelectSubagentEvent);
+    return () => {
+      window.removeEventListener(CoworkUiEvent.SelectSubagent, handleSelectSubagentEvent);
+    };
   }, [
     dispatch,
     fetchSubagents,
@@ -4183,6 +4274,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const artifactPanelOverlayBottom = artifactPanelIsOverlay && !isExpandedPromptInputHidden
     ? promptInputAreaHeight
     : 0;
+  const showPromptAuxiliaryBars = !remoteManaged && !(isArtifactPanelExpanded && isExpandedPromptInputHidden);
+  const showExternalGoalStatusBar = Boolean(currentSession.goal && showPromptAuxiliaryBars);
+  const showExternalSteerPreview = queuedSteerCount > 0 && showPromptAuxiliaryBars;
   const artifactPanelInnerWidth = artifactPanelIsOverlay ? '100%' : artifactPanelFrameWidth;
   const shouldShowTurnNavigationRail = railItems.length > 1 && isScrollable;
   const shouldShowScrollToBottom = isScrollable && !shouldAutoScroll;
@@ -4321,7 +4415,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       >
         {/* Left side: Toggle buttons (when collapsed) + Title */}
         <div className="flex h-full flex-1 items-center gap-2 min-w-0">
-          {isSidebarCollapsed && (
+          {isSidebarCollapsed && !isWindows && (
             <div className={`non-draggable flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
               <button
                 type="button"
@@ -4593,8 +4687,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           >
             <ArtifactPanelIcon className="h-4 w-4" open={isPanelOpen} />
           </button>
-
-          <WindowTitleBar inline className="ml-1" />
         </div>
       </div>
 
@@ -4929,6 +5021,84 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <PromptInputCollapseIcon className="h-3.5 w-3.5" />
           </button>
         )}
+        {minimizedPermission && (
+          <div className={`${COWORK_DETAIL_CONTENT_CLASS} mb-2`}>
+            <div
+              className={`flex min-w-0 items-center gap-1 rounded-xl border p-1 text-sm shadow-subtle ${
+                isMinimizedQuestionPermission
+                  ? 'border-border bg-surface'
+                  : 'border-amber-200 bg-amber-50/95 dark:border-amber-900/70 dark:bg-amber-950/35'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={onRestorePermission}
+                disabled={!onRestorePermission}
+                className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                  isMinimizedQuestionPermission
+                    ? 'enabled:hover:bg-surface-raised'
+                    : 'enabled:hover:bg-amber-100/70 dark:enabled:hover:bg-amber-900/40'
+                }`}
+                title={minimizedPermissionPreview}
+              >
+                {isMinimizedQuestionPermission ? (
+                  <QuestionMarkCircleIcon className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                ) : (
+                  <ExclamationTriangleIcon className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" aria-hidden="true" />
+                )}
+                <span
+                  className={`shrink-0 font-medium ${
+                    isMinimizedQuestionPermission ? 'text-foreground' : 'text-amber-900 dark:text-amber-100'
+                  }`}
+                >
+                  {i18nService.t(
+                    isMinimizedQuestionPermission ? 'coworkQuestionAwaitingAnswer' : 'coworkPermissionAwaiting'
+                  )}
+                </span>
+                {!isMinimizedQuestionPermission && (
+                  <span className="shrink-0 text-amber-700/80 dark:text-amber-200/75">
+                    {minimizedPermission.toolName}
+                  </span>
+                )}
+                <span
+                  className={`min-w-0 flex-1 truncate ${
+                    isMinimizedQuestionPermission
+                      ? 'text-secondary'
+                      : 'text-amber-800/85 dark:text-amber-100/80'
+                  }`}
+                >
+                  {minimizedPermissionPreview}
+                </span>
+                {onRestorePermission && (
+                  <span
+                    className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium ${
+                      isMinimizedQuestionPermission
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-50'
+                    }`}
+                  >
+                    {i18nService.t(
+                      isMinimizedQuestionPermission ? 'coworkQuestionResume' : 'coworkPermissionRestore'
+                    )}
+                  </span>
+                )}
+              </button>
+              {onRespondToPermission && (
+                <button
+                  type="button"
+                  onClick={handleDenyMinimizedPermission}
+                  className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    isMinimizedQuestionPermission
+                      ? 'text-secondary hover:bg-surface-raised hover:text-foreground'
+                      : 'text-amber-800 hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-900/60'
+                  }`}
+                >
+                  {i18nService.t('coworkDeny')}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {isArtifactPanelExpanded && (expandedConversationPreview || isSessionBusy) && (
           <div className={`${COWORK_DETAIL_CONTENT_CLASS} mb-1`}>
             <div className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-subtle">
@@ -5013,11 +5183,22 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </div>
         )}
         <div className={COWORK_DETAIL_CONTENT_CLASS}>
+          {showExternalGoalStatusBar && (
+            <div className={`relative z-10 ${showExternalSteerPreview ? 'mb-1.5' : '-mb-px'}`}>
+              <div ref={setGoalStatusBarPortalTarget} />
+            </div>
+          )}
+          {showExternalSteerPreview && (
+            <div className="relative z-10 -mb-px">
+              <div ref={setSteerPreviewPortalTarget} />
+            </div>
+          )}
           <CoworkPromptInput
             ref={promptInputRef}
             onSubmit={onContinue}
             onStop={onStop}
             isStreaming={isSessionBusy}
+            canSteer={isStreaming && !isContextBusy}
             placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
             disabled={remoteManaged}
             size={isArtifactPanelExpanded ? 'compact' : 'large'}
@@ -5032,6 +5213,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             sessionId={currentSession?.id}
             goal={!remoteManaged ? currentSession?.goal : null}
             onGoalCommand={!remoteManaged && currentSession?.id ? handleGoalCommand : undefined}
+            goalStatusBarPortalTarget={showExternalGoalStatusBar ? goalStatusBarPortalTarget : null}
+            goalStatusBarAttached={!showExternalSteerPreview}
+            steerPreviewPortalTarget={showExternalSteerPreview ? steerPreviewPortalTarget : null}
             contextUsageControl={(
               <div className="flex min-w-0 items-center gap-2">
                 <div ref={compactConfirmRef} className="relative inline-flex flex-shrink-0">

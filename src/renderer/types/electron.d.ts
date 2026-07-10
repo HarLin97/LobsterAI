@@ -592,6 +592,7 @@ interface IElectronAPI {
       workingDirectory?: string;
       icon?: string;
       skillIds?: string[];
+      subagentAllowAgentIds?: string[];
       source?: string;
       presetId?: string;
     }) => Promise<Agent>;
@@ -606,10 +607,13 @@ interface IElectronAPI {
         workingDirectory?: string;
         icon?: string;
         skillIds?: string[];
+        subagentAllowAgentIds?: string[];
         enabled?: boolean;
         pinned?: boolean;
+        sortOrder?: number | null;
       },
     ) => Promise<Agent>;
+    reorder: (agentIds: string[]) => Promise<Agent[] | null>;
     cleanupLegacyIdentityBlock: (id: string) => Promise<AgentLegacyIdentityCleanupResult>;
     delete: (id: string) => Promise<boolean>;
     presets: () => Promise<PresetAgent[]>;
@@ -743,6 +747,20 @@ interface IElectronAPI {
       code?: string;
       engineStatus?: OpenClawEngineStatus;
     }>;
+    submitSteer: (options: { sessionId: string; text: string; clientSteerId: string }) => Promise<{
+      success: boolean;
+      status: 'pending' | 'accepted' | 'rejected';
+      clientSteerId: string;
+      error?: string;
+      reason?:
+        | 'no_active_turn'
+        | 'not_streaming'
+        | 'context_maintenance'
+        | 'runtime_unsupported'
+        | 'runtime_rejected'
+        | 'empty_input'
+        | 'unknown';
+    }>;
     runGoalCommand: (options: { sessionId: string; command: string }) => Promise<{
       success: boolean;
       goal?: CoworkGoal | null;
@@ -873,10 +891,35 @@ interface IElectronAPI {
         task: string | null;
         label: string | null;
         sessionKey: string | null;
+        childCoworkSessionId?: string | null;
         status: 'running' | 'done' | 'error';
         createdAt: number;
         endedAt: number | null;
       }>;
+      error?: string;
+    }>;
+    listSubagentSessionsByAgent: (options: {
+      agentId: string;
+      limit?: number;
+      offset?: number;
+    }) => Promise<{
+      success: boolean;
+      runs?: Array<{
+        id: string;
+        agentId: string | null;
+        task: string | null;
+        label: string | null;
+        sessionKey: string | null;
+        childCoworkSessionId?: string | null;
+        parentSessionId: string;
+        parentAgentId?: string | null;
+        parentTitle?: string | null;
+        parentUpdatedAt?: number | null;
+        status: 'running' | 'done' | 'error';
+        createdAt: number;
+        endedAt: number | null;
+      }>;
+      hasMore?: boolean;
       error?: string;
     }>;
     deleteSubagentSession: (options: {
@@ -913,10 +956,12 @@ interface IElectronAPI {
     }) => Promise<{ success: boolean; error?: string }>;
     readBootstrapFile: (
       filename: string,
+      options?: { agentId?: string },
     ) => Promise<{ success: boolean; content: string; error?: string }>;
     writeBootstrapFile: (
       filename: string,
       content: string,
+      options?: { agentId?: string },
     ) => Promise<{ success: boolean; error?: string }>;
     onStreamMessage: (
       callback: (data: { sessionId: string; message: CoworkMessage; beforeMessageId?: string }) => void,
@@ -967,6 +1012,7 @@ interface IElectronAPI {
       title?: string;
       filters?: { name: string; extensions: string[] }[];
     }) => Promise<{ success: boolean; paths: string[] }>;
+    getPathForFile?: (file: File) => string;
     saveInlineFile: (options: {
       dataBase64: string;
       fileName?: string;
@@ -978,7 +1024,7 @@ interface IElectronAPI {
     ) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
     statFile: (
       filePath: string,
-    ) => Promise<{ success: boolean; isFile?: boolean; size?: number; mtimeMs?: number; error?: string }>;
+    ) => Promise<{ success: boolean; isFile?: boolean; isDirectory?: boolean; size?: number; mtimeMs?: number; error?: string }>;
     readTextFile: (
       filePath: string,
     ) => Promise<{

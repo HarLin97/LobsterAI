@@ -221,6 +221,45 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.models.pricing).toEqual({ enabled: false });
   });
 
+  test('defaults memory search to local FTS-only when embeddings are disabled', async () => {
+    const sync = await createSync({
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: true,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+        embeddingEnabled: false,
+        embeddingProvider: 'openai',
+        embeddingModel: '',
+        embeddingLocalModelPath: '',
+        embeddingVectorWeight: 0.7,
+        embeddingRemoteBaseUrl: '',
+        embeddingRemoteApiKey: '',
+      }),
+    });
+
+    const result = sync.sync('memory-search-default-fts');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.agents.defaults.memorySearch).toMatchObject({
+      enabled: true,
+      provider: 'none',
+      fallback: 'none',
+      store: {
+        fts: { tokenizer: 'trigram' },
+        vector: { enabled: false },
+      },
+    });
+    expect(config.agents.defaults.memorySearch.remote).toBeUndefined();
+  });
+
   test('configures OpenClaw chat image attachment limit to 30MB', async () => {
     const sync = await createSync();
 
@@ -243,6 +282,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       target: 'none',
       lightContext: true,
       isolatedSession: true,
+      skipWhenBusy: true,
     });
   });
 
@@ -272,6 +312,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       target: 'none',
       lightContext: true,
       isolatedSession: true,
+      skipWhenBusy: true,
     });
   });
 
@@ -533,6 +574,63 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.agents.defaults.workspace).toBe(path.join(stateDir, 'workspace-main'));
     expect(config.agents.defaults.cwd).toBe(path.resolve(mainAgentWorkingDirectory));
     expect(mainEntry.cwd).toBe(path.resolve(mainAgentWorkingDirectory));
+  });
+
+  test('does not copy main USER.md into non-main agent workspaces during sync', async () => {
+    const mainWorkspace = path.join(stateDir, 'workspace-main');
+    fs.mkdirSync(mainWorkspace, { recursive: true });
+    fs.writeFileSync(path.join(mainWorkspace, 'USER.md'), 'main user profile\n', 'utf8');
+
+    const sync = await createSync({
+      getAgents: () => [
+        {
+          id: 'main',
+          name: 'Main',
+          description: '',
+          systemPrompt: '',
+          identity: '',
+          model: '',
+          workingDirectory: '',
+          icon: '',
+          skillIds: [],
+          subagentAllowAgentIds: [],
+          enabled: true,
+          pinned: false,
+          isDefault: true,
+          source: 'custom',
+          presetId: '',
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        {
+          id: 'writer',
+          name: 'Writer',
+          description: '',
+          systemPrompt: 'writer soul',
+          identity: 'writer identity',
+          model: '',
+          workingDirectory: '',
+          icon: '',
+          skillIds: [],
+          subagentAllowAgentIds: [],
+          enabled: true,
+          pinned: false,
+          isDefault: false,
+          source: 'custom',
+          presetId: '',
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      ],
+    });
+
+    const result = sync.sync('agent-user-md-isolation');
+    expect(result.ok).toBe(true);
+
+    const writerWorkspace = path.join(stateDir, 'workspace-writer');
+    expect(fs.readFileSync(path.join(writerWorkspace, 'SOUL.md'), 'utf8')).toBe('writer soul\n');
+    expect(fs.readFileSync(path.join(writerWorkspace, 'IDENTITY.md'), 'utf8')).toBe('writer identity\n');
+    expect(fs.existsSync(path.join(writerWorkspace, 'USER.md'))).toBe(false);
   });
 
   test('merges all server models into existing lobsterai provider and updates image input', async () => {
@@ -1102,6 +1200,97 @@ describe('OpenClawConfigSync runtime config output', () => {
     // the xai plugin never loads and grok models lose their reasoningEffort
     // compat (xAI rejects the parameter for every model except grok-4.3).
     expect(config.plugins.allow).toContain('xai');
+  });
+
+  test('keeps memory-core selected and explicitly disables dreaming when dreaming is off', async () => {
+    fs.writeFileSync(configPath, JSON.stringify({
+      plugins: {
+        entries: {
+          'memory-core': {
+            enabled: true,
+            config: {
+              retention: {
+                shortTermDays: 14,
+              },
+              dreaming: {
+                enabled: true,
+                frequency: '0 3 * * *',
+              },
+            },
+          },
+        },
+      },
+    }, null, 2));
+
+    const sync = await createSync({
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+        dreamingEnabled: false,
+        dreamingFrequency: '0 3 * * *',
+      }),
+    });
+
+    const result = sync.sync('dreaming-disabled-cleanup');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.slots.memory).toBe('memory-core');
+    expect(config.plugins.allow).toContain('memory-core');
+    expect(config.plugins.entries['memory-core']).toEqual({
+      enabled: true,
+      config: {
+        retention: {
+          shortTermDays: 14,
+        },
+        dreaming: {
+          enabled: false,
+        },
+      },
+    });
+  });
+
+  test('writes enabled memory-core dreaming config when dreaming is on', async () => {
+    const sync = await createSync({
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+        dreamingEnabled: true,
+        dreamingFrequency: '0 4 * * *',
+      }),
+    });
+
+    const result = sync.sync('dreaming-enabled');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.slots.memory).toBe('memory-core');
+    expect(config.plugins.allow).toContain('memory-core');
+    expect(config.plugins.entries['memory-core']).toEqual({
+      enabled: true,
+      config: {
+        dreaming: {
+          enabled: true,
+          frequency: '0 4 * * *',
+        },
+      },
+    });
   });
 
   test('maps OpenAI OAuth mode to the ChatGPT Responses provider', async () => {

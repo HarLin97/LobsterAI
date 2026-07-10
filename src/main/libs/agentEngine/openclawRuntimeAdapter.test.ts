@@ -1742,6 +1742,23 @@ test('normal conversation does not receive plan mode instructions', async () => 
   expect(chatSendRequests[0].params.message).not.toContain('[Plan Mode recovery instruction]');
 });
 
+test('continueSession strips NUL characters from the persisted message and chat.send payload', async () => {
+  const nul = String.fromCharCode(0);
+  const { adapter, requests, session } = createRunTurnAdapter();
+
+  await adapter.continueSession('session-1', `请分析${nul}这段${nul}${nul}文本`);
+
+  const chatSendRequests = requests.filter((request) => request.method === 'chat.send');
+  expect(chatSendRequests).toHaveLength(1);
+  const outbound = chatSendRequests[0].params.message as string;
+  expect(outbound).not.toContain(nul);
+  expect(outbound).toContain('请分析这段文本');
+
+  const userMessages = session.messages.filter((message) => message.type === 'user');
+  expect(userMessages).toHaveLength(1);
+  expect(userMessages[0].content).toBe('请分析这段文本');
+});
+
 test('continueSession patches a session override before chat.send even when the model cache matches', async () => {
   const model = 'lobsterai-server/qwen3.6-plus-YoudaoInner';
   const { adapter, requests } = createRunTurnAdapter({
@@ -1967,6 +1984,8 @@ function createReconcileStore(
   let nextId = session.messages.length + 1;
   let replaceCallCount = 0;
   let lastReplaceArgs: { sessionId: string; authoritative: Array<Record<string, unknown>> } | null = null;
+  let replaceSessionCallCount = 0;
+  let lastReplaceSessionArgs: { sessionId: string; messages: Array<Record<string, unknown>> } | null = null;
   const updateSessionCalls: Array<{
     sessionId: string;
     patch: Record<string, unknown>;
@@ -1977,6 +1996,8 @@ function createReconcileStore(
     session,
     getReplaceCallCount: () => replaceCallCount,
     getLastReplaceArgs: () => lastReplaceArgs,
+    getReplaceSessionCallCount: () => replaceSessionCallCount,
+    getLastReplaceSessionArgs: () => lastReplaceSessionArgs,
     getUpdateSessionCalls: () => updateSessionCalls,
     store: {
       getSession: (sessionId: string) => (sessionId === session.id ? session : null),
@@ -2022,6 +2043,38 @@ function createReconcileStore(
             type: entry.role,
             content: entry.text,
             metadata: { isStreaming: false, isFinal: true, ...(entry.metadata ?? {}) },
+            timestamp: typeof entry.timestamp === 'number' ? entry.timestamp : nextId,
+          });
+        }
+      },
+      replaceSessionMessages: (sessionId: string, messages: Array<Record<string, unknown>>) => {
+        replaceSessionCallCount++;
+        lastReplaceSessionArgs = { sessionId, messages };
+        lastReplaceArgs = {
+          sessionId,
+          authoritative: messages
+            .filter((entry) => entry.type === 'user' || entry.type === 'assistant')
+            .map((entry) => {
+              const authoritative: Record<string, unknown> = {
+                role: entry.type,
+                text: entry.content,
+              };
+              if (typeof entry.timestamp === 'number') {
+                authoritative.timestamp = entry.timestamp;
+              }
+              if (entry.type === 'user' && entry.metadata !== undefined) {
+                authoritative.metadata = entry.metadata;
+              }
+              return authoritative;
+            }),
+        };
+        session.messages = session.messages.filter((m) => m.type === 'system');
+        for (const entry of messages) {
+          session.messages.push({
+            id: `msg-${nextId++}`,
+            type: entry.type,
+            content: entry.content,
+            metadata: entry.metadata,
             timestamp: typeof entry.timestamp === 'number' ? entry.timestamp : nextId,
           });
         }
@@ -2693,6 +2746,40 @@ test('reconcileWithHistory: content mismatch — triggers replace', async () => 
   expect(getReplaceCallCount()).toBe(1);
   const args = getLastReplaceArgs()!;
   expect((args.authoritative[1] as Record<string, unknown>).text).toBe('Full complete response from the model.');
+});
+
+test('subagent history sync preserves visible local user text instead of raw outbound prompt', async () => {
+  const rawOutboundPrompt = `[LobsterAI system instructions]
+hidden setup
+
+[Context bridge from previous LobsterAI conversation]
+previous context
+
+[Current user request]
+换一颗树再来一次`;
+  const { session, store, getLastReplaceArgs } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: rawOutboundPrompt, timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: '新的作文内容', timestamp: 2, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: rawOutboundPrompt, timestamp: 10 },
+        { role: 'assistant', content: '新的作文内容', timestamp: 20 },
+      ],
+    }),
+  };
+
+  await adapter.syncSessionHistoryFromGateway(session.id, 'agent:writer:subagent:abc');
+
+  expect(getLastReplaceArgs()?.authoritative).toEqual([
+    { role: 'user', text: '换一颗树再来一次', timestamp: 1, metadata: {} },
+    { role: 'assistant', text: '新的作文内容', timestamp: 20 },
+  ]);
 });
 
 test('lifecycle fallback repairs managed session assistant text from history', async () => {
@@ -3382,6 +3469,202 @@ test('chat final reuses committed assistant segment after sessions_yield history
   }
 });
 
+test('chat history sync reconstructs missed sessions_spawn tools after yield', async () => {
+  vi.useFakeTimers();
+  try {
+    const startupText = 'product-analyst completed. Now starting ts-engineer and qa-reviewer.';
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'coordinate a small change', timestamp: 1, metadata: {} },
+      { id: 'msg-2', type: 'assistant', content: startupText, timestamp: 2, metadata: { isStreaming: false, isFinal: true } },
+      { id: 'msg-3', type: 'tool_use', content: 'Using tool: sessions_spawn', timestamp: 3, metadata: { toolUseId: 'call-product', toolName: 'sessions_spawn' } },
+      { id: 'msg-4', type: 'tool_result', content: '{"status":"accepted","childSessionKey":"agent:product-analyst:subagent:one"}', timestamp: 4, metadata: { toolUseId: 'call-product' } },
+    ]);
+
+    const insertedRuns: Array<Record<string, unknown>> = [];
+    const subagentRunStore = {
+      insertSubagentRun: vi.fn((run: Record<string, unknown>) => insertedRuns.push(run)),
+      updateSubagentRunSessionKey: vi.fn(),
+      getSubagentRun: vi.fn(() => null),
+    };
+
+    const adapter = new OpenClawRuntimeAdapter(store, {}, {}, subagentRunStore as never);
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    adapter.gatewayClient = {
+      start: () => {},
+      stop: () => {},
+      request: async () => ({
+        messages: [
+          { role: 'user', content: 'coordinate a small change' },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: startupText },
+              {
+                type: 'toolCall',
+                id: 'call-ts',
+                name: 'sessions_spawn',
+                arguments: {
+                  agentId: 'ts-engineer',
+                  task: 'implement the change',
+                },
+              },
+              {
+                type: 'toolCall',
+                id: 'call-qa',
+                name: 'sessions_spawn',
+                arguments: {
+                  agentId: 'qa-reviewer',
+                  task: 'review the diff',
+                },
+              },
+            ],
+          },
+          {
+            role: 'toolResult',
+            toolCallId: 'call-ts',
+            content: '{"status":"accepted","childSessionKey":"agent:ts-engineer:subagent:two"}',
+          },
+          {
+            role: 'toolResult',
+            toolCallId: 'call-qa',
+            content: '{"status":"accepted","childSessionKey":"agent:qa-reviewer:subagent:three"}',
+          },
+        ],
+      }),
+    };
+
+    const turn = createActiveTurn(session.id, sessionKey, 'run-yield-final');
+    turn.assistantMessageId = 'msg-2';
+    adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+
+    adapter.handleChatEvent({
+      state: 'final',
+      runId: 'run-yield-final',
+      sessionKey,
+      message: { role: 'assistant', content: startupText },
+    }, 1);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(session.messages.some((message) => (
+      message.type === 'tool_use'
+      && message.metadata?.toolUseId === 'call-ts'
+      && message.metadata?.toolInput?.agentId === 'ts-engineer'
+    ))).toBe(true);
+    expect(session.messages.some((message) => (
+      message.type === 'tool_result'
+      && message.metadata?.toolUseId === 'call-qa'
+      && String(message.content).includes('agent:qa-reviewer:subagent:three')
+    ))).toBe(true);
+    expect(insertedRuns).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'call-ts',
+        parentSessionId: session.id,
+        sessionKey: 'agent:ts-engineer:subagent:two',
+        agentId: 'ts-engineer',
+        task: 'implement the change',
+      }),
+      expect.objectContaining({
+        id: 'call-qa',
+        parentSessionId: session.id,
+        sessionKey: 'agent:qa-reviewer:subagent:three',
+        agentId: 'qa-reviewer',
+        task: 'review the diff',
+      }),
+    ]));
+
+    await vi.advanceTimersByTimeAsync(800);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('chat history sync materializes missed backfillable tool results by result toolName', async () => {
+  vi.useFakeTimers();
+  try {
+    const finalText = 'ts-engineer is running, waiting for completion.';
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'coordinate implementation', timestamp: 1, metadata: {} },
+      { id: 'msg-2', type: 'assistant', content: finalText, timestamp: 2, metadata: { isStreaming: false, isFinal: true } },
+    ]);
+
+    const insertedRuns: Array<Record<string, unknown>> = [];
+    const subagentRunStore = {
+      insertSubagentRun: vi.fn((run: Record<string, unknown>) => insertedRuns.push(run)),
+      updateSubagentRunSessionKey: vi.fn(),
+      getSubagentRun: vi.fn(() => null),
+    };
+
+    const adapter = new OpenClawRuntimeAdapter(store, {}, {}, subagentRunStore as never);
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    adapter.gatewayClient = {
+      start: () => {},
+      stop: () => {},
+      request: async () => ({
+        messages: [
+          { role: 'user', content: 'coordinate implementation' },
+          { role: 'assistant', content: finalText },
+          {
+            role: 'toolResult',
+            toolCallId: 'call-ts',
+            toolName: 'sessions_spawn',
+            content: '{"status":"accepted","childSessionKey":"agent:ts-engineer:subagent:two"}',
+          },
+          {
+            role: 'toolResult',
+            toolCallId: 'call-yield',
+            toolName: 'sessions_yield',
+            content: '{"status":"yielded","message":"wait for ts-engineer"}',
+          },
+        ],
+      }),
+    };
+
+    const turn = createActiveTurn(session.id, sessionKey, 'run-yield-final');
+    turn.assistantMessageId = 'msg-2';
+    adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+
+    adapter.handleChatEvent({
+      state: 'final',
+      runId: 'run-yield-final',
+      sessionKey,
+      message: { role: 'assistant', content: finalText },
+    }, 1);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(session.messages.some((message) => (
+      message.type === 'tool_use'
+      && message.metadata?.toolUseId === 'call-ts'
+      && message.metadata?.toolName === 'sessions_spawn'
+    ))).toBe(true);
+    expect(session.messages.some((message) => (
+      message.type === 'tool_use'
+      && message.metadata?.toolUseId === 'call-yield'
+      && message.metadata?.toolName === 'sessions_yield'
+    ))).toBe(true);
+    expect(session.messages.some((message) => (
+      message.type === 'tool_result'
+      && message.metadata?.toolUseId === 'call-yield'
+      && String(message.content).includes('wait for ts-engineer')
+    ))).toBe(true);
+    expect(insertedRuns).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'call-ts',
+        parentSessionId: session.id,
+        sessionKey: 'agent:ts-engineer:subagent:two',
+        agentId: 'ts-engineer',
+      }),
+    ]));
+
+    await vi.advanceTimersByTimeAsync(800);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test('chat final reuses identical finalized thinking from the current turn', async () => {
   vi.useFakeTimers();
   try {
@@ -3548,6 +3831,58 @@ test('late lifecycle fallback event does not reopen a completed managed session'
   expect(session.status).toBe('completed');
   expect(adapter.activeTurns.has(session.id)).toBe(false);
   expect(adapter.sessionIdByRunId.has('late-run')).toBe(false);
+});
+
+test('delivered cron event syncs the resolved delivery mirror conversation', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session, store } = createReconcileStore([]);
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const mirrorSessionKey =
+      'agent:agent-feishu-bot-1:feishu:feishu-bot-1:direct:oc_zhangsan_group';
+    const resolveMirrorConversation = vi.fn(() => ({
+      sessionId: session.id,
+      sessionKey: mirrorSessionKey,
+    }));
+    const syncSessionHistory = vi.fn().mockResolvedValue(undefined);
+
+    adapter.channelSessionSync = {
+      resolveOrCreateConversationForDeliveryMirror: resolveMirrorConversation,
+    } as never;
+    adapter.syncSessionHistoryFromGateway = syncSessionHistory;
+
+    adapter.handleGatewayEvent({
+      event: 'cron',
+      payload: {
+        action: 'finished',
+        delivered: true,
+        job: { agentId: 'agent-feishu-bot-1' },
+        sessionKey: 'agent:agent-feishu-bot-1:cron:job-1:run:run-1',
+        delivery: {
+          delivered: true,
+          resolved: {
+            channel: 'feishu',
+            to: 'oc_zhangsan_group',
+            accountId: 'feishu-bot-1',
+          },
+        },
+      },
+    });
+
+    expect(resolveMirrorConversation).toHaveBeenCalledWith(
+      'feishu',
+      'oc_zhangsan_group',
+      'feishu-bot-1',
+      'agent-feishu-bot-1',
+    );
+    expect(syncSessionHistory).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(syncSessionHistory).toHaveBeenCalledWith(session.id, mirrorSessionKey);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test('late event for a closed run does not recreate a managed session turn', () => {
@@ -6258,7 +6593,7 @@ test('prefetchChannelUserMessages uses latest user only for recreated channel se
 
   await adapter.prefetchChannelUserMessages(
     session.id,
-    'agent:main:feishu:3e462f80:direct:ou_ca9972aed8fa926570225cf3714aa63a',
+    'agent:main:feishu:feishu-bot-1:direct:ou_zhangsan',
   );
 
   expect(getReplaceCallCount()).toBe(0);
@@ -6277,7 +6612,7 @@ test('onSessionDeleted deletes gateway transcripts for all session keys', async 
     deleteSubagentRunsByParent: vi.fn(),
   };
   const adapter = new OpenClawRuntimeAdapter({} as never, {}, {}, subagentRunStore as never);
-  const channelSessionKey = 'agent:main:feishu:3e462f80:direct:ou_ca9972aed8fa926570225cf3714aa63a';
+  const channelSessionKey = 'agent:main:feishu:feishu-bot-1:direct:ou_zhangsan';
   const managedSessionKey = 'agent:main:lobsterai:session-1';
   adapter.gatewayClient = {
     start: () => {},

@@ -322,7 +322,11 @@ export interface SubagentSessionSummary {
   task: string | null;
   label: string | null;
   sessionKey: string | null;
+  childCoworkSessionId?: string | null;
   parentSessionId: string;
+  parentAgentId?: string | null;
+  parentTitle?: string | null;
+  parentUpdatedAt?: number | null;
   status: 'running' | 'done' | 'error';
   createdAt: number;
   endedAt: number | null;

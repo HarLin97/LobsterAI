@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type {
   CoworkAgentEngine,
   CoworkContextUsage,
@@ -73,6 +74,15 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.clearRequestEngineBySession(sessionId);
       throw error;
     }
+  }
+
+  async submitSteer(sessionId: string, text: string, clientSteerId: string): Promise<CoworkSteerResponse> {
+    const engine = this.safeResolveEngine();
+    this.sessionEngine.set(sessionId, engine);
+    if (!this.runtime.submitSteer) {
+      throw new Error(`Steer is not supported by engine: ${engine}`);
+    }
+    return this.runtime.submitSteer(sessionId, text, clientSteerId);
   }
 
   async runGoalCommand(sessionId: string, command: string): Promise<CoworkGoal | null> {

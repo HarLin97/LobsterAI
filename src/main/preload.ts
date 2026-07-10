@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
@@ -288,6 +288,7 @@ contextBridge.exposeInMainWorld('electron', {
       workingDirectory?: string;
       icon?: string;
       skillIds?: string[];
+      subagentAllowAgentIds?: string[];
       source?: string;
       presetId?: string;
     }) => {
@@ -305,12 +306,18 @@ contextBridge.exposeInMainWorld('electron', {
         workingDirectory?: string;
         icon?: string;
         skillIds?: string[];
+        subagentAllowAgentIds?: string[];
         enabled?: boolean;
         pinned?: boolean;
+        sortOrder?: number | null;
       },
     ) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.Update, id, updates);
       return result?.success ? result.agent : null;
+    },
+    reorder: async (agentIds: string[]) => {
+      const result = await ipcRenderer.invoke(AgentIpcChannel.Reorder, agentIds);
+      return result?.success ? result.agents : null;
     },
     cleanupLegacyIdentityBlock: async (id: string) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.CleanupLegacyIdentityBlock, id);
@@ -378,6 +385,8 @@ contextBridge.exposeInMainWorld('electron', {
         dataUrl?: string; role?: string;
       }>;
     }) => ipcRenderer.invoke('cowork:session:continue', options),
+    submitSteer: (options: { sessionId: string; text: string; clientSteerId: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.SubmitSteer, options),
     runGoalCommand: (options: { sessionId: string; command: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.GoalCommand, options),
     stopSession: (sessionId: string) => ipcRenderer.invoke('cowork:session:stop', sessionId),
@@ -435,6 +444,8 @@ contextBridge.exposeInMainWorld('electron', {
     }) => ipcRenderer.invoke(CoworkIpcChannel.SubTaskHistory, options),
     listSubagentSessions: (parentSessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.SubagentList, { parentSessionId }),
+    listSubagentSessionsByAgent: (options: { agentId: string; limit?: number; offset?: number }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.SubagentListByAgent, options),
     deleteSubagentSession: (options: { parentSessionId: string; runId: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.SubagentDelete, options),
 
@@ -491,9 +502,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.MemoryWriteRaw, input),
     getDreamingStatus: () => ipcRenderer.invoke('cowork:dreaming:status'),
     getDreamDiary: () => ipcRenderer.invoke('cowork:dreaming:diary'),
-    readBootstrapFile: (filename: string) => ipcRenderer.invoke('cowork:bootstrap:read', filename),
-    writeBootstrapFile: (filename: string, content: string) =>
-      ipcRenderer.invoke('cowork:bootstrap:write', filename, content),
+    readBootstrapFile: (filename: string, options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.BootstrapRead, filename, options),
+    writeBootstrapFile: (filename: string, content: string, options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.BootstrapWrite, filename, content, options),
     // Stream event listeners
     onStreamMessage: (callback: (data: { sessionId: string; message: any; beforeMessageId?: string }) => void) => {
       const handler = (_event: any, data: { sessionId: string; message: any; beforeMessageId?: string }) => callback(data);
@@ -598,6 +610,7 @@ contextBridge.exposeInMainWorld('electron', {
       title?: string;
       filters?: { name: string; extensions: string[] }[];
     }) => ipcRenderer.invoke('dialog:selectFiles', options),
+    getPathForFile: (file: File) => webUtils.getPathForFile(file),
     saveInlineFile: (options: {
       dataBase64: string;
       fileName?: string;

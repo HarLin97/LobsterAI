@@ -26,9 +26,10 @@ import Sidebar from './components/Sidebar';
 import { SkillsView } from './components/skills';
 import Toast from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
+import AppUpdateCard from './components/update/AppUpdateCard';
 import AppUpdateModal from './components/update/AppUpdateModal';
 import WelcomeDialog from './components/WelcomeDialog';
-import WindowTitleBar from './components/window/WindowTitleBar';
+import WindowsAppTitleBar from './components/window/WindowsAppTitleBar';
 import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config';
 import type { ApiConfig } from './services/api';
 import { apiService } from './services/api';
@@ -44,7 +45,8 @@ import { applyTypographyPreferences } from './services/typography';
 import { RootState, store } from './store';
 import {
   selectCurrentSessionId,
-  selectFirstPendingPermission,
+  selectFirstCurrentSessionPendingPermission,
+  selectPendingPermissions,
 } from './store/selectors/coworkSelectors';
 import { setDraftCollaborationMode, setDraftKitIds, setDraftPrompt } from './store/slices/coworkSlice';
 import { setActiveKitIds } from './store/slices/kitSlice';
@@ -95,6 +97,7 @@ const App: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(244);
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState>({
     status: AppUpdateStatus.Idle,
     source: null,
@@ -105,6 +108,7 @@ const App: React.FC = () => {
     errorMessage: null,
   });
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [isUpdateCardExpanded, setIsUpdateCardExpanded] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
   const [showWelcome, setShowWelcome] = useState(false);
   const [enterpriseConfig, setEnterpriseConfig] = useState<{
@@ -119,9 +123,15 @@ const App: React.FC = () => {
   const dispatch = useDispatch();
   const defaultSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
   const currentSessionId = useSelector(selectCurrentSessionId);
-  const pendingPermission = useSelector(selectFirstPendingPermission);
+  const pendingPermission = useSelector(selectFirstCurrentSessionPendingPermission);
+  const pendingPermissions = useSelector(selectPendingPermissions);
   const authUser = useSelector((state: RootState) => state.auth.user);
   const isWindows = window.electron.platform === 'win32';
+  const [minimizedPermissionIds, setMinimizedPermissionIds] = useState<string[]>([]);
+  const isPendingPermissionMinimized = pendingPermission
+    ? minimizedPermissionIds.includes(pendingPermission.requestId)
+    : false;
+  const isPermissionModalOpen = pendingPermission !== null && !isPendingPermissionMinimized;
 
   const waitWithTimeout = useCallback(
     async <T,>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
@@ -390,6 +400,14 @@ const App: React.FC = () => {
   }, [openHomeWithKit]);
 
   const handleToggleSidebar = useCallback(() => {
+    const nextCollapsed = !isSidebarCollapsed;
+    const message = `sidebar toggle requested activeView=${mainView} nextCollapsed=${nextCollapsed} platform=${window.electron.platform}`;
+    console.debug(`[AppLayout] ${message}`);
+    try {
+      window.electron?.log?.fromRenderer?.('debug', 'AppLayout', message);
+    } catch {
+      // Logging should never block sidebar interactions.
+    }
     void reportYdAnalyzer({
       action: LogReporterAction.SidebarAction,
       source: 'home_sidebar',
@@ -504,8 +522,16 @@ const App: React.FC = () => {
 
   const handleOpenUpdateModal = useCallback(() => {
     if (!updateInfo) return;
+
+    const message = `update modal requested status=${appUpdateState.status} source=${appUpdateState.source ?? 'none'} version=${updateInfo.latestVersion}`;
+    console.debug(`[AppUpdate] ${message}`);
+    try {
+      window.electron?.log?.fromRenderer?.('debug', 'AppUpdate', message);
+    } catch {
+      // Best-effort diagnostic only.
+    }
     setShowUpdateModal(true);
-  }, [updateInfo]);
+  }, [appUpdateState.source, appUpdateState.status, updateInfo]);
 
   const handleUpdateFound = useCallback((_info: AppUpdateInfo) => {
     setShowUpdateModal(true);
@@ -525,7 +551,9 @@ const App: React.FC = () => {
 
     if (appUpdateState.status === AppUpdateStatus.Error || appUpdateState.status === AppUpdateStatus.Available) {
       if (!isManualDownloadUrl(updateInfo.url)) {
-        shouldInstallReadyUpdateRef.current = appUpdateState.status === AppUpdateStatus.Available;
+        // The user explicitly asked to update (or retry), so finish the whole
+        // flow in one click: install and restart as soon as the download lands.
+        shouldInstallReadyUpdateRef.current = true;
         const retryResult = await window.electron.appUpdate.retryDownload();
         if (!retryResult.success) {
           shouldInstallReadyUpdateRef.current = false;
@@ -593,6 +621,30 @@ const App: React.FC = () => {
     await coworkService.respondToPermission(pendingPermission.requestId, result);
   }, [pendingPermission]);
 
+  const handleMinimizePermission = useCallback(() => {
+    if (!pendingPermission) return;
+    setMinimizedPermissionIds((previous) => (
+      previous.includes(pendingPermission.requestId)
+        ? previous
+        : [...previous, pendingPermission.requestId]
+    ));
+  }, [pendingPermission]);
+
+  const handleRestorePermission = useCallback(() => {
+    if (!pendingPermission) return;
+    setMinimizedPermissionIds((previous) => (
+      previous.filter((requestId) => requestId !== pendingPermission.requestId)
+    ));
+  }, [pendingPermission]);
+
+  useEffect(() => {
+    const activeRequestIds = new Set(pendingPermissions.map((permission) => permission.requestId));
+    setMinimizedPermissionIds((previous) => {
+      const next = previous.filter((requestId) => activeRequestIds.has(requestId));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [pendingPermissions]);
+
   const handleCloseSettings = () => {
     setShowSettings(false);
     const config = configService.getConfig();
@@ -657,7 +709,7 @@ const App: React.FC = () => {
         return;
       }
 
-      if (showUpdateModal || pendingPermission !== null) return;
+      if (showUpdateModal || isPermissionModalOpen) return;
 
       if (matchesAction(ShortcutAction.NewChat)) {
         event.preventDefault();
@@ -808,7 +860,7 @@ const App: React.FC = () => {
     handleShowSkills,
     handleToggleSidebar,
     mainView,
-    pendingPermission,
+    isPermissionModalOpen,
     showSettings,
     showUpdateModal,
   ]);
@@ -916,7 +968,8 @@ const App: React.FC = () => {
     };
   }, [isInitialized, runUpdateCheck, enterpriseConfig]);
 
-  // 根据场景选择使用哪个权限组件
+  // 根据场景选择使用哪个权限组件。最小化时保持组件挂载（仅视觉隐藏），
+  // 避免重新展开后丢失用户已选择/已输入的内容；key 按 requestId 隔离不同请求的状态。
   const permissionModal = useMemo(() => {
     if (!pendingPermission) return null;
 
@@ -929,8 +982,11 @@ const App: React.FC = () => {
       if (hasMultipleQuestions) {
         return (
           <CoworkQuestionWizard
+            key={pendingPermission.requestId}
             permission={pendingPermission}
             onRespond={handlePermissionResponse}
+            onMinimize={handleMinimizePermission}
+            hidden={isPendingPermissionMinimized}
           />
         );
       }
@@ -939,28 +995,50 @@ const App: React.FC = () => {
     // 其他情况使用原有的权限模态框
     return (
       <CoworkPermissionModal
+        key={pendingPermission.requestId}
         permission={pendingPermission}
         onRespond={handlePermissionResponse}
+        onMinimize={handleMinimizePermission}
+        hidden={isPendingPermissionMinimized}
       />
     );
-  }, [pendingPermission, handlePermissionResponse]);
+  }, [pendingPermission, handlePermissionResponse, handleMinimizePermission, isPendingPermissionMinimized]);
 
-  const isOverlayActive = showSettings || showUpdateModal || pendingPermission !== null;
-  const shouldShowUpdateBadge =
-    updateInfo &&
-    appUpdateState.status !== AppUpdateStatus.Checking &&
-    appUpdateState.status !== AppUpdateStatus.Downloading;
+  const isOverlayActive = showSettings || showUpdateModal || isPermissionModalOpen;
+  // Keep the badge visible while downloading so the collapsed-sidebar layouts
+  // still surface progress; only a plain re-check hides nothing new.
+  const shouldShowUpdateBadge = updateInfo && appUpdateState.status !== AppUpdateStatus.Checking;
   const updateBadge = shouldShowUpdateBadge ? (
     <AppUpdateBadge
       latestVersion={updateInfo.latestVersion}
       status={appUpdateState.status}
+      progress={appUpdateState.progress?.percent}
       onClick={handleOpenUpdateModal}
     />
   ) : null;
+  const updateCard = updateInfo ? (
+    <AppUpdateCard
+      updateState={appUpdateState}
+      onUpdate={handleConfirmUpdate}
+      onShowDetails={handleOpenUpdateModal}
+      onCancelDownload={handleCancelDownload}
+      onExpandedChange={setIsUpdateCardExpanded}
+    />
+  ) : null;
+  const canUseWindowsTopBarActions = isInitialized && !initError;
+  const canUseWindowsCollapsedTopBarActions = canUseWindowsTopBarActions && isSidebarCollapsed;
+  const collapsedHeaderUpdateBadge = isSidebarCollapsed && !isWindows ? updateBadge : null;
   const windowsStandaloneTitleBar = isWindows ? (
-    <div className="draggable relative h-9 shrink-0 bg-surface-raised">
-      <WindowTitleBar isOverlayActive={isOverlayActive} />
-    </div>
+    <WindowsAppTitleBar
+      isOverlayActive={isOverlayActive}
+      isSidebarCollapsed={isSidebarCollapsed}
+      sidebarWidth={sidebarWidth}
+      onToggleSidebar={canUseWindowsTopBarActions ? handleToggleSidebar : undefined}
+      onNewChat={canUseWindowsCollapsedTopBarActions ? handleNewChat : undefined}
+      sidebarToggleLabel={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+      newChatLabel={i18nService.t('newChat')}
+      updateBadge={canUseWindowsCollapsedTopBarActions ? updateBadge : null}
+    />
   ) : null;
 
   if (!isInitialized) {
@@ -1021,6 +1099,7 @@ const App: React.FC = () => {
       {toastMessage && (
         <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
       )}
+      {windowsStandaloneTitleBar}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <Sidebar
           onShowLogin={handleShowLogin}
@@ -1034,7 +1113,9 @@ const App: React.FC = () => {
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
-          updateBadge={!isSidebarCollapsed ? updateBadge : null}
+          onWidthChange={setSidebarWidth}
+          updateNotice={!isSidebarCollapsed ? updateCard : null}
+          hideAdBanner={isUpdateCardExpanded}
           hideLogin={enterpriseConfig?.ui?.login === 'hide'}
         />
         <div className={`flex-1 min-w-0 transition-[padding] duration-200 ease-out ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
@@ -1046,7 +1127,7 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 onCreateSkillByChat={handleCreateSkillByChat}
-                updateBadge={isSidebarCollapsed ? updateBadge : null}
+                updateBadge={collapsedHeaderUpdateBadge}
                 readOnly={enterpriseConfig?.ui?.skills === 'readonly'}
               />
             ) : mainView === 'scheduledTasks' ? (
@@ -1054,14 +1135,14 @@ const App: React.FC = () => {
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
-                updateBadge={isSidebarCollapsed ? updateBadge : null}
+                updateBadge={collapsedHeaderUpdateBadge}
               />
             ) : mainView === 'kits' ? (
               <KitsView
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
-                updateBadge={isSidebarCollapsed ? updateBadge : null}
+                updateBadge={collapsedHeaderUpdateBadge}
                 onTryAsking={handleKitTryAsking}
                 onUseKit={handleKitUse}
               />
@@ -1070,7 +1151,7 @@ const App: React.FC = () => {
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
-                updateBadge={isSidebarCollapsed ? updateBadge : null}
+                updateBadge={collapsedHeaderUpdateBadge}
               />
             ) : (
               <CoworkView
@@ -1080,7 +1161,10 @@ const App: React.FC = () => {
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
-                updateBadge={isSidebarCollapsed ? updateBadge : null}
+                updateBadge={collapsedHeaderUpdateBadge}
+                minimizedPermission={isPendingPermissionMinimized ? pendingPermission : null}
+                onRestorePermission={handleRestorePermission}
+                onRespondToPermission={handlePermissionResponse}
               />
             )}
           </div>
@@ -1089,7 +1173,7 @@ const App: React.FC = () => {
 
       <EngineFailureOverlay
         onRequestAppSettings={privacyAgreed === true && !showWelcome ? handleShowSettings : undefined}
-        suspended={showSettings || showUpdateModal || pendingPermission !== null || privacyAgreed === false || showWelcome}
+        suspended={showSettings || showUpdateModal || isPermissionModalOpen || privacyAgreed === false || showWelcome}
       />
 
       {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
