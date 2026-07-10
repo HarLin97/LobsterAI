@@ -1,4 +1,4 @@
-import type { CoworkPendingSteer } from '../../../shared/cowork/steer';
+import type { CoworkPendingSteer } from '../../shared/cowork/steer';
 
 /**
  * Selects the exact requested follow-up, or the queue head for normal FIFO

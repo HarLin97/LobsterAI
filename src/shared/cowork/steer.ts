@@ -1,3 +1,4 @@
+import type { KitReference, ResolvedKitCapabilities } from '../kit/constants';
 import type { CoworkImageAttachmentPayload } from './imageAttachments';
 import type { CoworkSelectedTextSnippet } from './selectedText';
 
@@ -41,6 +42,15 @@ export interface CoworkPendingSteer {
   attachments?: CoworkSteerAttachment[];
   imageAttachments?: CoworkImageAttachmentPayload[];
   selectedTextSnippets?: CoworkSelectedTextSnippet[];
+  modelSupportsImage?: boolean;
+  skillPrompt?: string;
+  selectedSkillIds?: string[];
+  activeSkillIds?: string[];
+  runtimeSkillIds?: string[];
+  kitIds?: string[];
+  kitReferences?: KitReference[];
+  resolvedKitCapabilities?: ResolvedKitCapabilities;
+  mediaSelection?: CoworkQueuedMediaSelection;
   status: CoworkSteerStatus;
   createdAt: number;
   updatedAt: number;
@@ -52,5 +62,14 @@ export interface CoworkSteerAttachment {
   path: string;
   name: string;
   isImage?: boolean;
+  isDirectory?: boolean;
   dataUrl?: string;
+}
+
+export interface CoworkQueuedMediaSelection {
+  mode: 'auto' | 'image' | 'video' | 'none';
+  modelId?: string;
+  modelName?: string;
+  imageModelId?: string;
+  videoModelId?: string;
 }

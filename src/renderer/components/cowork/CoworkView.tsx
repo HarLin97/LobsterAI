@@ -8,11 +8,8 @@ import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/image
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
 import { agentService } from '../../services/agent';
 import { coworkService } from '../../services/cowork';
+import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
 import { i18nService } from '../../services/i18n';
-import {
-  buildKitReferences,
-  resolveSelectedKitCapabilities,
-} from '../../services/kitCapability';
 import { quickActionService } from '../../services/quickAction';
 import { RootState } from '../../store';
 import {
@@ -136,35 +133,15 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     return state.cowork.mediaSelection[key];
   });
 
-  const resolveRoutableSkillIds = useCallback((skillIds: string[]): string[] => {
-    const seen = new Set<string>();
-    const result: string[] = [];
-    for (const skillId of skillIds) {
-      if (seen.has(skillId)) continue;
-      seen.add(skillId);
-      const skill = skills.find(s => s.id === skillId);
-      if (!skill?.enabled || !skill.skillPath.trim()) continue;
-      result.push(skillId);
-    }
-    return result;
-  }, [skills]);
-
   const buildCapabilitySelection = useCallback((skillIds: string[], kitIds: string[]) => {
-    const directSkillIds = resolveRoutableSkillIds(skillIds);
-    const resolvedKitCapabilities = resolveSelectedKitCapabilities(kitIds, installedKits);
-    const runtimeSkillIds = resolveRoutableSkillIds([
-      ...directSkillIds,
-      ...resolvedKitCapabilities.skillIds,
-    ]);
-    const kitReferences = buildKitReferences(kitIds, marketplaceKits);
-
-    return {
-      directSkillIds,
-      runtimeSkillIds,
-      kitReferences,
-      resolvedKitCapabilities,
-    };
-  }, [installedKits, marketplaceKits, resolveRoutableSkillIds]);
+    return buildCoworkCapabilitySelection(
+      skillIds,
+      kitIds,
+      skills,
+      installedKits,
+      marketplaceKits,
+    );
+  }, [installedKits, marketplaceKits, skills]);
 
   const buildApiConfigNotice = (error?: string): { noticeI18nKey: string; noticeExtra?: string } => {
     const key = 'coworkModelSettingsRequired';

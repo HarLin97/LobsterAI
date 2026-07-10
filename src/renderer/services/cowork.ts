@@ -70,6 +70,8 @@ import type {
   OpenClawGatewayRepairResult,
   OpenClawSessionPolicyConfig,
 } from '../types/cowork';
+import { CoworkSessionStatusValue } from '../types/cowork';
+import { CoworkQueuedFollowUpCoordinator } from './coworkQueuedFollowUpCoordinator';
 import { i18nService } from './i18n';
 
 const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
@@ -139,19 +141,35 @@ class CoworkService {
   private contextUsageAutoSuppressedUntilBySessionId = new Map<string, number>();
   private contextUsageBackoffUntil = new Map<string, number>();
   private contextCompactionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly queuedFollowUpCoordinator = new CoworkQueuedFollowUpCoordinator({
+    getState: () => store.getState(),
+    dispatch: store.dispatch,
+    continueSession: options => this.continueSession(options),
+    stopSession: sessionId => this.stopSessionRuntime(sessionId),
+    log: (level, message, error) => {
+      this.logDiagnostic(level, `[CoworkSteer] ${message}`, error);
+    },
+  });
 
-  private logDiagnostic(level: 'info' | 'warn' | 'error' | 'debug', message: string): void {
+  private logDiagnostic(
+    level: 'info' | 'warn' | 'error' | 'debug',
+    message: string,
+    error?: unknown,
+  ): void {
     const formatted = `[CoworkService] ${message}`;
     if (level === 'warn') {
-      console.warn(formatted);
+      console.warn(formatted, ...(error === undefined ? [] : [error]));
     } else if (level === 'error') {
-      console.error(formatted);
+      console.error(formatted, ...(error === undefined ? [] : [error]));
     } else if (level === 'debug') {
       console.debug(formatted);
     } else {
       console.log(formatted);
     }
-    window.electron?.log?.fromRenderer?.(level, 'CoworkService', message);
+    const persistedMessage = error === undefined
+      ? message
+      : `${message} error=${error instanceof Error ? error.message : String(error)}`;
+    window.electron?.log?.fromRenderer?.(level, 'CoworkService', persistedMessage);
   }
 
   private setCurrentSessionStreaming(sessionId: string, isStreaming: boolean, reason: string): void {
@@ -225,6 +243,7 @@ class CoworkService {
       // (especially important for IM-triggered turns that do not call continueSession from renderer).
       if (message.type === 'user' || message.type === 'assistant' || message.type === 'tool_use' || message.type === 'tool_result') {
         store.dispatch(updateSessionStatus({ sessionId, status: 'running' }));
+        this.queuedFollowUpCoordinator.handleSessionRunning(sessionId);
       }
       if (beforeMessageId) {
         console.log('[ThinkingOrder] renderer received message with beforeMessageId=', beforeMessageId, 'messageId=', message.id, 'isThinking=', !!(message.metadata as any)?.isThinking);
@@ -238,6 +257,7 @@ class CoworkService {
       const session = store.getState().cowork.sessions.find(s => s.id === sessionId);
       if (metadata?.isFinal !== true && session?.status !== 'completed') {
         store.dispatch(updateSessionStatus({ sessionId, status: 'running' }));
+        this.queuedFollowUpCoordinator.handleSessionRunning(sessionId);
       }
       if (metadata?.isFinal === true && typeof metadata.model === 'string' && metadata.model.trim()) {
         this.logDiagnostic(
@@ -253,6 +273,7 @@ class CoworkService {
       const session = store.getState().cowork.sessions.find(s => s.id === sessionId);
       if (session?.status !== 'completed') {
         store.dispatch(updateSessionStatus({ sessionId, status: 'running' }));
+        this.queuedFollowUpCoordinator.handleSessionRunning(sessionId);
       }
       store.dispatch(updateToolUseMediaStatus({ sessionId, toolCallId, details }));
     });
@@ -263,6 +284,15 @@ class CoworkService {
     const sessionStatusCleanup = cowork.onStreamSessionStatus?.(({ sessionId, status }) => {
       store.dispatch(updateSessionStatus({ sessionId, status }));
       this.setCurrentSessionStreaming(sessionId, status === 'running', `stream_status_${status}`);
+      if (status === CoworkSessionStatusValue.Running) {
+        this.queuedFollowUpCoordinator.handleSessionRunning(sessionId);
+      } else if (status === CoworkSessionStatusValue.Completed) {
+        this.queuedFollowUpCoordinator.handleSessionCompleted(sessionId);
+      } else if (status === CoworkSessionStatusValue.Error) {
+        this.queuedFollowUpCoordinator.handleSessionError(sessionId);
+      } else if (status === CoworkSessionStatusValue.Idle) {
+        this.queuedFollowUpCoordinator.handleSessionIdle(sessionId);
+      }
     });
     if (sessionStatusCleanup) {
       this.streamListenerCleanups.push(sessionStatusCleanup);
@@ -319,6 +349,7 @@ class CoworkService {
       store.dispatch(updateSessionStatus({ sessionId, status: 'completed' }));
       this.setCurrentSessionStreaming(sessionId, false, 'stream_complete');
       this.scheduleFinalContextUsageRefresh(sessionId, true);
+      this.queuedFollowUpCoordinator.handleSessionCompleted(sessionId);
     });
     this.streamListenerCleanups.push(completeCleanup);
 
@@ -327,6 +358,7 @@ class CoworkService {
       if (this.isStillRunningError(error)) {
         store.dispatch(updateSessionStatus({ sessionId, status: 'running' }));
         this.setCurrentSessionStreaming(sessionId, true, 'stream_error_still_running');
+        this.queuedFollowUpCoordinator.handleSessionRunning(sessionId);
         window.dispatchEvent(new CustomEvent('app:showToast', {
           detail: i18nService.t('coworkSessionStillRunning'),
         }));
@@ -334,6 +366,7 @@ class CoworkService {
       }
       store.dispatch(updateSessionStatus({ sessionId, status: 'error' }));
       this.setCurrentSessionStreaming(sessionId, false, 'stream_error');
+      this.queuedFollowUpCoordinator.handleSessionError(sessionId);
       // Surface the error as a visible message so the user knows what happened.
       if (error) {
         const displayError = classifyError(error);
@@ -657,6 +690,14 @@ class CoworkService {
       }
       store.dispatch(setSessions(result.sessions));
       store.dispatch(setHasMoreSessions(result.hasMore ?? false));
+      result.sessions.forEach((session) => {
+        if (
+          session.status === CoworkSessionStatusValue.Completed
+          && (store.getState().cowork.pendingSteers[session.id]?.length ?? 0) > 0
+        ) {
+          this.queuedFollowUpCoordinator.handleSessionCompleted(session.id);
+        }
+      });
     }
   }
 
@@ -1001,6 +1042,18 @@ class CoworkService {
   }
 
   async stopSession(sessionId: string): Promise<boolean> {
+    return this.stopSessionRuntime(sessionId);
+  }
+
+  async submitQueuedFollowUp(sessionId: string, steerId: string): Promise<boolean> {
+    return this.queuedFollowUpCoordinator.submitSelected(sessionId, steerId);
+  }
+
+  async interruptForQueuedFollowUp(sessionId: string, steerId: string): Promise<boolean> {
+    return this.queuedFollowUpCoordinator.interruptAndSubmit(sessionId, steerId);
+  }
+
+  private async stopSessionRuntime(sessionId: string): Promise<boolean> {
     const cowork = window.electron?.cowork;
     if (!cowork) return false;
 
@@ -1009,6 +1062,7 @@ class CoworkService {
     if (result.success) {
       this.setCurrentSessionStreaming(sessionId, false, 'stop_session_completed');
       store.dispatch(updateSessionStatus({ sessionId, status: 'idle' }));
+      this.queuedFollowUpCoordinator.handleSessionIdle(sessionId);
       this.logDiagnostic('info', `stop completed for session ${sessionId}.`);
       return true;
     }
@@ -1023,6 +1077,7 @@ class CoworkService {
 
     const result = await cowork.deleteSession(sessionId);
     if (result.success) {
+      this.queuedFollowUpCoordinator.clearSession(sessionId);
       store.dispatch(deleteSessionAction(sessionId));
       return true;
     }
@@ -1037,6 +1092,7 @@ class CoworkService {
 
     const result = await cowork.deleteSessions(sessionIds);
     if (result.success) {
+      sessionIds.forEach(sessionId => this.queuedFollowUpCoordinator.clearSession(sessionId));
       store.dispatch(deleteSessionsAction(sessionIds));
       return true;
     }
