@@ -1,4 +1,4 @@
-import { extractGatewayMessageThinking } from '../openclawHistory';
+import { extractGatewayMessageThinking } from '../../openclawHistory';
 
 export const OpenClawThinkingMetadata = {
   AnchorToolCallId: 'openclawThinkingAnchorToolCallId',
@@ -69,6 +69,11 @@ const fingerprintText = (text: string): string => {
   return (hash >>> 0).toString(36);
 };
 
+export const buildAnchoredThinkingKey = (
+  toolCallId: string,
+  thinkingOrdinal = 0,
+): string => `tool:${toolCallId}:thinking:${thinkingOrdinal}`;
+
 const findCurrentTurnStart = (messages: unknown[]): number => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -127,7 +132,7 @@ export const extractCurrentTurnThinkingBlocks = (messages: unknown[]): OpenClawT
       });
       const anchorToolCallId = nextToolCall?.toolCallId;
       const baseKey = anchorToolCallId
-        ? `tool:${anchorToolCallId}:thinking:${thinkingOrdinal}`
+        ? buildAnchoredThinkingKey(anchorToolCallId, thinkingOrdinal)
         : `final:thinking:${fingerprintText(thinking.text)}`;
       const duplicateIndex = duplicateKeyCount.get(baseKey) ?? 0;
       duplicateKeyCount.set(baseKey, duplicateIndex + 1);

@@ -1,3 +1,4 @@
+/** Diagnostic summaries intentionally exclude thinking text. */
 const THINKING_DIAGNOSTICS_ENABLED = process.env.LOBSTERAI_THINKING_DIAGNOSTICS === '1';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (

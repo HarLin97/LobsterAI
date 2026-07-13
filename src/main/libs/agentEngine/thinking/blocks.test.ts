@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { extractCurrentTurnThinkingBlocks } from './openclawThinkingBlocks';
+import { extractCurrentTurnThinkingBlocks } from './blocks';
 
 describe('OpenClaw thinking block extraction', () => {
   test('preserves assistant and content order while anchoring blocks to tools', () => {
