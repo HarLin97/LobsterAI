@@ -65,6 +65,27 @@ describe('normalizeAuthQuota', () => {
     expect(authQuotaGateStateFromQuota(quota).mediaGenerationEntitled).toBe(true);
   });
 
+  test('normalizes enterprise member quota without enabling out-of-scope media models', () => {
+    const quota = normalizeAuthQuota({
+      planName: '企业版',
+      subscriptionStatus: 'enterprise',
+      creditsLimit: 8000,
+      creditsUsed: 4480,
+      creditsRemaining: 3520,
+      hasPaidCredits: false,
+      mediaGenerationEntitled: false,
+    }, labels);
+
+    expect(quota).toEqual(expect.objectContaining({
+      planName: '企业版',
+      subscriptionStatus: 'enterprise',
+      creditsLimit: 8000,
+      creditsUsed: 4480,
+      creditsRemaining: 3520,
+    }));
+    expect(authQuotaGateStateFromQuota(quota).mediaGenerationEntitled).toBe(false);
+  });
+
   test('uses a non-entitled free state as the default reset state', () => {
     expect(createDefaultAuthQuotaGateState()).toEqual({
       subscriptionStatus: AuthSubscriptionStatus.Free,

@@ -61,6 +61,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
       '积分额度已用完，请升级套餐后继续使用。[立即升级/充值](https://lobsterai.youdao.com/portal#/pricing)',
     coworkErrorFreeQuotaExhausted:
       '积分额度已用完，请升级套餐后继续使用。[立即升级/充值](https://lobsterai.youdao.com/portal#/pricing)',
+    coworkErrorEnterpriseMemberQuotaExhausted: '当前企业成员月度额度已用完。',
+    coworkErrorEnterprisePoolExhausted: '当前企业积分池已用完。',
+    coworkErrorEnterpriseCreditBatchesExpired: '当前企业积分批次已全部过期。',
     coworkErrorInsufficientBalance: 'API 余额不足，请充值后重试。',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制。',
     coworkErrorMessageTooLarge:
@@ -346,6 +349,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Your credits have been used up. Upgrade your plan to continue.\n\n[Upgrade or recharge](https://lobsterai.youdao.com/portal#/pricing)',
     coworkErrorFreeQuotaExhausted:
       'Your credits have been used up. Upgrade your plan to continue.\n\n[Upgrade or recharge](https://lobsterai.youdao.com/portal#/pricing)',
+    coworkErrorEnterpriseMemberQuotaExhausted: 'The current enterprise member monthly quota has been used up.',
+    coworkErrorEnterprisePoolExhausted: 'The current enterprise credit pool has been used up.',
+    coworkErrorEnterpriseCreditBatchesExpired: 'All credit batches for the current enterprise have expired.',
     coworkErrorInsufficientBalance: 'Insufficient API balance. Please top up and try again.',
     coworkErrorInputTooLong: 'Input too long, exceeding model context limit.',
     coworkErrorMessageTooLarge:

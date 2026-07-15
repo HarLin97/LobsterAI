@@ -16,6 +16,7 @@ import { ClipboardIpc } from '../shared/clipboard/constants';
 import { CoworkIpcChannel } from '../shared/cowork/constants';
 import { DataMigrationIpc } from '../shared/dataMigration/constants';
 import { DialogIpc } from '../shared/dialog/constants';
+import { EnterpriseAccountIpcChannel } from '../shared/enterpriseAccount/constants';
 import {
   type HtmlShareAccessMode,
   type HtmlShareConfigurableStatus,
@@ -132,6 +133,9 @@ contextBridge.exposeInMainWorld('electron', {
   },
   enterprise: {
     getConfig: () => ipcRenderer.invoke('enterprise:getConfig'),
+  },
+  enterpriseAccount: {
+    getContext: () => ipcRenderer.invoke(EnterpriseAccountIpcChannel.GetContext),
   },
   api: {
     // 普通 API 请求（非流式）

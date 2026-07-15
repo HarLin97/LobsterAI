@@ -20,6 +20,10 @@ import type {
   DataMigrationRestoreScheduleResult,
 } from '../../shared/dataMigration/constants';
 import type {
+  EnterpriseAccountContext,
+  EnterpriseAccountContextResult,
+} from '../../shared/enterpriseAccount/types';
+import type {
   HtmlShareAccessMode,
   HtmlShareConfigurableStatus,
   HtmlShareDisabledSource,
@@ -1513,9 +1517,24 @@ interface IElectronAPI {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;
     exchange: (
       code: string,
-    ) => Promise<{ success: boolean; user?: any; quota?: any; error?: string }>;
-    getUser: () => Promise<{ success: boolean; user?: any; quota?: any }>;
-    getQuota: () => Promise<{ success: boolean; quota?: any }>;
+    ) => Promise<{
+      success: boolean;
+      user?: import('../store/slices/authSlice').UserProfile;
+      quota?: import('../store/slices/authSlice').UserQuota;
+      enterpriseContext?: EnterpriseAccountContext | null;
+      error?: string;
+    }>;
+    getUser: () => Promise<{
+      success: boolean;
+      user?: import('../store/slices/authSlice').UserProfile;
+      quota?: import('../store/slices/authSlice').UserQuota | null;
+      enterpriseContext?: EnterpriseAccountContext | null;
+    }>;
+    getQuota: () => Promise<{
+      success: boolean;
+      quota?: import('../store/slices/authSlice').UserQuota;
+      enterpriseContext?: EnterpriseAccountContext | null;
+    }>;
     logout: () => Promise<{ success: boolean }>;
     refreshToken: () => Promise<{ success: boolean; accessToken?: string }>;
     getAccessToken: () => Promise<string | null>;
@@ -1570,49 +1589,11 @@ interface IElectronAPI {
       name: string;
     } | null>;
   };
+  enterpriseAccount: {
+    getContext: () => Promise<EnterpriseAccountContextResult>;
+  };
   networkStatus: {
     send: (status: 'online' | 'offline') => void;
-  };
-  auth: {
-    login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;
-    exchange: (code: string) => Promise<{
-      success: boolean;
-      user?: import('../store/slices/authSlice').UserProfile;
-      quota?: {
-        planName: string;
-        subscriptionStatus: string;
-        creditsLimit: number;
-        creditsUsed: number;
-        creditsRemaining: number;
-      };
-      error?: string;
-    }>;
-    getUser: () => Promise<{
-      success: boolean;
-      user?: import('../store/slices/authSlice').UserProfile;
-      quota?: {
-        planName: string;
-        subscriptionStatus: string;
-        creditsLimit: number;
-        creditsUsed: number;
-        creditsRemaining: number;
-      };
-    }>;
-    getQuota: () => Promise<{
-      success: boolean;
-      quota?: {
-        planName: string;
-        subscriptionStatus: string;
-        creditsLimit: number;
-        creditsUsed: number;
-        creditsRemaining: number;
-      };
-    }>;
-    logout: () => Promise<{ success: boolean }>;
-    refreshToken: () => Promise<{ success: boolean; accessToken?: string }>;
-    getAccessToken: () => Promise<string | null>;
-    getPendingCallback: () => Promise<string | null>;
-    onCallback: (callback: (data: { code: string }) => void) => () => void;
   };
   qwen: Record<string, never>;
   feishu: {

@@ -15,11 +15,13 @@ let recentQuotaError: OpenClawTokenProxyQuotaError | null = null;
 let tokenGetter: (() => { accessToken: string; refreshToken: string } | null) | null = null;
 let tokenRefresher: ((reason: string) => Promise<string | null>) | null = null;
 let serverBaseUrlGetter: (() => string) | null = null;
+let accountContextHeadersGetter: (() => Record<string, string>) | null = null;
 
 export type OpenClawTokenProxyConfig = {
   getAuthTokens: () => { accessToken: string; refreshToken: string } | null;
   refreshToken: (reason: string) => Promise<string | null>;
   getServerBaseUrl: () => string;
+  getAccountContextHeaders?: () => Record<string, string>;
 };
 
 type OpenClawTokenProxyQuotaError = {
@@ -32,6 +34,7 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
   tokenGetter = config.getAuthTokens;
   tokenRefresher = config.refreshToken;
   serverBaseUrlGetter = config.getServerBaseUrl;
+  accountContextHeadersGetter = config.getAccountContextHeaders ?? null;
 
   return new Promise((resolve, reject) => {
     if (proxyServer) {
@@ -352,7 +355,10 @@ function extractQuotaErrorFromProxyErrorPayload(
 
     const message = getErrorMessage(parsed);
     const code = getErrorCode(parsed);
-    const isErrorPayload = event === 'error' || parsed.type === 'error' || parsed.error != null;
+    const isErrorPayload = event === 'error'
+      || parsed.type === 'error'
+      || parsed.error != null
+      || (code !== undefined && String(code) !== '0');
     const searchable = `${message} ${code ?? ''} ${payload}`;
     if (isErrorPayload && isLobsterAIQuotaExhaustedError(searchable)) {
       return {
@@ -431,6 +437,7 @@ async function forwardRequest(
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${accessToken}`,
     'Content-Type': incomingHeaders['content-type'] || 'application/json',
+    ...(accountContextHeadersGetter?.() ?? {}),
   };
 
   // Forward accept header for SSE streaming

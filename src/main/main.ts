@@ -76,6 +76,7 @@ import {
   DataMigrationRestoreStatus,
 } from '../shared/dataMigration/constants';
 import { DialogIpc } from '../shared/dialog/constants';
+import { EnterpriseAccountMode } from '../shared/enterpriseAccount/constants';
 import {
   HtmlShareAccessMode,
   type HtmlShareAccessMode as HtmlShareAccessModeValue,
@@ -121,6 +122,15 @@ import { authQuotaGateStateFromQuota, AuthSubscriptionStatus, createDefaultAuthQ
 import { type AutoLaunchStatus, getAutoLaunchStatus, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
 import { getRecentComputerUseLogEntries } from './computerUse/computerUseLogs';
 import { type CoworkForkContextMessage, type CoworkMessage, CoworkStore } from './coworkStore';
+import {
+  buildEnterpriseAccountRequestHeaders,
+  clearEnterpriseAccountContext,
+  fetchEnterpriseAccountContext,
+  getPersistedEnterpriseAccountContext,
+  normalizeEnterpriseAccountContext,
+  persistEnterpriseAccountContext,
+  readAccountMode,
+} from './enterpriseAccount/context';
 import { setLanguage, t } from './i18n';
 import { IMGatewayConfig, IMGatewayManager } from './im';
 import {
@@ -143,6 +153,7 @@ import type {
 } from './im/types';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
+import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
 import { registerKitHandlers } from './ipcHandlers/kits';
 import { registerMcpHandlers } from './ipcHandlers/mcp';
 import { registerNimQrLoginHandlers } from './ipcHandlers/nimQrLogin';
@@ -2556,6 +2567,17 @@ const bindCoworkRuntimeForwarder = (): void => {
       if (win.isDestroyed()) return;
       win.webContents.send('cowork:stream:error', { sessionId, error });
     });
+    try {
+      if (shouldRefreshServerQuotaForSession(sessionId)) {
+        windows.forEach(win => {
+          if (!win.isDestroyed()) {
+            win.webContents.send('auth:quotaChanged');
+          }
+        });
+      }
+    } catch {
+      // Quota refresh is best-effort after a runtime error.
+    }
   });
 
   coworkRuntimeForwarderBound = true;
@@ -3787,6 +3809,12 @@ if (!gotTheLock) {
     getStore().delete('auth_tokens');
   };
 
+  const getEnterpriseAccountHeaders = (): Record<string, string> => (
+    buildEnterpriseAccountRequestHeaders(
+      getPersistedEnterpriseAccountContext(getStore()),
+    )
+  );
+
   const saveAuthUser = (user: Record<string, unknown>) => {
     try {
       getStore().set(AUTH_USER_STORE_KEY, user);
@@ -3884,7 +3912,10 @@ if (!gotTheLock) {
         console.log(`[Auth] requesting token refresh (reason: ${reason}) at ${refreshUrl}`);
         const resp = await net.fetch(refreshUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...getEnterpriseAccountHeaders(),
+          },
           body: JSON.stringify(withKeyfromBody({ refreshToken: tokens.refreshToken })),
         });
         if (resp.ok) {
@@ -3922,6 +3953,7 @@ if (!gotTheLock) {
         ...options,
         headers: {
           ...(options?.headers as Record<string, string>),
+          ...getEnterpriseAccountHeaders(),
           Authorization: `Bearer ${accessToken}`,
         },
       });
@@ -3937,6 +3969,34 @@ if (!gotTheLock) {
 
     return resp;
   };
+
+  const refreshEnterpriseAccountContext = () => fetchEnterpriseAccountContext({
+    getServerBaseUrl: getServerApiBaseUrl,
+    fetchWithAuth,
+    store: getStore(),
+  });
+
+  const syncEnterpriseAccountContextFromPayload = async (
+    payload: unknown,
+  ) => {
+    const context = normalizeEnterpriseAccountContext(payload);
+    if (context) {
+      persistEnterpriseAccountContext(getStore(), context);
+      return context;
+    }
+
+    if (readAccountMode(payload) === EnterpriseAccountMode.Personal) {
+      clearEnterpriseAccountContext(getStore());
+      return null;
+    }
+
+    const result = await refreshEnterpriseAccountContext();
+    return result.context;
+  };
+
+  registerEnterpriseAccountHandlers({
+    getContext: refreshEnterpriseAccountContext,
+  });
 
   const extractSessionIdFromKey = (sessionKey: string): string | null =>
     parseManagedSessionKey(sessionKey)?.sessionId ?? null;
@@ -4932,13 +4992,21 @@ if (!gotTheLock) {
       if (body.code !== 0 || !body.data) {
         return { success: false, error: body.message || 'Exchange failed' };
       }
+      clearEnterpriseAccountContext(getStore());
+      clearServerModelMetadata();
       saveAuthTokens(body.data.accessToken, body.data.refreshToken);
       saveAuthUser(body.data.user);
+      const enterpriseContext = await syncEnterpriseAccountContextFromPayload(body.data);
       console.log('[Auth] exchange user data:', JSON.stringify(body.data.user));
       const previousQuotaGateState = getAuthQuotaGateState();
       const quota = normalizeQuota(body.data.quota);
       syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
-      return { success: true, user: body.data.user, quota };
+      return {
+        success: true,
+        user: body.data.user,
+        quota,
+        enterpriseContext,
+      };
     } catch (error) {
       console.error('[Auth] exchange failed:', error);
       return {
@@ -4977,7 +5045,13 @@ if (!gotTheLock) {
         }
       }
       console.log('[Auth] getUser profile data:', JSON.stringify(profileBody.data));
-      return { success: true, user: profileBody.data, quota };
+      const enterpriseContext = await syncEnterpriseAccountContextFromPayload(profileBody.data);
+      return {
+        success: true,
+        user: profileBody.data,
+        quota,
+        enterpriseContext,
+      };
     } catch {
       return { success: false };
     }
@@ -4995,7 +5069,12 @@ if (!gotTheLock) {
       const previousQuotaGateState = getAuthQuotaGateState();
       const quota = normalizeQuota(body.data);
       syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
-      return { success: true, quota };
+      const enterpriseContextResult = await refreshEnterpriseAccountContext();
+      return {
+        success: true,
+        quota,
+        enterpriseContext: enterpriseContextResult.context,
+      };
     } catch {
       return { success: false };
     }
@@ -5059,6 +5138,7 @@ if (!gotTheLock) {
             headers: {
               Authorization: `Bearer ${tokens.accessToken}`,
               'Content-Type': 'application/json',
+              ...getEnterpriseAccountHeaders(),
             },
             body: JSON.stringify(withKeyfromBody({})),
           })
@@ -5068,6 +5148,7 @@ if (!gotTheLock) {
       }
       clearAuthTokens();
       clearAuthUser();
+      clearEnterpriseAccountContext(getStore());
       clearServerModelMetadata();
       const previousQuotaGateState = getAuthQuotaGateState();
       resetAuthQuotaGateState();
@@ -5087,6 +5168,7 @@ if (!gotTheLock) {
       const previousQuotaGateState = getAuthQuotaGateState();
       clearAuthTokens();
       clearAuthUser();
+      clearEnterpriseAccountContext(getStore());
       clearServerModelMetadata();
       resetAuthQuotaGateState();
       const quotaGateSyncScheduled = syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
@@ -10814,7 +10896,10 @@ if (!gotTheLock) {
         console.log(`[Auth] requesting proxy token refresh at ${refreshUrl}`);
         const resp = await net.fetch(refreshUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...getEnterpriseAccountHeaders(),
+          },
           body: JSON.stringify(withKeyfromBody({ refreshToken: tokens.refreshToken })),
         });
         if (resp.ok) {
@@ -10853,6 +10938,7 @@ if (!gotTheLock) {
         getAuthTokens,
         refreshToken: refreshOnce,
         getServerBaseUrl: getServerApiBaseUrl,
+        getAccountContextHeaders: getEnterpriseAccountHeaders,
       });
       console.log('[Main] OpenClaw token proxy started');
     } catch (err) {

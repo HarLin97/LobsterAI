@@ -6,6 +6,8 @@ import logoutIconUrl from '../assets/icons/logout.svg';
 import promoSubscriptionIconUrl from '../assets/icons/promo-subscription.svg';
 import rechargeIconUrl from '../assets/icons/recharge.svg';
 import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
+import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/EnterpriseAccountMenu';
+import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
 import { authService } from '../services/auth';
 import {
   getPortalCreditsResetActivityUrl,
@@ -393,6 +395,7 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
 const LoginButton: React.FC = () => {
   const { isLoggedIn, isLoading, profileSummary, user } = useSelector((state: RootState) => state.auth);
+  const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const [showMenu, setShowMenu] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -464,7 +467,16 @@ const LoginButton: React.FC = () => {
           </>
         )}
       </button>
-      {showMenu && isLoggedIn && <UserMenu onClose={() => setShowMenu(false)} />}
+      {showMenu && isLoggedIn && (
+        enterpriseAccountContext
+          ? (
+            <EnterpriseAccountMenu
+              context={enterpriseAccountContext}
+              onClose={() => setShowMenu(false)}
+            />
+          )
+          : <UserMenu onClose={() => setShowMenu(false)} />
+      )}
     </div>
   );
 };

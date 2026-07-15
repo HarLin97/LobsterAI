@@ -5,6 +5,8 @@ import { classifyErrorKey } from '../../../common/coworkErrorClassify';
 import { ContextCompactionStatus } from '../../../common/coworkSystemMessages';
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import { EnterpriseQuotaMessageMetadataKey } from '../../../shared/enterpriseAccount/constants';
+import { isEnterpriseQuotaReason } from '../../../shared/enterpriseAccount/quotaError';
 import { dedupeArtifactsForDisplay } from '../../services/artifactParser';
 import { i18nService } from '../../services/i18n';
 import type { Artifact } from '../../types/artifact';
@@ -270,6 +272,11 @@ const AssistantTurnBlock: React.FC<{
   }, [turn.id]);
 
   const renderSystemMessage = (message: CoworkMessage) => {
+    if (isEnterpriseQuotaReason(
+      message.metadata?.[EnterpriseQuotaMessageMetadataKey.Reason],
+    )) {
+      return null;
+    }
     const isError = !hasText(message.content) && typeof message.metadata?.error === 'string';
     const rawContent = hasText(message.content)
       ? message.content

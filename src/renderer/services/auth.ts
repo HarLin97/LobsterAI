@@ -1,7 +1,13 @@
 import { ProviderName } from '@shared/providers';
 
+import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/types';
+import {
+  applyEnterpriseAccountContext,
+  refreshEnterpriseAccountContext,
+} from '../features/enterpriseAccount/context';
 import { store } from '../store';
 import {
+  clearProfileSummary,
   setAuthLoading,
   setLoggedIn,
   setLoggedOut,
@@ -20,6 +26,7 @@ interface AuthStateRefreshResult {
   isLoggedIn: boolean;
   user: UserProfile | null;
   quota: UserQuota | null;
+  enterpriseContext: EnterpriseAccountContext | null;
 }
 
 export interface PricingCatalogTextModel {
@@ -93,6 +100,19 @@ class AuthService {
   private unsubQuotaChanged: (() => void) | null = null;
   private unsubWindowState: (() => void) | null = null;
   private lastRefreshTime = 0;
+
+  private applyAuthenticatedState(
+    user: UserProfile,
+    quota: UserQuota | null | undefined,
+    enterpriseContext: EnterpriseAccountContext | null | undefined,
+  ): void {
+    store.dispatch(clearServerModels());
+    store.dispatch(setLoggedIn({ user, quota: quota ?? null }));
+    const context = applyEnterpriseAccountContext(enterpriseContext);
+    if (context) {
+      store.dispatch(clearProfileSummary());
+    }
+  }
 
   /**
    * Initialize: try to restore login state from persisted token.
@@ -186,8 +206,12 @@ class AuthService {
   async handleCallback(code: string): Promise<boolean> {
     try {
       const result = await window.electron.auth.exchange(code);
-      if (result.success) {
-        store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
+      if (result.success && result.user) {
+        this.applyAuthenticatedState(
+          result.user,
+          result.quota,
+          result.enterpriseContext,
+        );
         await this.loadServerModels();
         void this.fetchProfileSummary();
         this.refreshQuota();
@@ -208,10 +232,18 @@ class AuthService {
     try {
       const result = await window.electron.auth.getUser();
       if (result.success && result.user) {
-        store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
+        const enterpriseContext = result.enterpriseContext === undefined
+          ? await refreshEnterpriseAccountContext()
+          : result.enterpriseContext;
+        this.applyAuthenticatedState(result.user, result.quota, enterpriseContext);
         await this.loadServerModels();
         void this.fetchProfileSummary();
-        return { isLoggedIn: true, user: result.user, quota: result.quota ?? null };
+        return {
+          isLoggedIn: true,
+          user: result.user,
+          quota: result.quota ?? null,
+          enterpriseContext: enterpriseContext ?? null,
+        };
       }
     } catch {
       // handled below
@@ -228,6 +260,7 @@ class AuthService {
       isLoggedIn: current.isLoggedIn,
       user: current.user,
       quota: current.quota,
+      enterpriseContext: store.getState().enterpriseAccount.context,
     };
   }
 
@@ -248,7 +281,12 @@ class AuthService {
     try {
       const result = await window.electron.auth.getQuota();
       if (result.success) {
-        store.dispatch(updateQuota(result.quota));
+        if (result.quota) {
+          store.dispatch(updateQuota(result.quota));
+        }
+        if (result.enterpriseContext !== undefined) {
+          applyEnterpriseAccountContext(result.enterpriseContext);
+        }
       }
     } catch {
       // ignore
@@ -259,6 +297,10 @@ class AuthService {
    * Fetch profile summary (credits breakdown).
    */
   async fetchProfileSummary() {
+    if (store.getState().enterpriseAccount.context) {
+      store.dispatch(clearProfileSummary());
+      return;
+    }
     try {
       const result = await window.electron.auth.getProfileSummary();
       if (result.success && result.data) {

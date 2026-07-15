@@ -33,6 +33,7 @@ import {
   OPENCLAW_CHAT_SEND_PAYLOAD_SAFE_LIMIT_BYTES,
   OpenClawRuntimeAdapter,
   pickPersistedAssistantSegment,
+  resolveOpenClawRuntimeError,
   resolveOpenClawRuntimeErrorMessage,
   resolveToolEventIsError,
 } from './openclawRuntimeAdapter';
@@ -255,6 +256,19 @@ test('resolveOpenClawRuntimeErrorMessage restores recent quota error hidden by O
 
 test('resolveOpenClawRuntimeErrorMessage classifies raw LobsterAI quota errors', () => {
   expect(resolveOpenClawRuntimeErrorMessage('本月积分已用完')).toContain('积分额度已用完');
+});
+
+test('resolveOpenClawRuntimeError keeps structured enterprise quota reason', () => {
+  expect(resolveOpenClawRuntimeError('LLM request failed.', {
+    errorCode: '41606',
+    rawErrorPreview: '41606 member monthly quota exhausted',
+  })).toEqual({
+    message: expect.stringContaining('成员月度额度'),
+    enterpriseQuotaError: {
+      code: 41606,
+      reason: 'member_monthly_quota_exhausted',
+    },
+  });
 });
 
 test('resolveOpenClawRuntimeErrorMessage classifies generic error from safe OAuth metadata', () => {

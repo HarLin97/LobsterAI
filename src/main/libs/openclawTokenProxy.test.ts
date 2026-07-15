@@ -27,6 +27,15 @@ test('extracts LobsterAI monthly quota error from proxy SSE packet', () => {
   });
 });
 
+test('extracts enterprise quota error from unified non-stream response', () => {
+  expect(testUtils.extractQuotaErrorFromProxyErrorPayload(
+    JSON.stringify({ code: 41607, message: '企业积分池已用完', data: null }),
+  )).toEqual({
+    message: '企业积分池已用完',
+    code: 41607,
+  });
+});
+
 test('ignores generic HTTP 402 without LobsterAI quota code or message', () => {
   const packet = [
     'event: error',

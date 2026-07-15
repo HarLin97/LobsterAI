@@ -31,6 +31,9 @@ const readString = (value: unknown, fallback: string): string => (
 );
 
 export const hasMediaGenerationEntitlement = (quota: Record<string, unknown>): boolean => {
+  if (typeof quota.mediaGenerationEntitled === 'boolean') {
+    return quota.mediaGenerationEntitled;
+  }
   const subscriptionStatus = typeof quota.subscriptionStatus === 'string'
     ? quota.subscriptionStatus
     : AuthSubscriptionStatus.Free;
@@ -61,7 +64,12 @@ export const normalizeAuthQuota = (
   let planName = labels.freePlanName;
   let subscriptionStatus: string = AuthSubscriptionStatus.Free;
 
-  if (typeof raw.freeCreditsTotal === 'number') {
+  if (typeof raw.limit === 'number') {
+    creditsLimit = raw.limit;
+    creditsUsed = readNumber(raw.used);
+    planName = readString(raw.planName, 'Enterprise');
+    subscriptionStatus = readString(raw.subscriptionStatus, 'enterprise');
+  } else if (typeof raw.freeCreditsTotal === 'number') {
     creditsLimit = raw.freeCreditsTotal;
     creditsUsed = readNumber(raw.freeCreditsUsed);
     planName = readString(raw.planName, labels.freePlanName);
@@ -99,6 +107,7 @@ export const normalizeAuthQuota = (
 
   const hasPaidCredits = raw.hasPaidCredits === true || subscriptionStatus === AuthSubscriptionStatus.Active;
   return {
+    ...raw,
     planName,
     subscriptionStatus,
     creditsLimit,

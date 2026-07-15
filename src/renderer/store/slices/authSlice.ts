@@ -79,7 +79,7 @@ const authSlice = createSlice({
     setAuthLoading(state, action: PayloadAction<boolean>) {
       state.isLoading = action.payload;
     },
-    setLoggedIn(state, action: PayloadAction<{ user: UserProfile; quota: UserQuota }>) {
+    setLoggedIn(state, action: PayloadAction<{ user: UserProfile; quota: UserQuota | null }>) {
       state.isLoggedIn = true;
       state.isLoading = false;
       state.user = action.payload.user;
@@ -98,8 +98,18 @@ const authSlice = createSlice({
     setProfileSummary(state, action: PayloadAction<ProfileSummary>) {
       state.profileSummary = action.payload;
     },
+    clearProfileSummary(state) {
+      state.profileSummary = null;
+    },
   },
 });
 
-export const { setAuthLoading, setLoggedIn, setLoggedOut, updateQuota, setProfileSummary } = authSlice.actions;
+export const {
+  clearProfileSummary,
+  setAuthLoading,
+  setLoggedIn,
+  setLoggedOut,
+  setProfileSummary,
+  updateQuota,
+} = authSlice.actions;
 export default authSlice.reducer;
