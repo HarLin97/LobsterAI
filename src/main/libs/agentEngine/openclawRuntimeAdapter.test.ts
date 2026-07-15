@@ -1556,6 +1556,288 @@ test('pollChannelSessions does not complete a channel session while a local acti
   expect(statusEvents).toEqual([]);
 });
 
+test('sessions.changed drives IM loading status without creating a local active turn', () => {
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const statusEvents: Array<{ sessionId: string; status: string }> = [];
+  adapter.on('sessionStatus', (sessionId: string, status: string) => {
+    statusEvents.push({ sessionId, status });
+  });
+  adapter.channelSessionSync = {
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-1',
+      phase: 'start',
+      status: 'running',
+    },
+  });
+
+  expect(session.status).toBe('running');
+  expect(adapter.activeTurns.has(session.id)).toBe(false);
+  expect(adapter.knownChannelSessionIds.has(session.id)).toBe(false);
+  expect(adapter.channelLifecycleRunBySessionKey.get(sessionKey)?.runId).toBe('im-run-1');
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-1',
+      phase: 'end',
+      status: 'done',
+    },
+  });
+
+  expect(session.status).toBe('completed');
+  expect(adapter.channelLifecycleRunBySessionKey.has(sessionKey)).toBe(false);
+  expect(getUpdateSessionCalls().filter((call) => 'status' in call.patch)).toEqual([
+    {
+      sessionId: session.id,
+      patch: { status: 'running' },
+      options: undefined,
+    },
+    {
+      sessionId: session.id,
+      patch: { status: 'completed' },
+      options: undefined,
+    },
+  ]);
+  expect(statusEvents).toEqual([
+    { sessionId: session.id, status: 'running' },
+    { sessionId: session.id, status: 'completed' },
+  ]);
+});
+
+test('sessions.changed IM status handling excludes desktop, cron, main, subagent, and stale bindings', () => {
+  const validSessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const resolveOrCreateSession = vi.fn(() => session.id);
+  adapter.channelSessionSync = {
+    isCurrentBindingKey: (key: string) => key !== validSessionKey,
+    resolveOrCreateSession,
+  };
+
+  for (const sessionKey of [
+    `agent:main:lobsterai:${session.id}`,
+    'agent:main:cron:job-1:run:run-1',
+    'agent:main:main',
+    'agent:main:subagent:run-1',
+    validSessionKey,
+  ]) {
+    adapter.handleGatewayEvent({
+      event: 'sessions.changed',
+      payload: {
+        sessionKey,
+        runId: 'run-ignored',
+        phase: 'start',
+        status: 'running',
+      },
+    });
+  }
+
+  expect(session.status).toBe('completed');
+  expect(resolveOrCreateSession).not.toHaveBeenCalled();
+  expect(getUpdateSessionCalls().some((call) => 'status' in call.patch)).toBe(false);
+});
+
+test('explicit IM lifecycle start prevents polling from clearing loading mid-run', async () => {
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.channelSessionSync = {
+    isChannelSessionKey: (key: string) => key === sessionKey,
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      sessions: [{
+        key: sessionKey,
+        hasActiveRun: false,
+        status: 'running',
+      }],
+    }),
+  };
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-1',
+      phase: 'start',
+      status: 'running',
+    },
+  });
+  await adapter.pollChannelSessions();
+
+  expect(session.status).toBe('running');
+  expect(getUpdateSessionCalls().filter((call) => 'status' in call.patch)).toEqual([
+    {
+      sessionId: session.id,
+      patch: { status: 'running' },
+      options: undefined,
+    },
+  ]);
+});
+
+test('polling terminal status recovers when an IM lifecycle terminal event is missed', async () => {
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.channelSessionSync = {
+    isChannelSessionKey: (key: string) => key === sessionKey,
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      sessions: [{
+        key: sessionKey,
+        hasActiveRun: false,
+        status: 'done',
+      }],
+    }),
+  };
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-1',
+      phase: 'start',
+      status: 'running',
+    },
+  });
+  await adapter.pollChannelSessions();
+
+  expect(session.status).toBe('completed');
+  expect(adapter.channelLifecycleRunBySessionKey.has(sessionKey)).toBe(false);
+});
+
+test('a stale IM terminal event cannot clear a newer run loading state', () => {
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.channelSessionSync = {
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-new',
+      phase: 'start',
+      status: 'running',
+    },
+  });
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-old',
+      phase: 'end',
+      status: 'done',
+    },
+  });
+
+  expect(session.status).toBe('running');
+  expect(adapter.channelLifecycleRunBySessionKey.get(sessionKey)?.runId).toBe('im-run-new');
+});
+
+test('gateway session lifecycle subscription uses the existing sessions.subscribe RPC', async () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const request = vi.fn().mockResolvedValue({ subscribed: true });
+
+  adapter.subscribeToGatewaySessionEvents({
+    start: () => {},
+    stop: () => {},
+    request,
+  });
+
+  await vi.waitFor(() => {
+    expect(request).toHaveBeenCalledWith(
+      'sessions.subscribe',
+      {},
+      { timeoutMs: 5_000 },
+    );
+  });
+});
+
+test('stale IM lifecycle markers are pruned without allocating per-run timers', () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    adapter.agentTimeoutSeconds = 1;
+    adapter.channelLifecycleRunBySessionKey.set(sessionKey, {
+      runId: 'lost-terminal-run',
+      observedAtMs: Date.now() - 61_001,
+    });
+
+    adapter.pruneStaleChannelLifecycleRuns();
+
+    expect(adapter.channelLifecycleRunBySessionKey.has(sessionKey)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      '[ChannelSync] discarded stale IM lifecycle run marker.',
+      `SessionKey ${sessionKey}.`,
+      'Run lost-terminal-run.',
+    );
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('malformed IM lifecycle mapping errors stay isolated from the gateway event loop', () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const mappingError = new Error('mapping unavailable');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  adapter.channelSessionSync = {
+    isCurrentBindingKey: () => {
+      throw mappingError;
+    },
+  };
+  try {
+    expect(() => adapter.handleGatewayEvent({
+      event: 'sessions.changed',
+      payload: {
+        sessionKey: 'agent:main:feishu:dm:ou_123',
+        runId: 'im-run-1',
+        phase: 'start',
+        status: 'running',
+      },
+    })).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(
+      '[ChannelSync] failed to process gateway session lifecycle event:',
+      mappingError,
+    );
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 function createRunTurnAdapter(options: {
   sessionModelOverride?: string;
   agentModel?: string;
