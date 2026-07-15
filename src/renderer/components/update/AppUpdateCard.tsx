@@ -37,6 +37,19 @@ const PingDot: React.FC<{ dotClassName: string }> = ({ dotClassName }) => (
   </span>
 );
 
+const logCollapsePreferenceFailure = (action: string, error: unknown): void => {
+  console.warn(`[AppUpdateCard] failed to ${action}:`, error);
+  try {
+    window.electron?.log?.fromRenderer?.(
+      'warn',
+      'AppUpdateCard',
+      `failed to ${action}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } catch {
+    // Best-effort diagnostic only.
+  }
+};
+
 const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
   updateState,
   onUpdate,
@@ -51,9 +64,14 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
 
   useEffect(() => {
     let isCurrent = true;
-    void readUpdateCardCollapsedVersion().then((version) => {
-      if (isCurrent) setCollapsedVersion(version);
-    });
+    void readUpdateCardCollapsedVersion()
+      .then((version) => {
+        if (isCurrent) setCollapsedVersion(version);
+      })
+      .catch((error) => {
+        if (isCurrent) setCollapsedVersion(null);
+        logCollapsePreferenceFailure('read collapsed update version', error);
+      });
     return () => {
       isCurrent = false;
     };
@@ -92,12 +110,16 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
 
   const handleExpand = () => {
     setCollapsedVersion(null);
-    void clearUpdateCardCollapsedVersion();
+    void clearUpdateCardCollapsedVersion().catch((error) => {
+      logCollapsePreferenceFailure('clear collapsed update version', error);
+    });
   };
 
   const handleCollapse = () => {
     setCollapsedVersion(latestVersion);
-    void saveUpdateCardCollapsedVersion(latestVersion);
+    void saveUpdateCardCollapsedVersion(latestVersion).catch((error) => {
+      logCollapsePreferenceFailure('save collapsed update version', error);
+    });
   };
 
   const handlePrimary = async () => {
@@ -162,20 +184,20 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
       className={`non-draggable animate-fade-in-up rounded-xl border p-3 shadow-card ${cardTone}`}
       aria-label={`${title} v${latestVersion}`}
     >
-      <div className="flex items-start gap-2.5">
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${iconTone}`} aria-hidden="true">
+      <div className="flex items-start gap-1.5">
+        <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${iconTone}`} aria-hidden="true">
           <Icon className="h-4 w-4" />
         </span>
-        <div className="min-w-0 flex-1 pt-0.5">
-          <div className="flex min-w-0 items-baseline gap-1.5">
-            <span className="truncate text-sm font-semibold text-foreground">{title}</span>
-            <span className="shrink-0 text-xs text-secondary">v{latestVersion}</span>
-          </div>
+        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5">
+          <span className="min-w-0 break-words text-sm font-semibold leading-5 text-foreground">
+            {title}
+          </span>
+          <span className="shrink-0 text-xs leading-4 text-secondary">v{latestVersion}</span>
         </div>
         <button
           type="button"
           onClick={handleCollapse}
-          className="-mr-1 -mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.06]"
+          className="-mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.06]"
           aria-label={i18nService.t('collapse')}
           title={i18nService.t('collapse')}
         >

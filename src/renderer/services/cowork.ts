@@ -282,6 +282,15 @@ class CoworkService {
     }
 
     const sessionStatusCleanup = cowork.onStreamSessionStatus?.(({ sessionId, status }) => {
+      const coworkState = store.getState().cowork;
+      const previousStatus = coworkState.sessions.find(session => session.id === sessionId)?.status
+        ?? (coworkState.currentSession?.id === sessionId ? coworkState.currentSession.status : undefined);
+      if (previousStatus !== status) {
+        this.logDiagnostic(
+          'debug',
+          `received session status transition: session=${sessionId}; ${previousStatus ?? 'unknown'} -> ${status}.`,
+        );
+      }
       store.dispatch(updateSessionStatus({ sessionId, status }));
       this.setCurrentSessionStreaming(sessionId, status === 'running', `stream_status_${status}`);
       if (status === CoworkSessionStatusValue.Running) {

@@ -3,6 +3,8 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { ProviderName } from '../../shared/providers';
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -1388,6 +1390,35 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAIResponses);
     expect(selection.providerConfig.auth).toBe(AuthType.ApiKey);
     expect(selection.providerConfig.apiKey).toBe('${LOBSTER_APIKEY_XAI}');
+  });
+
+  test.each([
+    [ProviderName.OpenAI, 'gpt-5.6-sol', 'https://api.openai.com/v1', 1_050_000],
+    [ProviderName.OpenAI, 'gpt-5.6-terra', 'https://api.openai.com/v1', 1_050_000],
+    [ProviderName.OpenAI, 'gpt-5.6-luna', 'https://api.openai.com/v1', 1_050_000],
+    [ProviderName.Xai, 'grok-4.5', 'https://api.x.ai/v1', 500_000],
+  ])('writes official context metadata for %s/%s', async (providerName, modelId, baseURL, contextWindow) => {
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'test-key',
+      baseURL,
+      modelId,
+      apiType: 'openai',
+      providerName,
+      authType: 'apikey',
+      codingPlanEnabled: false,
+      supportsImage: false,
+      supportsThinking: false,
+      modelName: modelId,
+    });
+
+    expect(selection.providerConfig.models[0]).toMatchObject({
+      id: modelId,
+      input: ['text', 'image'],
+      reasoning: true,
+      contextWindow,
+    });
   });
 
   test('keeps MiniMax API key mode on the standard MiniMax provider', async () => {

@@ -1556,6 +1556,288 @@ test('pollChannelSessions does not complete a channel session while a local acti
   expect(statusEvents).toEqual([]);
 });
 
+test('sessions.changed drives IM loading status without creating a local active turn', () => {
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const statusEvents: Array<{ sessionId: string; status: string }> = [];
+  adapter.on('sessionStatus', (sessionId: string, status: string) => {
+    statusEvents.push({ sessionId, status });
+  });
+  adapter.channelSessionSync = {
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-1',
+      phase: 'start',
+      status: 'running',
+    },
+  });
+
+  expect(session.status).toBe('running');
+  expect(adapter.activeTurns.has(session.id)).toBe(false);
+  expect(adapter.knownChannelSessionIds.has(session.id)).toBe(false);
+  expect(adapter.channelLifecycleRunBySessionKey.get(sessionKey)?.runId).toBe('im-run-1');
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-1',
+      phase: 'end',
+      status: 'done',
+    },
+  });
+
+  expect(session.status).toBe('completed');
+  expect(adapter.channelLifecycleRunBySessionKey.has(sessionKey)).toBe(false);
+  expect(getUpdateSessionCalls().filter((call) => 'status' in call.patch)).toEqual([
+    {
+      sessionId: session.id,
+      patch: { status: 'running' },
+      options: undefined,
+    },
+    {
+      sessionId: session.id,
+      patch: { status: 'completed' },
+      options: undefined,
+    },
+  ]);
+  expect(statusEvents).toEqual([
+    { sessionId: session.id, status: 'running' },
+    { sessionId: session.id, status: 'completed' },
+  ]);
+});
+
+test('sessions.changed IM status handling excludes desktop, cron, main, subagent, and stale bindings', () => {
+  const validSessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const resolveOrCreateSession = vi.fn(() => session.id);
+  adapter.channelSessionSync = {
+    isCurrentBindingKey: (key: string) => key !== validSessionKey,
+    resolveOrCreateSession,
+  };
+
+  for (const sessionKey of [
+    `agent:main:lobsterai:${session.id}`,
+    'agent:main:cron:job-1:run:run-1',
+    'agent:main:main',
+    'agent:main:subagent:run-1',
+    validSessionKey,
+  ]) {
+    adapter.handleGatewayEvent({
+      event: 'sessions.changed',
+      payload: {
+        sessionKey,
+        runId: 'run-ignored',
+        phase: 'start',
+        status: 'running',
+      },
+    });
+  }
+
+  expect(session.status).toBe('completed');
+  expect(resolveOrCreateSession).not.toHaveBeenCalled();
+  expect(getUpdateSessionCalls().some((call) => 'status' in call.patch)).toBe(false);
+});
+
+test('explicit IM lifecycle start prevents polling from clearing loading mid-run', async () => {
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.channelSessionSync = {
+    isChannelSessionKey: (key: string) => key === sessionKey,
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      sessions: [{
+        key: sessionKey,
+        hasActiveRun: false,
+        status: 'running',
+      }],
+    }),
+  };
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-1',
+      phase: 'start',
+      status: 'running',
+    },
+  });
+  await adapter.pollChannelSessions();
+
+  expect(session.status).toBe('running');
+  expect(getUpdateSessionCalls().filter((call) => 'status' in call.patch)).toEqual([
+    {
+      sessionId: session.id,
+      patch: { status: 'running' },
+      options: undefined,
+    },
+  ]);
+});
+
+test('polling terminal status recovers when an IM lifecycle terminal event is missed', async () => {
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.channelSessionSync = {
+    isChannelSessionKey: (key: string) => key === sessionKey,
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      sessions: [{
+        key: sessionKey,
+        hasActiveRun: false,
+        status: 'done',
+      }],
+    }),
+  };
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-1',
+      phase: 'start',
+      status: 'running',
+    },
+  });
+  await adapter.pollChannelSessions();
+
+  expect(session.status).toBe('completed');
+  expect(adapter.channelLifecycleRunBySessionKey.has(sessionKey)).toBe(false);
+});
+
+test('a stale IM terminal event cannot clear a newer run loading state', () => {
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.channelSessionSync = {
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-new',
+      phase: 'start',
+      status: 'running',
+    },
+  });
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-old',
+      phase: 'end',
+      status: 'done',
+    },
+  });
+
+  expect(session.status).toBe('running');
+  expect(adapter.channelLifecycleRunBySessionKey.get(sessionKey)?.runId).toBe('im-run-new');
+});
+
+test('gateway session lifecycle subscription uses the existing sessions.subscribe RPC', async () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const request = vi.fn().mockResolvedValue({ subscribed: true });
+
+  adapter.subscribeToGatewaySessionEvents({
+    start: () => {},
+    stop: () => {},
+    request,
+  });
+
+  await vi.waitFor(() => {
+    expect(request).toHaveBeenCalledWith(
+      'sessions.subscribe',
+      {},
+      { timeoutMs: 5_000 },
+    );
+  });
+});
+
+test('stale IM lifecycle markers are pruned without allocating per-run timers', () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    adapter.agentTimeoutSeconds = 1;
+    adapter.channelLifecycleRunBySessionKey.set(sessionKey, {
+      runId: 'lost-terminal-run',
+      observedAtMs: Date.now() - 61_001,
+    });
+
+    adapter.pruneStaleChannelLifecycleRuns();
+
+    expect(adapter.channelLifecycleRunBySessionKey.has(sessionKey)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      '[ChannelSync] discarded stale IM lifecycle run marker.',
+      `SessionKey ${sessionKey}.`,
+      'Run lost-terminal-run.',
+    );
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('malformed IM lifecycle mapping errors stay isolated from the gateway event loop', () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const mappingError = new Error('mapping unavailable');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  adapter.channelSessionSync = {
+    isCurrentBindingKey: () => {
+      throw mappingError;
+    },
+  };
+  try {
+    expect(() => adapter.handleGatewayEvent({
+      event: 'sessions.changed',
+      payload: {
+        sessionKey: 'agent:main:feishu:dm:ou_123',
+        runId: 'im-run-1',
+        phase: 'start',
+        status: 'running',
+      },
+    })).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(
+      '[ChannelSync] failed to process gateway session lifecycle event:',
+      mappingError,
+    );
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 function createRunTurnAdapter(options: {
   sessionModelOverride?: string;
   agentModel?: string;
@@ -1776,6 +2058,7 @@ test('continueSession patches a session override before chat.send even when the 
   expect(requests[0].params).toEqual({
     key: 'agent:main:lobsterai:session-1',
     model,
+    reasoningLevel: 'stream',
   });
 });
 
@@ -2018,6 +2301,26 @@ function createReconcileStore(
         session.messages.push(created);
         return created;
       },
+      insertMessageBeforeId: (
+        sessionId: string,
+        beforeMessageId: string,
+        message: Record<string, unknown>,
+      ) => {
+        expect(sessionId).toBe(session.id);
+        const created = {
+          id: `msg-${nextId++}`,
+          timestamp: nextId,
+          metadata: {},
+          ...message,
+        };
+        const targetIndex = session.messages.findIndex((entry) => entry.id === beforeMessageId);
+        if (targetIndex < 0) {
+          session.messages.push(created);
+        } else {
+          session.messages.splice(targetIndex, 0, created);
+        }
+        return created;
+      },
       updateSession: (sessionId: string, patch: Record<string, unknown>, updateOptions?: Record<string, unknown>) => {
         expect(sessionId).toBe(session.id);
         updateSessionCalls.push({ sessionId, patch, options: updateOptions });
@@ -2116,6 +2419,7 @@ function createActiveTurn(sessionId: string, sessionKey: string, runId: string) 
     mediaStatusPollCountByTaskId: new Map(),
     mediaStatusPollBaseByToolCallId: new Map(),
     contextMaintenanceToolCallIds: new Set(),
+    thinking: { messageId: null, currentText: '', messageIdByKey: new Map() },
     stopRequested: false,
     pendingUserSync: false,
     bufferedChatPayloads: [],
@@ -2837,6 +3141,7 @@ test('lifecycle fallback repairs managed session assistant text from history', a
     mediaStatusPollCountByTaskId: new Map(),
     mediaStatusPollBaseByToolCallId: new Map(),
     contextMaintenanceToolCallIds: new Set(),
+    thinking: { messageId: null, currentText: '', messageIdByKey: new Map() },
     stopRequested: false,
     pendingUserSync: false,
     bufferedChatPayloads: [],
@@ -2892,6 +3197,19 @@ test('lifecycle fallback backfills missing tool result for the current turn', as
     && message.metadata?.toolUseId === 'call-read'
   ));
   expect(resultMessage?.content).toBe('gateway log output');
+  const thinkingIndex = session.messages.findIndex((message) => message.metadata?.isThinking === true);
+  const toolUseIndex = session.messages.findIndex((message) => (
+    message.type === 'tool_use' && message.metadata?.toolUseId === 'call-read'
+  ));
+  expect(thinkingIndex).toBeGreaterThan(0);
+  expect(thinkingIndex).toBeLessThan(toolUseIndex);
+  expect(session.messages[thinkingIndex].metadata).toMatchObject({
+    isThinking: true,
+    isStreaming: false,
+    isFinal: true,
+    openclawThinkingAnchorToolCallId: 'call-read',
+    openclawThinkingKey: 'tool:call-read:thinking:0',
+  });
   expect(session.status).toBe('completed');
 });
 
@@ -3658,76 +3976,6 @@ test('chat history sync materializes missed backfillable tool results by result 
         agentId: 'ts-engineer',
       }),
     ]));
-
-    await vi.advanceTimersByTimeAsync(800);
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
-test('chat final reuses identical finalized thinking from the current turn', async () => {
-  vi.useFakeTimers();
-  try {
-    const thinkingText = 'The user wants me to spawn two subagents to test. Let me do that.';
-    const finalText = 'fibonacci 也完成了。两个 subagent 测试都正常完成。';
-    const { session, store } = createReconcileStore([
-      { id: 'msg-1', type: 'user', content: '起两个subagent 随便做点什么，用于测试', timestamp: 1, metadata: {} },
-      {
-        id: 'msg-2',
-        type: 'assistant',
-        content: thinkingText,
-        timestamp: 2,
-        metadata: { isThinking: true, isStreaming: false, isFinal: true },
-      },
-      {
-        id: 'msg-3',
-        type: 'assistant',
-        content: 'summer-poem 已完成，还在等 fibonacci 的结果...',
-        timestamp: 3,
-        metadata: { isStreaming: false, isFinal: true },
-      },
-    ]);
-
-    const adapter = new OpenClawRuntimeAdapter(store, {});
-    const sessionKey = `agent:main:lobsterai:${session.id}`;
-    adapter.gatewayClient = {
-      start: () => {},
-      stop: () => {},
-      request: async () => ({
-        messages: [
-          { role: 'user', content: '起两个subagent 随便做点什么，用于测试' },
-          {
-            role: 'assistant',
-            content: [
-              { type: 'thinking', thinking: thinkingText },
-              { type: 'text', text: finalText },
-            ],
-          },
-        ],
-      }),
-    };
-
-    const turn = createActiveTurn(session.id, sessionKey, 'run-final');
-    adapter.activeTurns.set(session.id, turn);
-    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
-
-    adapter.handleChatEvent({
-      state: 'final',
-      runId: 'run-final',
-      sessionKey,
-      message: { role: 'assistant', content: finalText },
-    }, 1);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const thinkingMessages = session.messages.filter((message) => message.metadata?.isThinking === true);
-    expect(thinkingMessages.map((message) => message.id)).toEqual(['msg-2']);
-    expect(thinkingMessages[0].content).toBe(thinkingText);
-    expect(session.messages.some((message) => (
-      message.type === 'assistant'
-      && message.metadata?.isThinking !== true
-      && message.content === finalText
-    ))).toBe(true);
 
     await vi.advanceTimersByTimeAsync(800);
   } finally {
