@@ -23,6 +23,14 @@ export const EnterpriseQuotaReason = {
 export type EnterpriseQuotaReason =
   typeof EnterpriseQuotaReason[keyof typeof EnterpriseQuotaReason];
 
+export const EnterpriseQuotaRequestType = {
+  MemberQuota: 'member_quota',
+  EnterprisePool: 'enterprise_pool',
+} as const;
+
+export type EnterpriseQuotaRequestType =
+  typeof EnterpriseQuotaRequestType[keyof typeof EnterpriseQuotaRequestType];
+
 export const EnterpriseApiErrorCode = {
   NotFound: 41600,
   Unavailable: 41601,
@@ -44,6 +52,8 @@ export type EnterpriseApiErrorCode =
 
 export const EnterpriseAccountIpcChannel = {
   GetContext: 'enterpriseAccount:getContext',
+  GetIdentities: 'enterpriseAccount:getIdentities',
+  RequestQuotaIncrease: 'enterpriseAccount:requestQuotaIncrease',
 } as const;
 
 export type EnterpriseAccountIpcChannel =

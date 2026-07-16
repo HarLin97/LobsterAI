@@ -60,6 +60,10 @@ export const getPortalRechargeUrl = () => `${getPortalBase()}/`;
 export const getPortalInvitationUrl = () => `${getPortalBase()}/invitation`;
 export const getPortalCreditsResetActivityUrl = () => `${getPortalBase()}/profile?activity=credits_reset`;
 
+export const getEnterpriseMemberProfileUrl = (enterpriseId: number) => (
+  `${getPortalBase()}/enterprise/profile/${encodeURIComponent(String(enterpriseId))}`
+);
+
 const getEnterpriseConsoleBaseUrl = (enterpriseId: number) => (
   `${getPortalBase()}/enterprise/console/${encodeURIComponent(String(enterpriseId))}`
 );

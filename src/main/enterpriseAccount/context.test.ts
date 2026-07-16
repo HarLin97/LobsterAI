@@ -4,15 +4,20 @@ import {
   EnterpriseAccountMode,
   EnterpriseApiErrorCode,
   EnterpriseMemberRole,
+  EnterpriseQuotaReason,
+  EnterpriseQuotaRequestType,
 } from '../../shared/enterpriseAccount/constants';
 import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/types';
 import type { SqliteStore } from '../sqliteStore';
 import {
   buildEnterpriseAccountRequestHeaders,
   fetchEnterpriseAccountContext,
+  fetchEnterpriseAccountIdentities,
   getPersistedEnterpriseAccountContext,
   normalizeEnterpriseAccountContext,
+  normalizeEnterpriseAccountIdentities,
   persistEnterpriseAccountContext,
+  requestEnterpriseQuotaIncrease,
 } from './context';
 
 const createStore = (): SqliteStore => {
@@ -31,6 +36,7 @@ const createStore = (): SqliteStore => {
 const createContext = (enterpriseId = 1001): EnterpriseAccountContext => ({
   accountMode: EnterpriseAccountMode.Enterprise,
   enterpriseId,
+  memberId: 2001,
   enterpriseName: 'Example Enterprise',
   role: EnterpriseMemberRole.SuperAdmin,
   permissions: {
@@ -40,6 +46,7 @@ const createContext = (enterpriseId = 1001): EnterpriseAccountContext => ({
   },
   memberQuota: { limit: 100, used: 40, remaining: 60 },
   enterprisePool: { total: 1000, used: 400, remaining: 600 },
+  quotaStatus: { available: true, reason: null, errorCode: null },
 });
 
 const jsonResponse = (body: unknown, status = 200): Response => new Response(
@@ -60,10 +67,12 @@ describe('enterprise account context normalization', () => {
       data: {
         accountMode: EnterpriseAccountMode.Enterprise,
         enterpriseId: '1001',
+        memberId: '2001',
         enterpriseName: ' Example Enterprise ',
         role: EnterpriseMemberRole.SuperAdmin,
         memberQuota: { limit: 100, used: 40, remaining: 60 },
         enterprisePool: { total: 1000, used: 400, remaining: 600 },
+        quotaStatus: { available: true },
       },
     })).toEqual(createContext());
   });
@@ -91,6 +100,19 @@ describe('enterprise account context normalization', () => {
     store.set('enterprise_account_context', { enterpriseId: -1 });
     expect(getPersistedEnterpriseAccountContext(store)).toBeNull();
     expect(buildEnterpriseAccountRequestHeaders(null)).toEqual({});
+  });
+
+  test('normalizes only valid joined enterprise identities', () => {
+    expect(normalizeEnterpriseAccountIdentities({
+      enterprises: [
+        { enterpriseId: '1001', enterpriseName: 'Enterprise A', role: 'super_admin' },
+        { enterpriseId: 1002, enterpriseName: 'Enterprise B', role: 'member' },
+        { enterpriseId: -1, enterpriseName: 'Invalid', role: 'member' },
+      ],
+    })).toEqual([
+      { enterpriseId: 1001, enterpriseName: 'Enterprise A', role: 'super_admin' },
+      { enterpriseId: 1002, enterpriseName: 'Enterprise B', role: 'member' },
+    ]);
   });
 });
 
@@ -169,6 +191,106 @@ describe('enterprise account context refresh', () => {
       success: false,
       context: cachedContext,
       error: 'Enterprise account context request timed out',
+    });
+  });
+});
+
+describe('enterprise identity list refresh', () => {
+  test('loads all enterprise identities through the authenticated API', async () => {
+    const result = await fetchEnterpriseAccountIdentities({
+      getServerBaseUrl: () => 'https://example.test',
+      fetchWithAuth: async (url, options) => {
+        expect(url).toBe('https://example.test/api/enterprise/identities');
+        expect(options?.headers).toEqual({ Accept: 'application/json' });
+        return jsonResponse({
+          code: 0,
+          data: {
+            enterprises: [
+              { enterpriseId: 1001, enterpriseName: 'Enterprise A', role: 'super_admin' },
+              { enterpriseId: 1002, enterpriseName: 'Enterprise B', role: 'member' },
+            ],
+          },
+        });
+      },
+    });
+
+    expect(result).toEqual({
+      success: true,
+      identities: [
+        { enterpriseId: 1001, enterpriseName: 'Enterprise A', role: 'super_admin' },
+        { enterpriseId: 1002, enterpriseName: 'Enterprise B', role: 'member' },
+      ],
+    });
+  });
+
+  test('does not expose identities from a stale auth request', async () => {
+    const result = await fetchEnterpriseAccountIdentities({
+      getServerBaseUrl: () => 'https://example.test',
+      fetchWithAuth: async () => jsonResponse({
+        code: 0,
+        data: {
+          enterprises: [
+            { enterpriseId: 1001, enterpriseName: 'Enterprise A', role: 'super_admin' },
+          ],
+        },
+      }),
+      isRequestCurrent: () => false,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.identities).toEqual([]);
+  });
+});
+
+describe('enterprise quota request', () => {
+  test('submits a member quota request through the authenticated API', async () => {
+    const result = await requestEnterpriseQuotaIncrease({
+      getServerBaseUrl: () => 'https://example.test',
+      fetchWithAuth: async (url, options) => {
+        expect(url).toBe('https://example.test/api/enterprise/1001/quota-requests');
+        expect(options?.method).toBe('POST');
+        expect(options?.body).toBe(JSON.stringify({
+          requestType: EnterpriseQuotaRequestType.MemberQuota,
+        }));
+        return jsonResponse({
+          code: 0,
+          data: {
+            requestId: 3001,
+            requestType: EnterpriseQuotaRequestType.MemberQuota,
+            status: 'pending',
+            created: true,
+          },
+        });
+      },
+    }, 1001, EnterpriseQuotaRequestType.MemberQuota);
+
+    expect(result).toEqual({
+      success: true,
+      requestId: 3001,
+      requestType: EnterpriseQuotaRequestType.MemberQuota,
+      status: 'pending',
+      created: true,
+    });
+  });
+
+  test('normalizes a blocked quota status from enterprise context', () => {
+    expect(normalizeEnterpriseAccountContext({
+      accountMode: EnterpriseAccountMode.Enterprise,
+      enterpriseId: 1001,
+      memberId: 2001,
+      enterpriseName: 'Example Enterprise',
+      role: EnterpriseMemberRole.Member,
+      memberQuota: { limit: 100, used: 100, remaining: 0 },
+      enterprisePool: { total: 1000, used: 1000, remaining: 0 },
+      quotaStatus: {
+        available: false,
+        reason: EnterpriseQuotaReason.EnterprisePoolExhausted,
+        errorCode: EnterpriseApiErrorCode.EnterprisePoolExhausted,
+      },
+    })?.quotaStatus).toEqual({
+      available: false,
+      reason: EnterpriseQuotaReason.EnterprisePoolExhausted,
+      errorCode: EnterpriseApiErrorCode.EnterprisePoolExhausted,
     });
   });
 });

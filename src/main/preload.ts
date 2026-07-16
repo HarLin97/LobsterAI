@@ -136,6 +136,10 @@ contextBridge.exposeInMainWorld('electron', {
   },
   enterpriseAccount: {
     getContext: () => ipcRenderer.invoke(EnterpriseAccountIpcChannel.GetContext),
+    getIdentities: () => ipcRenderer.invoke(EnterpriseAccountIpcChannel.GetIdentities),
+    requestQuotaIncrease: (enterpriseId: number, requestType: string) => (
+      ipcRenderer.invoke(EnterpriseAccountIpcChannel.RequestQuotaIncrease, enterpriseId, requestType)
+    ),
   },
   api: {
     // 普通 API 请求（非流式）

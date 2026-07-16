@@ -135,10 +135,12 @@ import {
   buildEnterpriseAccountRequestHeaders,
   clearEnterpriseAccountContext,
   fetchEnterpriseAccountContext,
+  fetchEnterpriseAccountIdentities,
   getPersistedEnterpriseAccountContext,
   normalizeEnterpriseAccountContext,
   persistEnterpriseAccountContext,
   readAccountMode,
+  requestEnterpriseQuotaIncrease,
 } from './enterpriseAccount/context';
 import { setLanguage, t } from './i18n';
 import { IMGatewayConfig, IMGatewayManager } from './im';
@@ -4154,6 +4156,22 @@ if (!gotTheLock) {
 
   registerEnterpriseAccountHandlers({
     getContext: refreshEnterpriseAccountContext,
+    getIdentities: () => {
+      const generation = authAccountGeneration;
+      return fetchEnterpriseAccountIdentities({
+        getServerBaseUrl: getServerApiBaseUrl,
+        fetchWithAuth,
+        isRequestCurrent: () => authAccountGeneration === generation && getAuthTokens() !== null,
+      });
+    },
+    requestQuotaIncrease: (enterpriseId, requestType) => {
+      const generation = authAccountGeneration;
+      return requestEnterpriseQuotaIncrease({
+        getServerBaseUrl: getServerApiBaseUrl,
+        fetchWithAuth,
+        isRequestCurrent: () => authAccountGeneration === generation && getAuthTokens() !== null,
+      }, enterpriseId, requestType);
+    },
   });
 
   const extractSessionIdFromKey = (sessionKey: string): string | null =>

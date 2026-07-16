@@ -12,6 +12,8 @@
 - 本地持久化当前企业、角色、权限、成员额度和企业积分池。
 - 所有服务端认证请求及 LobsterAI 模型代理请求携带当前已绑定账号上下文头。
 - 企业超级管理员和普通成员使用不同账号菜单；个人账号保持现有菜单。
+- 企业账号菜单展示当前成员的剩余/月度额度；普通成员标记为“企业身份”。
+- 同一账号加入多个企业时，菜单列出全部企业；“进入”只打开对应企业网页，不切换当前客户端 token 身份。
 - 任务执行收到企业额度错误时，按结构化错误码和角色展示对应操作。
 
 现有 `enterpriseConfig` 仍表示 IT 配置包，与本功能无关；企业账号统一使用 `enterpriseAccount` / `organizationContext` 命名。
@@ -37,6 +39,7 @@
   "data": {
     "accountMode": "enterprise",
     "enterpriseId": 1001,
+    "memberId": 101,
     "enterpriseName": "网易有道",
     "role": "super_admin",
     "permissions": {
@@ -53,6 +56,11 @@
       "total": 216000,
       "used": 38420,
       "remaining": 177580
+    },
+    "quotaStatus": {
+      "available": true,
+      "reason": null,
+      "errorCode": null
     }
   }
 }
@@ -125,10 +133,12 @@ LobsterAI 服务端模型仍通过：
 5. 登录、刷新、退出和身份切换时同步清理企业上下文、额度展示及服务端模型缓存。
 6. Portal 跳转使用以下页面：
    - 企业后台：`#/enterprise/console/{enterpriseId}/overview`
-   - 用量与额度：`#/enterprise/console/{enterpriseId}/usage`
+   - 当前身份用量概览：`#/enterprise/profile/{enterpriseId}`
+   - 管理员用量与额度：`#/enterprise/console/{enterpriseId}/usage`
    - 充值：`#/enterprise/console/{enterpriseId}/recharge`
 
 普通成员不显示企业后台、充值或调整额度入口。超级管理员入口仍按服务端 `permissions` 再次控制；前端隐藏不替代服务端鉴权。
+多企业列表中，超级管理员企业打开管理后台，普通成员企业打开企业个人页；该跳转不替换客户端现有 access/refresh token，也不改变当前扣费企业。
 
 ## Auth Requirements
 
@@ -139,7 +149,7 @@ LobsterAI 服务端模型仍通过：
 
 ## Notes & Caveats
 
-- 新任务页不预先展示企业额度横线、说明或阻断卡片；只在任务执行收到 `41606`、`41607` 或 `41608` 后显示提示。
+- 新任务页根据 `/api/enterprise/context.quotaStatus` 预先展示额度卡片并禁用提交，不显示中断横线；任务执行收到 `41606`、`41607` 或 `41608` 后展示中断横线与额度卡片。
 - 个人账号保留原个人额度、充值、邀请活动和账号菜单逻辑。
 - 企业账号不请求个人 `profile-summary`，避免将个人积分明细误显示为企业额度。
 - 服务端应先上线企业上下文、token 绑定、模型可见性和结构化额度错误，再发布客户端。

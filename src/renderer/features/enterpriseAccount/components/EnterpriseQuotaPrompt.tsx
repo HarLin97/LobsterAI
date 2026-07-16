@@ -1,17 +1,17 @@
 import {
   ArrowTopRightOnSquareIcon,
-  ExclamationTriangleIcon,
-  XMarkIcon,
+  CheckCircleIcon,
+  ExclamationCircleIcon,
 } from '@heroicons/react/24/outline';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import {
   EnterpriseMemberRole,
   EnterpriseQuotaReason,
+  EnterpriseQuotaRequestType,
 } from '../../../../shared/enterpriseAccount/constants';
 import {
-  getEnterpriseOverviewUrl,
   getEnterpriseRechargeUrl,
   getEnterpriseUsageUrl,
 } from '../../../services/endpoints';
@@ -21,152 +21,142 @@ import type { EnterpriseQuotaSignal } from '../quotaPromptState';
 import { selectEnterpriseAccountContext } from '../selectors';
 
 interface EnterpriseQuotaPromptProps {
-  signal: EnterpriseQuotaSignal | null;
+  signal?: EnterpriseQuotaSignal | null;
+  reason?: EnterpriseQuotaReason | null;
+  surface: 'home' | 'task';
 }
 
-interface PromptAction {
-  label: string;
-  url: string;
-  diagnosticAction: string;
-}
+type RequestState = 'idle' | 'submitting' | 'submitted';
 
-export const EnterpriseQuotaPrompt = ({ signal }: EnterpriseQuotaPromptProps) => {
+export const EnterpriseQuotaPrompt = ({
+  signal = null,
+  reason = null,
+  surface,
+}: EnterpriseQuotaPromptProps) => {
   const context = useSelector(selectEnterpriseAccountContext);
-  const [dismissedMessageId, setDismissedMessageId] = useState<string | null>(null);
-  const contextRole = context?.role;
-  const signalMessageId = signal?.messageId;
-  const signalReason = signal?.reason;
+  const [requestState, setRequestState] = useState<RequestState>('idle');
+  const quotaReason = signal?.reason ?? reason;
 
   useEffect(() => {
-    if (!contextRole || !signalMessageId || !signalReason || dismissedMessageId === signalMessageId) {
-      return;
-    }
-    logEnterpriseAccountDiagnostic(
-      'debug',
-      `showing quota prompt for reason ${signalReason} and role ${contextRole}`,
-    );
-  }, [contextRole, dismissedMessageId, signalMessageId, signalReason]);
+    setRequestState('idle');
+  }, [context?.enterpriseId, quotaReason]);
 
-  if (
-    !context
-    || !signal
-    || dismissedMessageId === signal.messageId
-  ) {
+  const presentation = useMemo(() => {
+    if (!context || !quotaReason) return null;
+    const isSuperAdmin = context.role === EnterpriseMemberRole.SuperAdmin;
+    const poolBlocked = quotaReason === EnterpriseQuotaReason.EnterprisePoolExhausted
+      || quotaReason === EnterpriseQuotaReason.EnterpriseCreditBatchesExpired;
+    if (poolBlocked) {
+      return {
+        title: i18nService.t('enterpriseQuotaPoolTitle'),
+        description: i18nService.t(
+          isSuperAdmin ? 'enterpriseQuotaPoolAdminDesc' : 'enterpriseQuotaPoolMemberDesc',
+        ),
+        interrupt: i18nService.t('enterpriseQuotaPoolInterrupt'),
+        button: i18nService.t(
+          isSuperAdmin ? 'enterpriseQuotaPurchaseCredits' : 'enterpriseQuotaNotifyAdmin',
+        ),
+        requestType: EnterpriseQuotaRequestType.EnterprisePool,
+        portalUrl: isSuperAdmin && context.permissions.rechargeEnterprise
+          ? getEnterpriseRechargeUrl(context.enterpriseId)
+          : null,
+      };
+    }
+    return {
+      title: i18nService.t('enterpriseQuotaMemberTitle'),
+      description: i18nService.t(
+        isSuperAdmin ? 'enterpriseQuotaMemberAdminDesc' : 'enterpriseQuotaMemberMemberDesc',
+      ),
+      interrupt: i18nService.t(
+        isSuperAdmin ? 'enterpriseQuotaMemberAdminInterrupt' : 'enterpriseQuotaMemberInterrupt',
+      ),
+      button: i18nService.t(
+        isSuperAdmin ? 'enterpriseAccountAdjustQuota' : 'enterpriseQuotaRequestIncrease',
+      ),
+      requestType: EnterpriseQuotaRequestType.MemberQuota,
+      portalUrl: isSuperAdmin && context.permissions.adjustMemberQuota
+        ? `${getEnterpriseUsageUrl(context.enterpriseId)}?memberId=${context.memberId}`
+        : null,
+    };
+  }, [context, quotaReason]);
+
+  if (!context || !quotaReason || !presentation) {
     return null;
   }
 
   const isSuperAdmin = context.role === EnterpriseMemberRole.SuperAdmin;
-  let title = '';
-  let description = '';
-  const actions: PromptAction[] = [];
 
-  switch (signal.reason) {
-    case EnterpriseQuotaReason.MemberMonthlyQuotaExhausted:
-      title = i18nService.t(
-        isSuperAdmin ? 'enterpriseQuotaMemberAdminTitle' : 'enterpriseQuotaMemberTitle',
-      );
-      description = i18nService.t(
-        isSuperAdmin ? 'enterpriseQuotaMemberAdminDesc' : 'enterpriseQuotaMemberMemberDesc',
-      );
-      if (isSuperAdmin && context.permissions.adjustMemberQuota) {
-        actions.push({
-          label: i18nService.t('enterpriseAccountAdjustQuota'),
-          url: getEnterpriseUsageUrl(context.enterpriseId),
-          diagnosticAction: 'open usage and quotas',
-        });
+  const handleAction = async () => {
+    if (presentation.portalUrl) {
+      logEnterpriseAccountDiagnostic('debug', `opening quota action for ${quotaReason}`);
+      try {
+        await window.electron.shell.openExternal(presentation.portalUrl);
+      } catch (error) {
+        logEnterpriseAccountDiagnostic('warn', 'quota portal action failed', error);
       }
-      break;
-    case EnterpriseQuotaReason.EnterprisePoolExhausted:
-      title = i18nService.t('enterpriseQuotaPoolTitle');
-      description = i18nService.t(
-        isSuperAdmin ? 'enterpriseQuotaPoolAdminDesc' : 'enterpriseQuotaPoolMemberDesc',
-      );
-      if (isSuperAdmin && context.permissions.manageEnterprise) {
-        actions.push({
-          label: i18nService.t('enterpriseQuotaGoAdmin'),
-          url: getEnterpriseOverviewUrl(context.enterpriseId),
-          diagnosticAction: 'open enterprise overview',
-        });
-      }
-      if (isSuperAdmin && context.permissions.rechargeEnterprise) {
-        actions.push({
-          label: i18nService.t('enterpriseQuotaRechargeOrAdjust'),
-          url: getEnterpriseRechargeUrl(context.enterpriseId),
-          diagnosticAction: 'open enterprise recharge',
-        });
-      }
-      break;
-    case EnterpriseQuotaReason.EnterpriseCreditBatchesExpired:
-      title = i18nService.t('enterpriseQuotaExpiredTitle');
-      description = i18nService.t(
-        isSuperAdmin ? 'enterpriseQuotaExpiredAdminDesc' : 'enterpriseQuotaExpiredMemberDesc',
-      );
-      if (isSuperAdmin && context.permissions.manageEnterprise) {
-        actions.push({
-          label: i18nService.t('enterpriseQuotaGoAdmin'),
-          url: getEnterpriseOverviewUrl(context.enterpriseId),
-          diagnosticAction: 'open enterprise overview',
-        });
-      }
-      if (isSuperAdmin && context.permissions.rechargeEnterprise) {
-        actions.push({
-          label: i18nService.t('enterpriseQuotaRechargeOrAdjust'),
-          url: getEnterpriseRechargeUrl(context.enterpriseId),
-          diagnosticAction: 'open enterprise recharge',
-        });
-      }
-      break;
-  }
-
-  const openPortalUrl = async (action: PromptAction) => {
-    logEnterpriseAccountDiagnostic('debug', action.diagnosticAction);
-    try {
-      await window.electron.shell.openExternal(action.url);
-    } catch (error) {
-      logEnterpriseAccountDiagnostic('warn', `${action.diagnosticAction} failed`, error);
+      return;
     }
+    if (isSuperAdmin || requestState !== 'idle') return;
+
+    setRequestState('submitting');
+    const result = await window.electron.enterpriseAccount.requestQuotaIncrease(
+      context.enterpriseId,
+      presentation.requestType,
+    );
+    if (!result.success) {
+      setRequestState('idle');
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: result.error || i18nService.t('enterpriseQuotaRequestFailed'),
+      }));
+      return;
+    }
+    setRequestState('submitted');
+    window.dispatchEvent(new CustomEvent('app:showToast', {
+      detail: result.created
+        ? i18nService.t('enterpriseQuotaRequestSubmitted')
+        : i18nService.t('enterpriseQuotaRequestAlreadyPending'),
+    }));
   };
 
+  const actionLabel = requestState === 'submitted'
+    ? i18nService.t('enterpriseQuotaRequestSubmittedButton')
+    : requestState === 'submitting'
+      ? i18nService.t('enterpriseQuotaRequestSubmitting')
+      : presentation.button;
+
   return (
-    <div
-      className="mb-3 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 shadow-sm"
-      role="alert"
-      aria-live="assertive"
-    >
-      <div className="flex items-start gap-3">
-        <ExclamationTriangleIcon
-          className="mt-0.5 h-5 w-5 shrink-0 text-warning"
-          aria-hidden="true"
-        />
+    <div className={surface === 'task' ? 'mb-3' : 'mt-4'} role="alert" aria-live="assertive">
+      {surface === 'task' ? (
+        <div className="mb-3 flex items-center gap-3 px-1 text-xs text-secondary">
+          <span className="h-px flex-1 bg-border" aria-hidden="true" />
+          <span className="flex items-center gap-1.5">
+            <ExclamationCircleIcon className="h-4 w-4" aria-hidden="true" />
+            {presentation.interrupt}
+          </span>
+          <span className="h-px flex-1 bg-border" aria-hidden="true" />
+        </div>
+      ) : null}
+      <div className="flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-3 shadow-subtle">
+        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-raised text-foreground">
+          <ExclamationCircleIcon className="h-4 w-4" aria-hidden="true" />
+        </span>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-foreground">{title}</div>
-          <div className="mt-1 text-xs leading-5 text-secondary">{description}</div>
-          {actions.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {actions.map(action => (
-                <button
-                  key={action.url}
-                  type="button"
-                  onClick={() => void openPortalUrl(action)}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
-                >
-                  {action.label}
-                  <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />
-                </button>
-              ))}
-            </div>
-          ) : null}
+          <div className="text-sm font-semibold text-foreground">{presentation.title}</div>
+          <div className="mt-0.5 text-xs leading-5 text-secondary">{presentation.description}</div>
         </div>
         <button
           type="button"
-          onClick={() => {
-            logEnterpriseAccountDiagnostic('debug', 'dismissed quota prompt');
-            setDismissedMessageId(signal.messageId);
-          }}
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
-          aria-label={i18nService.t('enterpriseQuotaDismiss')}
+          onClick={() => void handleAction()}
+          disabled={requestState !== 'idle'}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-neutral-950 px-3.5 py-2 text-xs font-medium text-white transition-opacity hover:opacity-80 disabled:cursor-default disabled:opacity-60 dark:bg-white dark:text-neutral-950"
         >
-          <XMarkIcon className="h-4 w-4" aria-hidden="true" />
+          {requestState === 'submitted' ? (
+            <CheckCircleIcon className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : null}
+          {actionLabel}
+          {presentation.portalUrl && requestState === 'idle' ? (
+            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : null}
         </button>
       </div>
     </div>

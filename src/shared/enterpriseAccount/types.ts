@@ -1,6 +1,7 @@
 import type {
   EnterpriseMemberRole,
   EnterpriseQuotaReason,
+  EnterpriseQuotaRequestType,
 } from './constants';
 
 export interface EnterpriseAccountPermissions {
@@ -24,11 +25,17 @@ export interface EnterpriseCreditPool {
 export interface EnterpriseAccountContext {
   accountMode: 'enterprise';
   enterpriseId: number;
+  memberId: number;
   enterpriseName: string;
   role: EnterpriseMemberRole;
   permissions: EnterpriseAccountPermissions;
   memberQuota: EnterpriseMemberQuota;
   enterprisePool: EnterpriseCreditPool;
+  quotaStatus: {
+    available: boolean;
+    reason: EnterpriseQuotaReason | null;
+    errorCode: number | null;
+  };
 }
 
 export interface EnterpriseQuotaErrorDetails {
@@ -39,5 +46,26 @@ export interface EnterpriseQuotaErrorDetails {
 export interface EnterpriseAccountContextResult {
   success: boolean;
   context: EnterpriseAccountContext | null;
+  error?: string;
+}
+
+export interface EnterpriseAccountIdentity {
+  enterpriseId: number;
+  enterpriseName: string;
+  role: EnterpriseMemberRole;
+}
+
+export interface EnterpriseAccountIdentitiesResult {
+  success: boolean;
+  identities: EnterpriseAccountIdentity[];
+  error?: string;
+}
+
+export interface EnterpriseQuotaRequestResult {
+  success: boolean;
+  requestId?: number;
+  requestType?: EnterpriseQuotaRequestType;
+  status?: 'pending';
+  created?: boolean;
   error?: string;
 }

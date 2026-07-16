@@ -19,9 +19,12 @@ import type {
   DataMigrationLastRestoreResponse,
   DataMigrationRestoreScheduleResult,
 } from '../../shared/dataMigration/constants';
+import type { EnterpriseQuotaRequestType } from '../../shared/enterpriseAccount/constants';
 import type {
   EnterpriseAccountContext,
   EnterpriseAccountContextResult,
+  EnterpriseAccountIdentitiesResult,
+  EnterpriseQuotaRequestResult,
 } from '../../shared/enterpriseAccount/types';
 import type {
   HtmlShareAccessMode,
@@ -1667,6 +1670,11 @@ interface IElectronAPI {
   };
   enterpriseAccount: {
     getContext: () => Promise<EnterpriseAccountContextResult>;
+    getIdentities: () => Promise<EnterpriseAccountIdentitiesResult>;
+    requestQuotaIncrease: (
+      enterpriseId: number,
+      requestType: EnterpriseQuotaRequestType,
+    ) => Promise<EnterpriseQuotaRequestResult>;
   };
   networkStatus: {
     send: (status: 'online' | 'offline') => void;

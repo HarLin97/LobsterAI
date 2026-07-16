@@ -6,6 +6,9 @@ import { buildGoalSettingMessageMetadata } from '../../../common/goalCommandDisp
 import { buildSessionTitleFromInput } from '../../../common/sessionTitle';
 import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
+import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
+import { refreshEnterpriseAccountContext } from '../../features/enterpriseAccount/context';
+import { selectEnterpriseAccountContext } from '../../features/enterpriseAccount/selectors';
 import { agentService } from '../../services/agent';
 import { coworkService } from '../../services/cowork';
 import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
@@ -19,7 +22,7 @@ import {
 } from '../../store/selectors/coworkSelectors';
 import { addMessage, setCurrentSession, setDraftCollaborationMode, setDraftKitIds, setDraftSkillIds, setStreaming, updateSessionGoal, updateSessionStatus } from '../../store/slices/coworkSlice';
 import { clearActiveKits } from '../../store/slices/kitSlice';
-import { clearSelection,selectAction, setActions } from '../../store/slices/quickActionSlice';
+import { clearSelection, selectAction, setActions } from '../../store/slices/quickActionSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../../store/slices/skillSlice';
 import {
   CoworkCollaborationMode,
@@ -106,11 +109,22 @@ const CoworkView: React.FC<CoworkViewProps> = ({
 
   const currentSession = useSelector(selectCurrentSession);
   const isStreaming = useSelector(selectIsStreaming);
+  const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
+  const enterpriseAccountId = enterpriseAccountContext?.enterpriseId;
+  const hasEnterpriseAccount = enterpriseAccountContext !== null;
+  const homeQuotaReason = enterpriseAccountContext?.quotaStatus.available === false
+    ? enterpriseAccountContext.quotaStatus.reason
+    : null;
   const currentSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     currentSessionIdRef.current = currentSession?.id ?? null;
   }, [currentSession?.id]);
+
+  useEffect(() => {
+    if (currentSession || !hasEnterpriseAccount) return;
+    void refreshEnterpriseAccountContext();
+  }, [currentSession, enterpriseAccountId, hasEnterpriseAccount]);
   const config = useSelector(selectCoworkConfig);
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
@@ -257,6 +271,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       count: imageAttachments?.length ?? 0,
       details: imageAttachments?.map(a => ({ name: a.name, mimeType: a.mimeType, base64Length: a.base64Data?.length ?? 0 })) ?? [],
     });
+    if (homeQuotaReason) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('enterpriseQuotaHomeSubmitBlocked'),
+      }));
+      return false;
+    }
     if (openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
       return false;
@@ -857,6 +877,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
               onStop={handleStopSession}
               isStreaming={isStreaming}
               disabled={!isEngineReady}
+              submitDisabled={Boolean(homeQuotaReason)}
               placeholder={i18nService.t('coworkPlaceholder')}
               size="large"
               workingDirectory={currentAgentWorkingDirectory}
@@ -869,6 +890,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({
               onManageSkills={() => onShowSkills?.()}
               onManageKits={() => onShowKits?.()}
               onGoalCommand={handleStartGoalSession}
+            />
+            <EnterpriseQuotaPrompt
+              reason={homeQuotaReason}
+              surface="home"
             />
           </div>
 

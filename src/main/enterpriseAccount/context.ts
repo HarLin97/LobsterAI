@@ -4,13 +4,18 @@ import {
   EnterpriseAccountStoreKey,
   EnterpriseApiErrorCode,
   EnterpriseMemberRole,
+  EnterpriseQuotaReason,
+  type EnterpriseQuotaRequestType,
 } from '../../shared/enterpriseAccount/constants';
 import type {
   EnterpriseAccountContext,
   EnterpriseAccountContextResult,
+  EnterpriseAccountIdentitiesResult,
+  EnterpriseAccountIdentity,
   EnterpriseAccountPermissions,
   EnterpriseCreditPool,
   EnterpriseMemberQuota,
+  EnterpriseQuotaRequestResult,
 } from '../../shared/enterpriseAccount/types';
 import type { SqliteStore } from '../sqliteStore';
 
@@ -23,6 +28,15 @@ export interface EnterpriseAccountContextApiDeps {
   isRequestCurrent?: () => boolean;
   requestTimeoutMs?: number;
 }
+
+export interface EnterpriseAccountIdentitiesApiDeps {
+  getServerBaseUrl: () => string;
+  fetchWithAuth: (url: string, options?: RequestInit) => Promise<Response>;
+  isRequestCurrent?: () => boolean;
+  requestTimeoutMs?: number;
+}
+
+export type EnterpriseQuotaRequestApiDeps = EnterpriseAccountIdentitiesApiDeps;
 
 const DEFAULT_ENTERPRISE_CONTEXT_REQUEST_TIMEOUT_MS = 10_000;
 
@@ -110,6 +124,17 @@ function readEnterprisePool(value: unknown): EnterpriseCreditPool {
   };
 }
 
+function readQuotaStatus(value: unknown): EnterpriseAccountContext['quotaStatus'] {
+  const record = isRecord(value) ? value : {};
+  const normalizedReason = readString(record.reason);
+  const reason = Object.values(EnterpriseQuotaReason).find(item => item === normalizedReason) ?? null;
+  return {
+    available: typeof record.available === 'boolean' ? record.available : reason === null,
+    reason,
+    errorCode: readInteger(record.errorCode),
+  };
+}
+
 function findContextCandidate(value: unknown): JsonRecord | null {
   if (!isRecord(value)) return null;
 
@@ -157,21 +182,39 @@ export function normalizeEnterpriseAccountContext(
   if (!candidate) return null;
 
   const enterpriseId = readEnterpriseId(candidate.enterpriseId);
+  const memberId = readEnterpriseId(candidate.memberId);
   const enterpriseName = readString(candidate.enterpriseName);
   const role = readRole(candidate.role);
-  if (enterpriseId === null || !enterpriseName || role === null) {
+  if (enterpriseId === null || memberId === null || !enterpriseName || role === null) {
     return null;
   }
 
   return {
     accountMode: EnterpriseAccountMode.Enterprise,
     enterpriseId,
+    memberId,
     enterpriseName,
     role,
     permissions: readPermissions(candidate.permissions, role),
     memberQuota: readMemberQuota(candidate.memberQuota),
     enterprisePool: readEnterprisePool(candidate.enterprisePool),
+    quotaStatus: readQuotaStatus(candidate.quotaStatus),
   };
+}
+
+export function normalizeEnterpriseAccountIdentities(
+  value: unknown,
+): EnterpriseAccountIdentity[] {
+  if (!isRecord(value) || !Array.isArray(value.enterprises)) return [];
+
+  return value.enterprises.flatMap((item): EnterpriseAccountIdentity[] => {
+    if (!isRecord(item)) return [];
+    const enterpriseId = readEnterpriseId(item.enterpriseId);
+    const enterpriseName = readString(item.enterpriseName);
+    const role = readRole(item.role);
+    if (enterpriseId === null || !enterpriseName || role === null) return [];
+    return [{ enterpriseId, enterpriseName, role }];
+  });
 }
 
 export function getPersistedEnterpriseAccountContext(
@@ -284,5 +327,101 @@ export async function fetchEnterpriseAccountContext(
     };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+export async function fetchEnterpriseAccountIdentities(
+  deps: EnterpriseAccountIdentitiesApiDeps,
+): Promise<EnterpriseAccountIdentitiesResult> {
+  const url = `${deps.getServerBaseUrl()}/api/enterprise/identities`;
+  const requestTimeoutMs = typeof deps.requestTimeoutMs === 'number'
+    && Number.isFinite(deps.requestTimeoutMs)
+    && deps.requestTimeoutMs > 0
+    ? deps.requestTimeoutMs
+    : DEFAULT_ENTERPRISE_CONTEXT_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+  try {
+    const response = await deps.fetchWithAuth(url, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    const rawBody = await response.json() as unknown;
+    const body = isRecord(rawBody) ? rawBody : {};
+    const code = readInteger(body.code);
+    const message = readString(body.message);
+
+    if (deps.isRequestCurrent?.() === false) {
+      return {
+        success: false,
+        identities: [],
+        error: 'Authentication state changed during enterprise identity refresh',
+      };
+    }
+    if (!response.ok || code !== 0) {
+      return {
+        success: false,
+        identities: [],
+        error: message || `HTTP ${response.status}`,
+      };
+    }
+    return {
+      success: true,
+      identities: normalizeEnterpriseAccountIdentities(body.data),
+    };
+  } catch (error) {
+    const timedOut = controller.signal.aborted;
+    return {
+      success: false,
+      identities: [],
+      error: timedOut
+        ? 'Enterprise account identities request timed out'
+        : error instanceof Error
+          ? error.message
+          : 'Failed to load enterprise account identities',
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function requestEnterpriseQuotaIncrease(
+  deps: EnterpriseQuotaRequestApiDeps,
+  enterpriseId: number,
+  requestType: EnterpriseQuotaRequestType,
+): Promise<EnterpriseQuotaRequestResult> {
+  const url = `${deps.getServerBaseUrl()}/api/enterprise/${enterpriseId}/quota-requests`;
+  try {
+    const response = await deps.fetchWithAuth(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ requestType }),
+    });
+    const rawBody = await response.json() as unknown;
+    const body = isRecord(rawBody) ? rawBody : {};
+    const code = readInteger(body.code);
+    const message = readString(body.message);
+    const data = isRecord(body.data) ? body.data : {};
+    if (deps.isRequestCurrent?.() === false) {
+      return { success: false, error: 'Authentication state changed during quota request' };
+    }
+    if (!response.ok || code !== 0) {
+      return { success: false, error: message || `HTTP ${response.status}` };
+    }
+    return {
+      success: true,
+      requestId: readEnterpriseId(data.requestId) ?? undefined,
+      requestType,
+      status: 'pending',
+      created: data.created === true,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to submit enterprise quota request',
+    };
   }
 }
