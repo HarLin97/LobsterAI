@@ -24,6 +24,7 @@ Read [references/asset-contract.md](references/asset-contract.md) before the fir
 - Register each successful asset immediately. Do not start the next generation until `lobsterai_skin_manage` confirms registration.
 - Additional serial attempts are allowed when generation fails, returns no usable local output, or the current candidate cannot satisfy a required slot. Never run image generations in parallel or switch backend silently.
 - Never write skin files, application configuration, CSS, or databases directly. Only `lobsterai_skin_manage` may register or apply a skin.
+- The user's active LobsterAI color theme is independent from the AI skin. Never select or change a color theme as part of this workflow.
 - Do not create icons, sprite sheets, wallpapers for other views, custom fonts, arbitrary CSS, or layout changes in this MVP.
 
 ## Workflow
@@ -36,7 +37,7 @@ Convert the user's request into a compact internal style bible:
 - dominant and supporting colors;
 - material and lighting language;
 - recurring motif;
-- light or dark appearance;
+- contrast strategy that remains legible with both light and dark LobsterAI color themes;
 - forbidden elements;
 - backdrop composition safe zones;
 - emblem silhouette and small-size readability.
@@ -50,8 +51,7 @@ Call `lobsterai_skin_manage` with:
 ```json
 {
   "action": "create_draft",
-  "name": "A concise name derived from the style",
-  "baseThemeId": "classic-dark or classic-light"
+  "name": "A concise name derived from the style"
 }
 ```
 

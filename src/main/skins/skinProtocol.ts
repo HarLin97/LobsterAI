@@ -180,7 +180,9 @@ export async function createSkinProtocolResponse(
     if (!isPathWithinRoot(realRootDir, realFilePath)) return notFoundResponse();
 
     const headers = {
-      'Cache-Control': 'no-store',
+      'Cache-Control': parsed.contentHash
+        ? 'private, max-age=31536000, immutable'
+        : 'no-store',
       'Content-Length': String(fileStat.size),
       'Content-Type': asset.mimeType,
       ETag: `"sha256-${asset.contentHash}"`,

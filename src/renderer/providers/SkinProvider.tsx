@@ -12,10 +12,8 @@ import type { SkinAssetSlot } from '../../shared/skin/constants';
 import {
   type ActiveSkin,
   buildSkinAssetUrl,
-  resolveSupportedSkinBaseThemeId,
   skinService,
 } from '../services/skin';
-import { themeService } from '../services/theme';
 
 interface SkinContextValue {
   activeSkin: ActiveSkin | null;
@@ -47,14 +45,6 @@ export const SkinProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
         skinService.list(),
       ]);
       if (loadSequence !== loadSequenceRef.current) return;
-
-      const supportedThemeId = resolveSupportedSkinBaseThemeId(
-        nextSkin?.baseThemeId,
-        themeService.getAllThemes().map(theme => theme.meta.id),
-      );
-      if (supportedThemeId && themeService.getThemeId() !== supportedThemeId) {
-        themeService.setThemeById(supportedThemeId);
-      }
 
       setActiveSkin(nextSkin);
       setSavedSkins(nextSavedSkins);

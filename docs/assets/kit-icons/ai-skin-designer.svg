@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="tile" x1="96" y1="68" x2="405" y2="458" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F6F7FC"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="130" y1="123" x2="382" y2="367" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#61C7FF"/>
+      <stop offset="0.5" stop-color="#4F7BFF"/>
+      <stop offset="1" stop-color="#7047F5"/>
+    </linearGradient>
+    <linearGradient id="accentSoft" x1="144" y1="157" x2="340" y2="326" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A9E5FF"/>
+      <stop offset="0.48" stop-color="#79A7FF"/>
+      <stop offset="1" stop-color="#8B69FA"/>
+    </linearGradient>
+    <linearGradient id="highlight" x1="127" y1="135" x2="312" y2="295" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="tileShadow" x="15" y="20" width="482" height="482" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="17" stdDeviation="14" flood-color="#7580A8" flood-opacity="0.18"/>
+    </filter>
+    <filter id="glyphShadow" x="76" y="91" width="363" height="320" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="13" stdDeviation="9" flood-color="#3856CF" flood-opacity="0.26"/>
+    </filter>
+    <filter id="sparkShadow" x="318" y="91" width="121" height="126" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="8" stdDeviation="6" flood-color="#4E55D9" flood-opacity="0.24"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#tileShadow)">
+    <rect x="44" y="40" width="424" height="424" rx="91" fill="url(#tile)"/>
+    <rect x="45.5" y="41.5" width="421" height="421" rx="89.5" stroke="#E9ECF5" stroke-width="3"/>
+    <path d="M90 139C90 86.533 132.533 44 185 44H327C379.467 44 422 86.533 422 139" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" opacity="0.9"/>
+  </g>
+
+  <g filter="url(#glyphShadow)">
+    <rect x="148" y="155" width="246" height="194" rx="38" fill="url(#accent)"/>
+    <rect x="151" y="158" width="240" height="188" rx="35" stroke="#8FD8FF" stroke-opacity="0.42" stroke-width="6"/>
+
+    <rect x="105" y="119" width="252" height="202" rx="40" fill="#FBFCFF" stroke="url(#accent)" stroke-width="22"/>
+    <rect x="128" y="142" width="206" height="156" rx="22" fill="url(#accentSoft)"/>
+    <path d="M128 247C158 218 181 210 208 232C235 254 250 260 277 228C294 208 312 199 334 203V276C334 288.15 324.15 298 312 298H150C137.85 298 128 288.15 128 276V247Z" fill="url(#accent)"/>
+    <circle cx="176" cy="190" r="21" fill="#FFFFFF" fill-opacity="0.88"/>
+    <path d="M133 151C148 137 166 130 190 130H276C301 130 318 137 330 150" stroke="url(#highlight)" stroke-width="9" stroke-linecap="round"/>
+  </g>
+
+  <g filter="url(#sparkShadow)">
+    <path d="M379 107C383.8 128.35 395.65 140.2 417 145C395.65 149.8 383.8 161.65 379 183C374.2 161.65 362.35 149.8 341 145C362.35 140.2 374.2 128.35 379 107Z" fill="url(#accent)"/>
+    <path d="M333 179C335.9 191.9 343.1 199.1 356 202C343.1 204.9 335.9 212.1 333 225C330.1 212.1 322.9 204.9 310 202C322.9 199.1 330.1 191.9 333 179Z" fill="#5C79FF"/>
+    <path d="M408 202C410.05 211.15 415.85 216.95 425 219C415.85 221.05 410.05 226.85 408 236C405.95 226.85 400.15 221.05 391 219C400.15 216.95 405.95 211.15 408 202Z" fill="#7850F5"/>
+  </g>
+</svg>

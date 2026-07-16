@@ -151,13 +151,6 @@ export const buildSkinAssetUrl = (
   return `${baseUrl}${separator}skin_v=${encodeURIComponent(cacheKey)}${fragment}`;
 };
 
-export const resolveSupportedSkinBaseThemeId = (
-  baseThemeId: string | undefined,
-  supportedThemeIds: readonly string[],
-): string | null => (
-  baseThemeId && supportedThemeIds.includes(baseThemeId) ? baseThemeId : null
-);
-
 const getRendererSkinApi = (): RendererSkinApi | null => {
   if (typeof window === 'undefined') return null;
   return window.electron?.skin ?? null;

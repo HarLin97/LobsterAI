@@ -32,6 +32,7 @@ export function buildSkinPackMarketplaceKit(): Record<string, unknown> {
       en: 'Turn a style idea into a LobsterAI backdrop and home emblem, then apply the skin.',
       zh: '把风格想法生成 LobsterAI 背景图与首页徽记，并自动应用皮肤。',
     },
+    icon: SkinPackKitMetadata.IconUrl,
     author: 'LobsterAI',
     version: SkinPackKitMetadata.Version,
     workflowKind: SkinPackKitMetadata.WorkflowKind,

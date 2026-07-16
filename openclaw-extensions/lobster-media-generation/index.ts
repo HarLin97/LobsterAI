@@ -260,7 +260,9 @@ const SkinManageSchema = Type.Union([
   Type.Object({
     action: Type.Literal(SkinManageAction.CreateDraft),
     name: Type.String({ description: 'User-visible skin name.' }),
-    baseThemeId: Type.String({ description: 'Base color theme ID.' }),
+    baseThemeId: Type.Optional(Type.String({
+      description: 'Legacy compatibility metadata. LobsterAI does not change the user color theme when applying a skin.',
+    })),
   }),
   Type.Object({
     action: Type.Literal(SkinManageAction.RegisterAsset),
@@ -461,11 +463,11 @@ const plugin = {
         description: [
           'Create and manage a LobsterAI AI skin pack through the trusted desktop callback.',
           'This tool manages drafts and assets; it does not generate images.',
-          'For a new pack, call create_draft with name and baseThemeId first.',
+          'For a new pack, call create_draft with a name first. Do not select or change the user color theme.',
           'Register only generated local files returned by an image tool.',
           'The only supported asset slots are workspace.backdrop followed by home.emblem.',
           'Use register_asset with skinId, slot, and sourcePath after each generation succeeds.',
-          'Use status to verify readiness, apply only after the draft is ready, and deactivate to restore the normal color theme.',
+          'Use status to verify readiness, apply only after the draft is ready, and deactivate to remove the custom imagery while leaving the current color theme unchanged.',
         ].join(' '),
         parameters: SkinManageSchema,
         async execute(id: string, params: unknown) {

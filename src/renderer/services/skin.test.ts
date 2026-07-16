@@ -5,7 +5,6 @@ import {
   buildSkinAssetUrl,
   normalizeActiveSkin,
   normalizeSkinList,
-  resolveSupportedSkinBaseThemeId,
 } from './skin';
 
 describe('normalizeActiveSkin', () => {
@@ -118,13 +117,5 @@ describe('buildSkinAssetUrl', () => {
       .toBe('https://example.test/home.emblem?size=small&skin_v=7#preview');
     expect(buildSkinAssetUrl({ url: 'data:image/png;base64,AAAA' }, 7))
       .toBe('data:image/png;base64,AAAA');
-  });
-});
-
-describe('resolveSupportedSkinBaseThemeId', () => {
-  test('accepts only registered color themes', () => {
-    expect(resolveSupportedSkinBaseThemeId('sakura', ['paper', 'sakura'])).toBe('sakura');
-    expect(resolveSupportedSkinBaseThemeId('malicious-theme', ['paper', 'sakura'])).toBeNull();
-    expect(resolveSupportedSkinBaseThemeId(undefined, ['paper'])).toBeNull();
   });
 });

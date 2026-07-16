@@ -16,6 +16,7 @@ describe('AI Skin Designer built-in kit', () => {
   test('publishes only the bundled skin creator skill', () => {
     const kit = buildSkinPackMarketplaceKit() as {
       id: string;
+      icon: string;
       version: string;
       workflowKind: string;
       skills: { bundle: string; list: Array<{ id: string }> };
@@ -25,6 +26,7 @@ describe('AI Skin Designer built-in kit', () => {
 
     expect(kit).toMatchObject({
       id: SkinPackKitId.BuiltIn,
+      icon: SkinPackKitMetadata.IconUrl,
       version: SkinPackKitMetadata.Version,
       workflowKind: SkinWorkflowKind.SkinPack,
       skills: {

@@ -82,7 +82,7 @@ describe('skin protocol response', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe(SkinAssetMimeType.Png);
     expect(response.headers.get('content-length')).toBe(String(asset.content.length));
-    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('cache-control')).toBe('private, max-age=31536000, immutable');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('etag')).toBe(`"sha256-${asset.contentHash}"`);
     expect(Buffer.from(await response.arrayBuffer())).toEqual(asset.content);
@@ -103,6 +103,7 @@ describe('skin protocol response', () => {
 
     const headResponse = await createSkinProtocolResponse(new Request(url, { method: 'HEAD' }), options);
     expect(headResponse.status).toBe(200);
+    expect(headResponse.headers.get('cache-control')).toBe('no-store');
     expect(await headResponse.text()).toBe('');
     const postResponse = await createSkinProtocolResponse(new Request(url, { method: 'POST' }), options);
     expect(postResponse.status).toBe(405);
