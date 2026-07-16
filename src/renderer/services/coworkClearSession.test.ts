@@ -49,6 +49,7 @@ describe('coworkService.clearSession', () => {
       isDefault: false,
       source: 'custom',
       skillIds: ['docx', 'web-search'],
+      subagentAllowAgentIds: [],
     }]));
     store.dispatch(setCurrentAgentId('agent-1'));
     store.dispatch(setCurrentSession(makeSession()));
@@ -83,6 +84,7 @@ describe('coworkService.clearSession', () => {
       isDefault: false,
       source: 'custom',
       skillIds: [],
+      subagentAllowAgentIds: [],
     }]));
     store.dispatch(setCurrentAgentId('agent-1'));
     store.dispatch(setActiveSkillIds(['xlsx']));

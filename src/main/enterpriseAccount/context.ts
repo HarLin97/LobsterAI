@@ -20,7 +20,11 @@ export interface EnterpriseAccountContextApiDeps {
   getServerBaseUrl: () => string;
   fetchWithAuth: (url: string, options?: RequestInit) => Promise<Response>;
   store: SqliteStore;
+  isRequestCurrent?: () => boolean;
+  requestTimeoutMs?: number;
 }
+
+const DEFAULT_ENTERPRISE_CONTEXT_REQUEST_TIMEOUT_MS = 10_000;
 
 function isRecord(value: unknown): value is JsonRecord {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -43,6 +47,17 @@ function readEnterpriseId(value: unknown): number | null {
   if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
     const parsed = Number(value.trim());
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
+function readInteger(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    return Number.isSafeInteger(parsed) ? parsed : null;
   }
   return null;
 }
@@ -102,7 +117,11 @@ function findContextCandidate(value: unknown): JsonRecord | null {
   if (directMode === EnterpriseAccountMode.Personal) {
     return null;
   }
-  if (value.enterpriseId != null) {
+  if (
+    value.enterpriseId != null
+    && readString(value.enterpriseName)
+    && readRole(value.role) !== null
+  ) {
     return value;
   }
 
@@ -158,8 +177,13 @@ export function normalizeEnterpriseAccountContext(
 export function getPersistedEnterpriseAccountContext(
   store: SqliteStore,
 ): EnterpriseAccountContext | null {
-  const persisted = store.get<unknown>(EnterpriseAccountStoreKey.Context);
-  return normalizeEnterpriseAccountContext(persisted);
+  try {
+    const persisted = store.get<unknown>(EnterpriseAccountStoreKey.Context);
+    return normalizeEnterpriseAccountContext(persisted);
+  } catch (error) {
+    console.warn('[EnterpriseAccount] failed to read persisted account context', error);
+    return null;
+  }
 }
 
 export function persistEnterpriseAccountContext(
@@ -187,42 +211,78 @@ export async function fetchEnterpriseAccountContext(
   deps: EnterpriseAccountContextApiDeps,
 ): Promise<EnterpriseAccountContextResult> {
   const url = `${deps.getServerBaseUrl()}/api/enterprise/context`;
+  const requestTimeoutMs = typeof deps.requestTimeoutMs === 'number'
+    && Number.isFinite(deps.requestTimeoutMs)
+    && deps.requestTimeoutMs > 0
+    ? deps.requestTimeoutMs
+    : DEFAULT_ENTERPRISE_CONTEXT_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
+    console.debug('[EnterpriseAccount] refreshing account context');
     const response = await deps.fetchWithAuth(url, {
       headers: { Accept: 'application/json' },
+      signal: controller.signal,
     });
-    const body = await response.json() as {
-      code?: number;
-      message?: string;
-      data?: unknown;
-    };
-    if (!response.ok || body.code !== 0) {
+    const rawBody = await response.json() as unknown;
+    const body = isRecord(rawBody) ? rawBody : {};
+    const code = readInteger(body.code);
+    const message = readString(body.message);
+
+    if (deps.isRequestCurrent?.() === false) {
+      console.debug('[EnterpriseAccount] discarded context response after auth state changed');
+      return {
+        success: false,
+        context: getPersistedEnterpriseAccountContext(deps.store),
+        error: 'Authentication state changed during enterprise context refresh',
+      };
+    }
+
+    if (!response.ok || code !== 0) {
       if (
-        body.code === EnterpriseApiErrorCode.NotFound
-        || body.code === EnterpriseApiErrorCode.NotMember
-        || body.code === EnterpriseApiErrorCode.AccountModeMismatch
+        code === EnterpriseApiErrorCode.NotFound
+        || code === EnterpriseApiErrorCode.NotMember
+        || code === EnterpriseApiErrorCode.AccountModeMismatch
       ) {
         clearEnterpriseAccountContext(deps.store);
+        console.log(`[EnterpriseAccount] cleared stale account context after server code ${code}`);
+      } else {
+        console.warn(`[EnterpriseAccount] context refresh rejected (HTTP ${response.status}, code ${code ?? 'unknown'})`);
       }
       return {
         success: false,
         context: getPersistedEnterpriseAccountContext(deps.store),
-        error: body.message || `HTTP ${response.status}`,
+        error: message || `HTTP ${response.status}`,
       };
     }
 
     const context = normalizeEnterpriseAccountContext(body.data);
     if (context) {
       persistEnterpriseAccountContext(deps.store, context);
+      console.debug(`[EnterpriseAccount] refreshed context for enterprise ${context.enterpriseId} with role ${context.role}`);
     } else {
       clearEnterpriseAccountContext(deps.store);
+      console.debug('[EnterpriseAccount] refreshed personal account context');
     }
     return { success: true, context };
   } catch (error) {
+    const timedOut = controller.signal.aborted;
+    console.warn(
+      timedOut
+        ? `[EnterpriseAccount] context refresh timed out after ${requestTimeoutMs}ms`
+        : '[EnterpriseAccount] context refresh failed',
+      error,
+    );
     return {
       success: false,
       context: getPersistedEnterpriseAccountContext(deps.store),
-      error: error instanceof Error ? error.message : 'Failed to load enterprise account context',
+      error: timedOut
+        ? 'Enterprise account context request timed out'
+        : error instanceof Error
+          ? error.message
+          : 'Failed to load enterprise account context',
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }

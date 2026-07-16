@@ -32,9 +32,6 @@ import {
 } from '../scheduledTask/migrate';
 import {
   AgentId,
-  AgentIpcChannel,
-  type AgentLegacyIdentityCleanupResult,
-  AgentLegacyIdentityCleanupStatus,
 } from '../shared/agent/constants';
 import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
@@ -54,6 +51,8 @@ import { ClipboardIpc } from '../shared/clipboard/constants';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SESSION_PAGE_SIZE,
+  COWORK_TEMP_ATTACHMENTS_DIR_NAME,
+  COWORK_TEMP_DIR_NAME,
   CoworkContextUsageFailureReason,
   CoworkContextUsageSource,
   CoworkForkMode,
@@ -70,6 +69,11 @@ import {
   type CoworkSelectedTextSnippet,
   normalizeCoworkSelectedTextSnippets,
 } from '../shared/cowork/selectedText';
+import {
+  CoworkSteerRejectReason,
+  CoworkSteerStatus,
+} from '../shared/cowork/steer';
+import { stripNullChars } from '../shared/cowork/text';
 import {
   DataMigrationIpc,
   type DataMigrationLastRestoreResult,
@@ -96,7 +100,12 @@ import {
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
-import { normalizeNotificationSettings, type NotificationSettings } from '../shared/notifications/constants';
+import {
+  normalizeNotificationSettings,
+  type NotificationSettings,
+  TaskCompletionNotificationMode,
+  WaitingNotificationKind,
+} from '../shared/notifications/constants';
 import {
   OpenClawEngineIpc,
   OpenClawGatewayRepairErrorCode,
@@ -151,6 +160,7 @@ import type {
   TelegramInstanceConfig,
   WecomInstanceConfig,
 } from './im/types';
+import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
 import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
@@ -163,6 +173,7 @@ import {
   getCronJobService,
   initCronJobServiceManager,
   initScheduledTaskHelpers,
+  migrateScheduledTaskAnnounceJobs,
   registerScheduledTaskHandlers,
 } from './ipcHandlers/scheduledTask';
 import { registerSessionDiagnosticsHandlers } from './ipcHandlers/sessionDiagnostics';
@@ -206,6 +217,12 @@ import {
   stopCoworkOpenAICompatProxy,
 } from './libs/coworkOpenAICompatProxy';
 import {
+  type CoworkTempJanitor,
+  createCoworkTempJanitor,
+  ensureCoworkTempGitignore,
+  findCoworkTempRoot,
+} from './libs/coworkTempJanitor';
+import {
   generateSessionTitle,
   probeCoworkModelReadiness,
 } from './libs/coworkUtil';
@@ -219,6 +236,7 @@ import {
   performDataMigrationRestoreSync,
   performPendingDataMigrationRestoreSync,
 } from './libs/dataMigration/dataMigrationService';
+import { DesktopNotificationManager } from './libs/desktopNotificationManager';
 import {
   getHtmlSharePublicBaseUrl,
   getKitStoreUrl,
@@ -255,12 +273,10 @@ import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyf
 import { exportLogsZip } from './libs/logExport';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import { migrateAgentModelRefs, parsePrimaryModelRef, resolveQualifiedAgentModelRef } from './libs/openclawAgentModels';
-import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from './libs/openclawAgentsMdIdentityMigration';
 import {
   buildManagedSessionKey,
   DEFAULT_MANAGED_AGENT_ID,
   OpenClawChannelSessionSync,
-  parseManagedSessionKey,
 } from './libs/openclawChannelSessionSync';
 import {
   classifyAppConfigChange,
@@ -277,6 +293,10 @@ import {
   backupOpenClawConfig,
   getOpenClawGatewayRepairBusyError,
 } from './libs/openclawGatewayRepair';
+import {
+  getCoworkParentSessionId,
+  resolveCoworkSessionIdByOpenClawSessionKey,
+} from './libs/openclawLocalSessionResolver';
 import {
   addMemoryEntry,
   deleteMemoryEntry,
@@ -319,7 +339,6 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
-import { TaskCompletionNotifier } from './libs/taskCompletionNotifier';
 import { getLogFilePath, getRecentMainLogEntries, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
 import {
@@ -1150,7 +1169,7 @@ const resolveInlineAttachmentDir = (cwd?: string): string => {
   if (trimmed) {
     const resolved = path.resolve(trimmed);
     if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
-      return path.join(resolved, '.cowork-temp', 'attachments', 'manual');
+      return path.join(resolved, COWORK_TEMP_DIR_NAME, COWORK_TEMP_ATTACHMENTS_DIR_NAME, 'manual');
     }
   }
   return path.join(app.getPath('temp'), 'lobsterai', 'attachments');
@@ -2528,12 +2547,27 @@ const bindCoworkRuntimeForwarder = (): void => {
         console.error('Failed to forward cowork permission request:', error);
       }
     });
+    const { requestId, toolName } = (request ?? {}) as { requestId?: unknown; toolName?: unknown };
+    if (typeof requestId === 'string' && requestId) {
+      getDesktopNotificationManager().handlePermissionRequest(sessionId, {
+        requestId,
+        toolName: typeof toolName === 'string' ? toolName : '',
+      });
+    }
+  });
+
+  runtime.on('permissionResolved', (_sessionId: string, requestId: string) => {
+    getDesktopNotificationManager().handlePermissionResolved(requestId);
+  });
+
+  runtime.on('sessionStopped', (sessionId: string) => {
+    getDesktopNotificationManager().handleSessionStopped(sessionId);
   });
 
   runtime.on('complete', (sessionId: string, claudeSessionId: string | null) => {
     mediaSelectionBySession.delete(sessionId);
     mediaReferencesBySession.delete(sessionId);
-    getTaskCompletionNotifier().handleComplete(sessionId);
+    getDesktopNotificationManager().handleComplete(sessionId);
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
@@ -2623,20 +2657,47 @@ const getCoworkEngineRouter = () => {
   return coworkEngineRouter;
 };
 
-const getTaskCompletionNotifier = (): TaskCompletionNotifier => {
-  if (!taskCompletionNotifier) {
-    taskCompletionNotifier = new TaskCompletionNotifier({
+let coworkTempJanitor: CoworkTempJanitor | null = null;
+
+const getCoworkTempJanitor = (): CoworkTempJanitor => {
+  if (!coworkTempJanitor) {
+    coworkTempJanitor = createCoworkTempJanitor({
+      listAllCwds: () => getCoworkStore().listRecentSessionCwds(0),
+      listActiveCwds: () => {
+        try {
+          const activeSessionIds = getCoworkEngineRouter().getActiveSessionIds();
+          return getCoworkStore().listSessionCwds(activeSessionIds);
+        } catch (error) {
+          console.warn('[CoworkTempJanitor] failed to resolve active session cwds:', error);
+          return [];
+        }
+      },
+    });
+  }
+  return coworkTempJanitor;
+};
+
+const getDesktopNotificationManager = (): DesktopNotificationManager => {
+  if (!desktopNotificationManager) {
+    desktopNotificationManager = new DesktopNotificationManager({
       getWindow: () => mainWindow,
       getNotificationIconPath,
       getNotificationSettings: () =>
         getStore().get<AppConfigSettings>('app_config')?.notificationSettings,
+      getSessionTitle: (sessionId: string) => {
+        try {
+          return getCoworkStore().getSession(sessionId, 0)?.title ?? null;
+        } catch {
+          return null;
+        }
+      },
       focusMainWindow: focusMainWindowForReason,
       openSession: (sessionId: string) => {
         const targetWindow = mainWindow && !mainWindow.isDestroyed()
           ? mainWindow
-          : ensureMainWindowForReason?.('task completion notification') ?? null;
+          : ensureMainWindowForReason?.('desktop notification') ?? null;
         if (!targetWindow || targetWindow.isDestroyed()) {
-          console.warn(`[TaskCompletionNotifier] could not open session ${sessionId} because no main window was available`);
+          console.warn(`[DesktopNotification] could not open session ${sessionId} because no main window was available`);
           return;
         }
 
@@ -2653,7 +2714,7 @@ const getTaskCompletionNotifier = (): TaskCompletionNotifier => {
       },
     });
   }
-  return taskCompletionNotifier;
+  return desktopNotificationManager;
 };
 
 const getSkillManager = () => {
@@ -2668,6 +2729,12 @@ const getMcpRuntime = (): McpRuntime => {
     mcpRuntime = new McpRuntime({
       getStore,
       syncOpenClawConfig,
+      onAskUserRequested: (sessionId, request) => {
+        getDesktopNotificationManager().handlePermissionRequest(sessionId, request);
+      },
+      onAskUserDismissed: (requestId) => {
+        getDesktopNotificationManager().handlePermissionResolved(requestId);
+      },
     });
   }
   return mcpRuntime;
@@ -3013,7 +3080,7 @@ const getNotificationIconPath = (): string | null => {
 // 保存对主窗口的引用
 let mainWindow: BrowserWindow | null = null;
 let dataMigrationRestoreWindow: BrowserWindow | null = null;
-let taskCompletionNotifier: TaskCompletionNotifier | null = null;
+let desktopNotificationManager: DesktopNotificationManager | null = null;
 let ensureMainWindowForReason: ((reason: string) => BrowserWindow | null) | null = null;
 let isOpenSessionFromNotificationReady = false;
 let pendingOpenSessionFromNotificationId: string | null = null;
@@ -3025,7 +3092,7 @@ const flushOpenSessionFromNotification = (): void => {
 
   const sessionId = pendingOpenSessionFromNotificationId;
   pendingOpenSessionFromNotificationId = null;
-  console.log(`[TaskCompletionNotifier] opening session ${sessionId} from notification`);
+  console.log(`[DesktopNotification] opening session ${sessionId} from notification`);
   mainWindow.webContents.send(CoworkIpcChannel.OpenSessionFromNotification, { sessionId });
 };
 
@@ -3160,6 +3227,30 @@ const normalizeMediaSelectionState = (selection?: MediaSelectionState): MediaSel
     normalized.modelName = mediaModelDisplayName(displayModelId, selection.modelName);
   }
   return normalized;
+};
+
+const resolveMediaSelectionForSession = (sessionId: string | null): MediaSelectionState | undefined => {
+  let current = sessionId?.trim() || null;
+  const seen = new Set<string>();
+
+  for (let depth = 0; current && depth < 16; depth++) {
+    if (seen.has(current)) return undefined;
+    seen.add(current);
+
+    const selection = normalizeMediaSelectionState(mediaSelectionBySession.get(current));
+    if (selection && selection.mode !== 'none') {
+      return selection;
+    }
+
+    try {
+      current = getCoworkParentSessionId(getStore().getDatabase(), current);
+    } catch (error) {
+      console.warn('[MediaGeneration] failed to resolve parent media selection:', error);
+      return undefined;
+    }
+  }
+
+  return undefined;
 };
 
 const mediaModelIdForOutput = (model: unknown, fallback?: string): string => {
@@ -3548,14 +3639,35 @@ if (!gotTheLock) {
     getStore().set(key, value);
     if (key === 'app_config') {
       const nextAppConfig = value as AppConfigSettings | undefined;
-      const previousNotificationsEnabled = normalizeNotificationSettings(
+      const previousNotificationSettings = normalizeNotificationSettings(
         previousAppConfig?.notificationSettings,
-      ).taskCompletionNotificationsEnabled;
-      const nextNotificationsEnabled = normalizeNotificationSettings(
+      );
+      const nextNotificationSettings = normalizeNotificationSettings(
         nextAppConfig?.notificationSettings,
-      ).taskCompletionNotificationsEnabled;
-      if (previousNotificationsEnabled && !nextNotificationsEnabled) {
-        getTaskCompletionNotifier().clearAll('task completion notifications disabled');
+      );
+      if (
+        previousNotificationSettings.taskCompletionNotificationMode !== TaskCompletionNotificationMode.Off &&
+        nextNotificationSettings.taskCompletionNotificationMode === TaskCompletionNotificationMode.Off
+      ) {
+        getDesktopNotificationManager().clearAllCompletions('task completion notifications disabled');
+      }
+      if (
+        previousNotificationSettings.permissionNotificationsEnabled &&
+        !nextNotificationSettings.permissionNotificationsEnabled
+      ) {
+        getDesktopNotificationManager().closeWaitingNotifications(
+          WaitingNotificationKind.Permission,
+          'permission notifications disabled',
+        );
+      }
+      if (
+        previousNotificationSettings.questionNotificationsEnabled &&
+        !nextNotificationSettings.questionNotificationsEnabled
+      ) {
+        getDesktopNotificationManager().closeWaitingNotifications(
+          WaitingNotificationKind.Question,
+          'question notifications disabled',
+        );
       }
       const browserWebAccessChanged = hasBrowserWebAccessConfigChanged(previousAppConfig, nextAppConfig);
       const systemProxyChanged = getUseSystemProxyFromConfig(previousAppConfig) !==
@@ -3792,7 +3904,32 @@ if (!gotTheLock) {
   ipcMain.handle('app:getSystemLocale', () => app.getLocale());
   ipcMain.handle(AppIpcChannel.GetKeyfromAttribution, () => getKeyfromAttribution(getStore()));
 
+  ipcMain.handle(AppIpcChannel.OpenSystemNotificationSettings, async () => {
+    try {
+      let url: string | null = null;
+      if (process.platform === 'darwin') {
+        // Deep link into this app's notification permission pane. Unpackaged
+        // dev builds have no notification registration to open.
+        if (!app.isPackaged) return { success: false, error: 'Unavailable in development builds' };
+        url = `x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=${encodeURIComponent(APP_USER_MODEL_ID)}`;
+      } else if (process.platform === 'win32') {
+        url = 'ms-settings:notifications';
+      }
+      if (!url) return { success: false, error: 'Unsupported platform' };
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (error) {
+      console.warn('[DesktopNotification] failed to open system notification settings:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to open system notification settings',
+      };
+    }
+  });
+
   // ── Auth IPC handlers ──
+
+  let authAccountGeneration = 0;
 
   /**
    * Helper: Persist auth tokens into the kv store.
@@ -3970,11 +4107,30 @@ if (!gotTheLock) {
     return resp;
   };
 
-  const refreshEnterpriseAccountContext = () => fetchEnterpriseAccountContext({
-    getServerBaseUrl: getServerApiBaseUrl,
-    fetchWithAuth,
-    store: getStore(),
-  });
+  let pendingEnterpriseAccountContextRefresh: {
+    generation: number;
+    promise: ReturnType<typeof fetchEnterpriseAccountContext>;
+  } | null = null;
+
+  const refreshEnterpriseAccountContext = (): ReturnType<typeof fetchEnterpriseAccountContext> => {
+    const generation = authAccountGeneration;
+    if (pendingEnterpriseAccountContextRefresh?.generation === generation) {
+      return pendingEnterpriseAccountContextRefresh.promise;
+    }
+
+    const promise = fetchEnterpriseAccountContext({
+      getServerBaseUrl: getServerApiBaseUrl,
+      fetchWithAuth,
+      store: getStore(),
+      isRequestCurrent: () => authAccountGeneration === generation && getAuthTokens() !== null,
+    }).finally(() => {
+      if (pendingEnterpriseAccountContextRefresh?.promise === promise) {
+        pendingEnterpriseAccountContextRefresh = null;
+      }
+    });
+    pendingEnterpriseAccountContextRefresh = { generation, promise };
+    return promise;
+  };
 
   const syncEnterpriseAccountContextFromPayload = async (
     payload: unknown,
@@ -3982,11 +4138,13 @@ if (!gotTheLock) {
     const context = normalizeEnterpriseAccountContext(payload);
     if (context) {
       persistEnterpriseAccountContext(getStore(), context);
+      console.debug(`[EnterpriseAccount] applied context from auth payload for enterprise ${context.enterpriseId} with role ${context.role}`);
       return context;
     }
 
     if (readAccountMode(payload) === EnterpriseAccountMode.Personal) {
       clearEnterpriseAccountContext(getStore());
+      console.debug('[EnterpriseAccount] cleared context from personal auth payload');
       return null;
     }
 
@@ -3999,7 +4157,7 @@ if (!gotTheLock) {
   });
 
   const extractSessionIdFromKey = (sessionKey: string): string | null =>
-    parseManagedSessionKey(sessionKey)?.sessionId ?? null;
+    resolveCoworkSessionIdByOpenClawSessionKey(getStore().getDatabase(), sessionKey);
 
   /**
    * Handle media generation tool callbacks from the OpenClaw plugin.
@@ -4013,7 +4171,7 @@ if (!gotTheLock) {
     const action = (args.action as string) || 'generate';
     const serverBaseUrl = getServerApiBaseUrl();
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);
-    const selection = normalizeMediaSelectionState(sessionId ? mediaSelectionBySession.get(sessionId) : undefined);
+    const selection = resolveMediaSelectionForSession(sessionId);
     const prompt = typeof args.prompt === 'string' ? args.prompt : '';
     const explicitModel = canonicalizeMediaModelId(typeof args.model === 'string' ? args.model : '');
     const resolvedModelFromSelection = tool === MediaGenerationTool.Image
@@ -4234,15 +4392,19 @@ if (!gotTheLock) {
           `生成后请妥善保存视频，若误删可在[「个人主页-用量详情-生成任务」](${portalTasksUrl})中下载`,
           '~~（链接有时效性，请尽快下载）~~',
         ].join('\n');
-        const confirmResponse = await getMcpRuntime().askUserInternal([{
-          question: questionText,
-          title: '确认生成视频？',
-          subtitle,
-          options: [
-            { label: '确认生成', description: '开始视频生成任务' },
-            { label: '取消', description: '暂不生成' },
-          ],
-        }]);
+        const confirmResponse = await getMcpRuntime().askUserInternal(
+          [{
+            question: questionText,
+            title: '确认生成视频？',
+            subtitle,
+            options: [
+              { label: '确认生成', description: '开始视频生成任务' },
+              { label: '取消', description: '暂不生成' },
+            ],
+          }],
+          undefined,
+          { sessionKey: request.context.sessionKey },
+        );
 
         const userCancelled = confirmResponse?.behavior === 'deny'
           || confirmResponse?.answers?.[questionText] === '取消';
@@ -4992,6 +5154,7 @@ if (!gotTheLock) {
       if (body.code !== 0 || !body.data) {
         return { success: false, error: body.message || 'Exchange failed' };
       }
+      authAccountGeneration += 1;
       clearEnterpriseAccountContext(getStore());
       clearServerModelMetadata();
       saveAuthTokens(body.data.accessToken, body.data.refreshToken);
@@ -5126,6 +5289,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('auth:logout', async () => {
+    authAccountGeneration += 1;
     try {
       const tokens = getAuthTokens();
       if (tokens) {
@@ -6354,8 +6518,11 @@ if (!gotTheLock) {
           };
         }
 
+        // Strip NUL before this handler persists the message itself; the
+        // runtime adapter sanitizes again at the outbound boundary.
+        const prompt = stripNullChars(options.prompt);
         const fallbackTitle = buildSessionTitleFromInput(
-          options.prompt,
+          prompt,
           t('coworkDefaultSessionTitle'),
         );
         const title = options.title?.trim() || fallbackTitle;
@@ -6412,7 +6579,7 @@ if (!gotTheLock) {
         }
         const imageAttachmentPreviews = buildCoworkImageAttachmentPreviews(options.imageAttachments);
         const messageMetadata = buildCoworkUserSelectionMetadata({
-          prompt: options.prompt,
+          prompt,
           skillIds: options.activeSkillIds,
           kitIds: options.kitIds,
           kitReferences: options.kitReferences,
@@ -6422,7 +6589,7 @@ if (!gotTheLock) {
         });
         coworkStoreInstance.addMessage(session.id, {
           type: 'user',
-          content: options.prompt,
+          content: prompt,
           metadata: messageMetadata,
         });
 
@@ -6435,7 +6602,7 @@ if (!gotTheLock) {
           `Elapsed ${Date.now() - ipcStartedAtMs}ms.`,
         );
         runtime
-          .startSession(session.id, options.prompt, {
+          .startSession(session.id, prompt, {
             skipInitialUserMessage: true,
             systemPrompt,
             skillIds: runtimeSkillIds,
@@ -6633,6 +6800,74 @@ if (!gotTheLock) {
     },
   );
 
+  ipcMain.handle(CoworkIpcChannel.SubmitSteer, async (
+    _event,
+    options: { sessionId: string; text: string; clientSteerId: string },
+  ) => {
+    const clientSteerId = typeof options?.clientSteerId === 'string' && options.clientSteerId.trim()
+      ? options.clientSteerId.trim()
+      : `steer-${Date.now()}`;
+    try {
+      const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
+      const text = typeof options?.text === 'string' ? options.text.trim() : '';
+      if (!sessionId || !text) {
+        return {
+          success: false,
+          status: CoworkSteerStatus.Rejected,
+          clientSteerId,
+          reason: CoworkSteerRejectReason.EmptyInput,
+          error: 'Session id and steer input are required.',
+        };
+      }
+      console.debug(
+        '[CoworkSteer] steer IPC received.',
+        `Session ${sessionId}.`,
+        `Client steer ${clientSteerId}.`,
+        `Chars ${text.length}.`,
+      );
+
+      const engineStatus = await ensureOpenClawRunningForCowork();
+      if (engineStatus.phase !== 'running') {
+        return {
+          ...getEngineNotReadyResponse(engineStatus),
+          status: CoworkSteerStatus.Rejected,
+          clientSteerId,
+          reason: CoworkSteerRejectReason.RuntimeRejected,
+        };
+      }
+
+      const runtime = getCoworkEngineRouter();
+      if (!runtime.submitSteer) {
+        return {
+          success: false,
+          status: CoworkSteerStatus.Rejected,
+          clientSteerId,
+          reason: CoworkSteerRejectReason.RuntimeUnsupported,
+          error: 'Steer is not supported by the current runtime.',
+        };
+      }
+
+      const result = await runtime.submitSteer(sessionId, text, clientSteerId);
+      console.debug(
+        '[CoworkSteer] steer IPC completed.',
+        `Session ${sessionId}.`,
+        `Client steer ${clientSteerId}.`,
+        `Status ${result.status}.`,
+        `Reason ${result.reason ?? 'none'}.`,
+      );
+      return result;
+    } catch (error) {
+      console.error('[CoworkSteer] steer IPC failed:', error);
+      return {
+        success: false,
+        status: CoworkSteerStatus.Rejected,
+        clientSteerId,
+        reason: CoworkSteerRejectReason.Unknown,
+        error: error instanceof Error ? error.message : 'Failed to submit steer input',
+      };
+    }
+  });
+
   ipcMain.handle(CoworkIpcChannel.GoalCommand, async (
     _event,
     options: { sessionId: string; command: string },
@@ -6689,10 +6924,10 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.MarkSessionViewed, async (_event, sessionId: string) => {
     try {
-      getTaskCompletionNotifier().markSessionViewed(sessionId);
+      getDesktopNotificationManager().markSessionViewed(sessionId);
       return { success: true };
     } catch (error) {
-      console.warn(`[TaskCompletionNotifier] failed to mark session ${sessionId} viewed:`, error);
+      console.warn(`[DesktopNotification] failed to mark session ${sessionId} viewed:`, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to mark session viewed',
@@ -6700,14 +6935,32 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle(CoworkIpcChannel.SetActiveSession, async (event, sessionId: string | null) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+      return { success: false, error: 'Unknown renderer' };
+    }
+    try {
+      getDesktopNotificationManager().setActiveSession(
+        typeof sessionId === 'string' && sessionId ? sessionId : null,
+      );
+      return { success: true };
+    } catch (error) {
+      console.warn('[DesktopNotification] failed to update active session:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update active session',
+      };
+    }
+  });
+
   ipcMain.handle(CoworkIpcChannel.OpenSessionFromNotificationReady, async event => {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
-      console.warn('[TaskCompletionNotifier] ignored notification open readiness from an unknown renderer');
+      console.warn('[DesktopNotification] ignored notification open readiness from an unknown renderer');
       return { success: false, error: 'Unknown renderer' };
     }
 
     isOpenSessionFromNotificationReady = true;
-    console.log('[TaskCompletionNotifier] renderer is ready to open sessions from notifications');
+    console.log('[DesktopNotification] renderer is ready to open sessions from notifications');
     flushOpenSessionFromNotification();
     return { success: true };
   });
@@ -6719,7 +6972,7 @@ if (!gotTheLock) {
       coworkStoreInstance.deleteSession(sessionId);
       mediaSelectionBySession.delete(sessionId);
       mediaReferencesBySession.delete(sessionId);
-      getTaskCompletionNotifier().handleSessionDeleted(sessionId);
+      getDesktopNotificationManager().handleSessionDeleted(sessionId);
       // Remove any pending media tasks for this session
       for (const [taskId, tracker] of pendingMediaTasks) {
         if (tracker.sessionId === sessionId) pendingMediaTasks.delete(taskId);
@@ -6761,7 +7014,7 @@ if (!gotTheLock) {
       coworkStoreInstance.deleteSessions(sessionIds);
       const router = getCoworkEngineRouter();
       for (const sessionId of sessionIds) {
-        getTaskCompletionNotifier().handleSessionDeleted(sessionId);
+        getDesktopNotificationManager().handleSessionDeleted(sessionId);
         try {
           getIMGatewayManager()?.getIMStore()?.deleteSessionMappingByCoworkSessionId(sessionId);
         } catch {
@@ -7027,13 +7280,6 @@ if (!gotTheLock) {
     }
   });
 
-  const buildLegacyIdentityCleanupFailure = (
-    error: unknown,
-  ): Extract<AgentLegacyIdentityCleanupResult, { status: typeof AgentLegacyIdentityCleanupStatus.Failed }> => ({
-    status: AgentLegacyIdentityCleanupStatus.Failed,
-    error: error instanceof Error ? error.message : String(error),
-  });
-
   const resolveAgentWorkspacePath = (agentId: string): string => {
     const stateDir = getOpenClawEngineManager().getStateDir();
     return agentId === AgentId.Main
@@ -7041,220 +7287,23 @@ if (!gotTheLock) {
       : path.join(stateDir, `workspace-${agentId}`);
   };
 
-  const cleanupLegacyIdentityBlockForAgent = async (agentId: string): Promise<AgentLegacyIdentityCleanupResult> => {
-    if (agentId !== AgentId.Main && getAgentManager().getAgent(agentId) === null) {
-      return buildLegacyIdentityCleanupFailure(`Agent ${agentId} not found`);
+  const resolveExistingAgentWorkspacePath = (agentId?: string): string => {
+    const normalizedAgentId = agentId?.trim() || AgentId.Main;
+    if (normalizedAgentId !== AgentId.Main && getAgentManager().getAgent(normalizedAgentId) === null) {
+      throw new Error(`Agent ${normalizedAgentId} not found`);
     }
-
-    const syncResult = await syncOpenClawConfig({ reason: 'agent-identity-cleanup-prereq' });
-    if (!syncResult.success) {
-      return buildLegacyIdentityCleanupFailure(syncResult.error || 'OpenClaw config sync failed before cleanup.');
-    }
-
-    const workspacePath = resolveAgentWorkspacePath(agentId);
-    const result = cleanupLegacyAgentsMdIdentityBlockInWorkspace(workspacePath);
-    if (result.status === AgentLegacyIdentityCleanupStatus.Cleaned) {
-      console.log(
-        `[OpenClaw] Cleaned legacy AGENTS.md identity block for agent ${agentId}; backup=${result.backupPath}`,
-      );
-    } else if (result.status === AgentLegacyIdentityCleanupStatus.Failed) {
-      console.warn(
-        `[OpenClaw] Failed to clean legacy AGENTS.md identity block for agent ${agentId}: ${result.error}`,
-      );
-    }
-    return result;
+    return resolveAgentWorkspacePath(normalizedAgentId);
   };
 
-  // ========== Agent IPC Handlers ==========
-
-  ipcMain.handle(AgentIpcChannel.List, async () => {
-    try {
-      const agents = getAgentManager().listAgents();
-      return { success: true, agents };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to list agents',
-      };
-    }
-  });
-
-  ipcMain.handle(AgentIpcChannel.Get, async (_event, id: string) => {
-    try {
-      const agent = getAgentManager().getAgent(id);
-      return { success: true, agent };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to get agent',
-      };
-    }
-  });
-
-  ipcMain.handle(
-    AgentIpcChannel.Create,
-    async (_event, request: import('./coworkStore').CreateAgentRequest) => {
-      try {
-        const agent = getAgentManager().createAgent(request, resolveDefaultAgentModelRef());
-        // Sync config so workspace files (SOUL.md, IDENTITY.md, USER.md) are written
-        // before OpenClaw scaffolds default templates for the new agent.
-        syncOpenClawConfig({ reason: 'agent-created' }).catch(err => {
-          console.error('[OpenClaw] config sync after agent-created failed:', err);
-        });
-        return { success: true, agent };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : 'Failed to create agent',
-        };
-      }
-    },
-  );
-
-  ipcMain.handle(
-    AgentIpcChannel.Update,
-    async (_event, id: string, updates: import('./coworkStore').UpdateAgentRequest) => {
-      try {
-        const previousAgent = getAgentManager().getAgent(id);
-        const previousWorkingDirectory = previousAgent?.workingDirectory?.trim() || '';
-        const nextWorkingDirectory = updates.workingDirectory?.trim() || '';
-        const workingDirectoryChanged =
-          updates.workingDirectory !== undefined &&
-          previousAgent !== null &&
-          previousWorkingDirectory !== nextWorkingDirectory;
-        const agent = getAgentManager().updateAgent(id, updates);
-        if (workingDirectoryChanged && agent) {
-          refreshImSessionWorkingDirectoriesForAgent(agent.id);
-        }
-        const shouldSyncOpenClawConfig = Object.keys(updates).some(key => key !== 'pinned');
-        if (shouldSyncOpenClawConfig) {
-          syncOpenClawConfig({
-            reason: workingDirectoryChanged ? 'agent-working-directory-updated' : 'agent-updated',
-            restartGatewayIfRunning: workingDirectoryChanged,
-          }).catch(err => {
-            console.error('[OpenClaw] config sync after agent update failed:', err);
-          });
-        }
-        return { success: true, agent };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : 'Failed to update agent',
-        };
-      }
-    },
-  );
-
-  ipcMain.handle(AgentIpcChannel.CleanupLegacyIdentityBlock, async (_event, id: string) => {
-    try {
-      const result = await cleanupLegacyIdentityBlockForAgent(id);
-      return { success: true, result };
-    } catch (error) {
-      const result = buildLegacyIdentityCleanupFailure(error);
-      console.warn(`[OpenClaw] Failed to clean legacy AGENTS.md identity block for agent ${id}: ${result.error}`);
-      return { success: false, result, error: result.error };
-    }
-  });
-
-  ipcMain.handle(AgentIpcChannel.Delete, async (_event, id: string) => {
-    try {
-      const agentExists = id !== AgentId.Main && getAgentManager().getAgent(id) !== null;
-      const deletedSessionIds = agentExists ? getCoworkStore().listSessionIdsByAgent(id) : [];
-      const router = getCoworkEngineRouter();
-      for (const sessionId of deletedSessionIds) {
-        router.stopSession(sessionId);
-      }
-
-      const result = getAgentManager().deleteAgent(id);
-
-      // Clean up IM platform bindings that reference the deleted agent
-      // so that channels fall back to the default 'main' agent.
-      try {
-        const imStore = getIMGatewayManager()?.getIMStore();
-        if (imStore) {
-          const imSettings = imStore.getIMSettings();
-          const bindings = imSettings.platformAgentBindings;
-          if (bindings) {
-            let changed = false;
-            for (const [platform, agentId] of Object.entries(bindings)) {
-              if (agentId === id) {
-                delete bindings[platform];
-                changed = true;
-              }
-            }
-            if (changed) {
-              imStore.setIMSettings({ platformAgentBindings: bindings });
-            }
-          }
-        }
-      } catch {
-        // IM store may not be initialised yet; safe to ignore.
-      }
-
-      if (result) {
-        for (const sessionId of deletedSessionIds) {
-          try {
-            getIMGatewayManager()?.getIMStore()?.deleteSessionMappingByCoworkSessionId(sessionId);
-          } catch {
-            // IM store may not be initialised yet; safe to ignore.
-          }
-          try {
-            router.onSessionDeleted(sessionId);
-          } catch {
-            // Router may not be initialised yet; safe to ignore.
-          }
-        }
-      }
-
-      syncOpenClawConfig({ reason: 'agent-deleted' }).catch(err => {
-        console.error('[OpenClaw] config sync after agent-deleted failed:', err);
-      });
-      return { success: true, deleted: result, deletedSessionIds: result ? deletedSessionIds : [] };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to delete agent',
-      };
-    }
-  });
-
-  ipcMain.handle(AgentIpcChannel.Presets, async () => {
-    try {
-      const presets = getAgentManager().getPresetAgents();
-      return { success: true, presets };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to get presets',
-      };
-    }
-  });
-
-  ipcMain.handle(AgentIpcChannel.PresetTemplates, async () => {
-    try {
-      const presets = getAgentManager().getAllPresetAgents();
-      return { success: true, presets };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to get preset templates',
-      };
-    }
-  });
-
-  ipcMain.handle(AgentIpcChannel.AddPreset, async (_event, presetId: string) => {
-    try {
-      const agent = getAgentManager().addPresetAgent(presetId, resolveDefaultAgentModelRef());
-      syncOpenClawConfig({ reason: 'agent-preset-added' }).catch(err => {
-        console.error('[OpenClaw] config sync after agent-preset-added failed:', err);
-      });
-      return { success: true, agent };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to add preset agent',
-      };
-    }
+  registerAgentHandlers({
+    getAgentManager,
+    getCoworkStore,
+    getCoworkEngineRouter,
+    getIMGatewayManager,
+    refreshImSessionWorkingDirectoriesForAgent,
+    resolveAgentWorkspacePath,
+    resolveDefaultAgentModelRef,
+    syncOpenClawConfig,
   });
 
   ipcMain.handle(
@@ -7460,6 +7509,10 @@ if (!gotTheLock) {
 
         const runtime = getCoworkEngineRouter();
         runtime.respondToPermission(options.requestId, options.result);
+        // Close the desktop notification for this request regardless of which
+        // subsystem handled it (runtime approvals emit permissionResolved on
+        // their own; AskUserQuestion bridge requests do not).
+        getDesktopNotificationManager().handlePermissionResolved(options.requestId);
         return { success: true };
       } catch (error) {
         return {
@@ -7481,6 +7534,36 @@ if (!gotTheLock) {
       };
     }
   });
+
+  ipcMain.handle(CoworkIpcChannel.TempStorageUsage, async () => {
+    try {
+      const preview = await getCoworkTempJanitor().preview();
+      return { success: true, ...preview };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to measure temp storage',
+      };
+    }
+  });
+
+  ipcMain.handle(
+    CoworkIpcChannel.TempStorageClean,
+    async (_event, options?: { cwds?: string[] }) => {
+      try {
+        const selectedCwds = Array.isArray(options?.cwds)
+          ? options.cwds.filter((cwd): cwd is string => typeof cwd === 'string' && cwd.trim() !== '')
+          : undefined;
+        const summary = await getCoworkTempJanitor().clean(selectedCwds);
+        return { success: true, ...summary };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to clean temp storage',
+        };
+      }
+    },
+  );
 
   ipcMain.handle(OpenClawSessionPolicyIpc.Get, async () => {
     try {
@@ -7784,10 +7867,14 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:bootstrap:read', async (_event, filename: string) => {
+  ipcMain.handle(CoworkIpcChannel.BootstrapRead, async (
+    _event,
+    filename: string,
+    options?: { agentId?: string },
+  ) => {
     try {
-      const mainWorkspace = getMainAgentWorkspacePath(getOpenClawEngineManager().getStateDir());
-      const content = readBootstrapFile(mainWorkspace, filename);
+      const workspace = resolveExistingAgentWorkspacePath(options?.agentId);
+      const content = readBootstrapFile(workspace, filename);
       return { success: true, content };
     } catch (error) {
       return {
@@ -7797,10 +7884,15 @@ if (!gotTheLock) {
       };
     }
   });
-  ipcMain.handle('cowork:bootstrap:write', async (_event, filename: string, content: string) => {
+  ipcMain.handle(CoworkIpcChannel.BootstrapWrite, async (
+    _event,
+    filename: string,
+    content: string,
+    options?: { agentId?: string },
+  ) => {
     try {
-      const mainWorkspace = getMainAgentWorkspacePath(getOpenClawEngineManager().getStateDir());
-      writeBootstrapFile(mainWorkspace, filename, content);
+      const workspace = resolveExistingAgentWorkspacePath(options?.agentId);
+      writeBootstrapFile(workspace, filename, content);
       syncOpenClawConfig({ reason: 'bootstrap-updated' }).catch(err => {
         console.error('[OpenClaw] config sync after bootstrap-updated failed:', err);
       });
@@ -7979,7 +8071,7 @@ if (!gotTheLock) {
       getConfig: () => getIMGatewayManager().getConfig() as unknown as Record<string, unknown>,
     }),
   });
-  registerScheduledTaskHandlers({
+  const scheduledTaskHandlerDeps = {
     getCronJobService,
     getIMGatewayManager: () => ({
       getIMStore: () => ({
@@ -7987,10 +8079,11 @@ if (!gotTheLock) {
           getIMGatewayManager()
             .getIMStore()
             .getSessionMapping(conversationId, platform as Platform),
-        listSessionMappings: (platform: string, agentId?: string) =>
+        getIMSettings: () => getIMGatewayManager().getIMStore().getIMSettings(),
+        listSessionMappings: (platform: string, accountId?: string) =>
           getIMGatewayManager()
             .getIMStore()
-            .listSessionMappings(platform as Platform, agentId)
+            .listSessionMappings(platform as Platform, accountId)
             .map(mapping => ({
               ...mapping,
               lastActiveAt: String(mapping.lastActiveAt),
@@ -8010,7 +8103,8 @@ if (!gotTheLock) {
     getOpenClawRuntimeAdapter: () => openClawRuntimeAdapter,
     getCoworkSessionTitle: (sessionId: string) =>
       getCoworkStore().getSession(sessionId, 0)?.title ?? null,
-  });
+  };
+  registerScheduledTaskHandlers(scheduledTaskHandlerDeps);
 
   registerNimQrLoginHandlers({
     startNimQrLogin,
@@ -9392,6 +9486,10 @@ if (!gotTheLock) {
 
         const dir = resolveInlineAttachmentDir(options?.cwd);
         await fs.promises.mkdir(dir, { recursive: true });
+        const coworkTempRoot = findCoworkTempRoot(dir);
+        if (coworkTempRoot) {
+          ensureCoworkTempGitignore(coworkTempRoot);
+        }
 
         const safeFileName = sanitizeAttachmentFileName(options?.fileName);
         const extension = inferAttachmentExtension(safeFileName, options?.mimeType);
@@ -9464,7 +9562,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(
     DialogIpc.StatFile,
-    async (_event, filePath?: string): Promise<{ success: boolean; isFile?: boolean; size?: number; mtimeMs?: number; error?: string }> => {
+    async (_event, filePath?: string): Promise<{ success: boolean; isFile?: boolean; isDirectory?: boolean; size?: number; mtimeMs?: number; error?: string }> => {
       try {
         if (typeof filePath !== 'string' || !filePath.trim()) {
           return { success: false, error: 'Missing file path' };
@@ -9473,6 +9571,7 @@ if (!gotTheLock) {
         return {
           success: true,
           isFile: stat.isFile(),
+          isDirectory: stat.isDirectory(),
           size: stat.size,
           mtimeMs: stat.mtimeMs,
         };
@@ -10390,7 +10489,7 @@ if (!gotTheLock) {
     });
 
     mainWindow.on('focus', () => {
-      getTaskCompletionNotifier().clearAll('main window focused');
+      getDesktopNotificationManager().handleWindowFocused();
     });
 
     // 处理渲染进程崩溃或退出
@@ -11123,6 +11222,9 @@ if (!gotTheLock) {
         } catch (err) {
           console.warn('[Main] CronJobService not available after OpenClaw startup:', err);
         }
+        void migrateScheduledTaskAnnounceJobs(scheduledTaskHandlerDeps).catch(err => {
+          console.warn('[Main] Scheduled task IM announce job migration failed:', err);
+        });
       })
       .catch(error => {
         console.error('[OpenClaw] Failed to auto-start gateway on app startup:', error);

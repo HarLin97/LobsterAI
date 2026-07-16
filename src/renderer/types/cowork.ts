@@ -14,6 +14,7 @@ import type {
   ResolvedKitCapabilities,
 } from '../../shared/kit/constants';
 import type {
+  OpenClawEngineErrorCode,
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
 } from '../../shared/openclawEngine/constants';
@@ -195,6 +196,18 @@ export interface CoworkConfig {
   openClawSessionPolicy: OpenClawSessionPolicyConfig;
 }
 
+/** Per-directory `.cowork-temp` preview entry shown in the clean confirmation dialog. */
+export interface CoworkTempDirPreview {
+  cwd: string;
+  tempDir: string;
+  totalBytes: number;
+  totalFiles: number;
+  cleanableBytes: number;
+  cleanableFiles: number;
+  isActive: boolean;
+  truncated: boolean;
+}
+
 export type CoworkConfigUpdate = Partial<Pick<
   CoworkConfig,
   | 'workingDirectory'
@@ -234,6 +247,7 @@ export interface OpenClawEngineStatus {
   version: string | null;
   progressPercent?: number;
   message?: string;
+  errorCode?: OpenClawEngineErrorCode;
   gatewayPort?: number | null;
   gatewayHttpUrl?: string | null;
   canRetry: boolean;
@@ -322,7 +336,11 @@ export interface SubagentSessionSummary {
   task: string | null;
   label: string | null;
   sessionKey: string | null;
+  childCoworkSessionId?: string | null;
   parentSessionId: string;
+  parentAgentId?: string | null;
+  parentTitle?: string | null;
+  parentUpdatedAt?: number | null;
   status: 'running' | 'done' | 'error';
   createdAt: number;
   endedAt: number | null;

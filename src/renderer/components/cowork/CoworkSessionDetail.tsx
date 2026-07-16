@@ -3,7 +3,9 @@ import {
   ArrowDownIcon,
   ChatBubbleLeftIcon,
   DocumentArrowDownIcon,
+  ExclamationTriangleIcon,
   PhotoIcon,
+  QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -23,7 +25,10 @@ import {
   normalizeCoworkSelectedTextSnippets,
 } from '../../../shared/cowork/selectedText';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
-import { dedupeArtifactsForDisplay, normalizeFilePathForDedup, normalizeLocalServiceOrigin, normalizeLocalServiceUrlForDedup, parseFileLinksFromMessage, parseFilePathsFromText, parseLocalServiceUrlsFromText, parseMediaTokensFromText, parseRemoteImageArtifactsFromText, parseToolArtifact, parseToolResultMediaArtifacts, shouldParseFilePathsFromToolResult, stripFileLinksFromText } from '../../services/artifactParser';
+import { findCurrentEnterpriseQuotaSignal } from '../../features/enterpriseAccount/quotaPromptState';
+import { selectEnterpriseAccountContext } from '../../features/enterpriseAccount/selectors';
+import { collectSessionArtifacts, loadDetectedFileArtifact } from '../../services/artifactDetection';
+import { dedupeArtifactsForDisplay, normalizeFilePathForDedup, normalizeLocalServiceOrigin, parseMediaTokensFromText } from '../../services/artifactParser';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { getInstalledKitSkillIds } from '../../services/kitCapability';
@@ -64,7 +69,14 @@ import { setActiveKitIds } from '../../store/slices/kitSlice';
 import { setActiveSkillIds } from '../../store/slices/skillSlice';
 import type { Artifact } from '../../types/artifact';
 import { ArtifactTypeValue, PREVIEWABLE_ARTIFACT_TYPES } from '../../types/artifact';
-import type { CoworkImageAttachment, CoworkMessage, CoworkMessageMetadata, SubagentSessionSummary } from '../../types/cowork';
+import type {
+  CoworkImageAttachment,
+  CoworkMessage,
+  CoworkMessageMetadata,
+  CoworkPermissionRequest,
+  CoworkPermissionResult,
+  SubagentSessionSummary,
+} from '../../types/cowork';
 import {
   CoworkCollaborationMode,
   type CoworkCollaborationMode as CoworkCollaborationModeType,
@@ -84,7 +96,6 @@ import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
-import WindowTitleBar from '../window/WindowTitleBar';
 import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlock';
 import { type CoworkOpenShareOptionsEventDetail, CoworkUiEvent } from './constants';
 import ContextUsageIndicator from './ContextUsageIndicator';
@@ -94,6 +105,11 @@ import {
   bucketLength,
   reportConversationNavigationAction,
 } from './conversationAnalytics';
+import {
+  canScrollElementInWheelDirection,
+  isWheelScrollingAwayFromBottom,
+  shouldAutoScrollForPosition,
+} from './conversationScrollPolicy';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
 import {
@@ -103,6 +119,7 @@ import {
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
   getStreamingActivityStatusText,
+  getTurnMessageIds,
   hasRenderableAssistantContent,
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
@@ -136,6 +153,9 @@ interface CoworkSessionDetailProps {
   onToggleSidebar?: () => void;
   onNewChat?: () => void;
   updateBadge?: React.ReactNode;
+  minimizedPermission?: CoworkPermissionRequest | null;
+  onRestorePermission?: () => void;
+  onRespondToPermission?: (result: CoworkPermissionResult) => void;
 }
 
 interface BrowserLocalServiceContext {
@@ -146,12 +166,16 @@ interface BrowserLocalServiceContext {
   projectCandidates?: NonNullable<Artifact['localService']>['projectCandidates'];
 }
 
-const AUTO_SCROLL_THRESHOLD = 120;
 const NAV_SCROLL_LOCK_DURATION = 800;
 const NAV_BOTTOM_SNAP_THRESHOLD = 20;
 const WHEEL_DELTA_LINE_HEIGHT = 16;
 const SCROLL_TO_BOTTOM_SETTLE_THRESHOLD = 24;
 const SCROLL_TO_BOTTOM_SETTLE_DELAYS_MS = [600, 1200, 1800] as const;
+const AutoScrollDetachSource = {
+  ConversationWheel: 'conversation_wheel',
+  ScrollToBottomControlWheel: 'scroll_to_bottom_control_wheel',
+} as const;
+type AutoScrollDetachSource = typeof AutoScrollDetachSource[keyof typeof AutoScrollDetachSource];
 const AUTO_PREVIEW_ARTIFACT_SETTLE_MS = 600;
 const ARTIFACT_PANEL_TRANSITION_MS = 200;
 const ARTIFACT_PANEL_RESIZE_HANDLE_WIDTH = 4;
@@ -171,6 +195,32 @@ const RAIL_LINE_HOVER_STEPS = [28, 18, 13, 10] as const;
 const RAIL_LINE_HEIGHT = 3;
 const RAIL_TARGET_RENDER_RELEASE_DELAY = 2400;
 const RAIL_TARGET_SCROLL_RETRY_LIMIT = 6;
+
+const getPermissionPreviewText = (permission: CoworkPermissionRequest): string => {
+  const toolInput = permission.toolInput ?? {};
+  if (permission.toolName === 'AskUserQuestion') {
+    const rawQuestions = (toolInput as Record<string, unknown>).questions;
+    if (Array.isArray(rawQuestions)) {
+      const firstQuestion = rawQuestions.find((question): question is Record<string, unknown> => (
+        !!question && typeof question === 'object' && !Array.isArray(question)
+      ));
+      if (typeof firstQuestion?.question === 'string') {
+        return firstQuestion.question;
+      }
+    }
+  }
+
+  const command = (toolInput as Record<string, unknown>).command;
+  if (typeof command === 'string' && command.trim()) {
+    return command.trim();
+  }
+
+  try {
+    return JSON.stringify(toolInput);
+  } catch {
+    return permission.toolName;
+  }
+};
 
 const getRailLineWidth = (
   index: number,
@@ -245,23 +295,6 @@ type ExpandedConversationPreviewItem = {
 type ExpandedConversationPreview = {
   latest: ExpandedConversationPreviewItem;
   items: ExpandedConversationPreviewItem[];
-};
-
-const getTurnMessageIds = (turn: ConversationTurn): Set<string> => {
-  const messageIds = new Set<string>();
-  for (const item of turn.assistantItems) {
-    if (item.type === 'assistant' || item.type === 'system' || item.type === 'tool_result') {
-      messageIds.add(item.message.id);
-      continue;
-    }
-    if (item.type === 'tool_group') {
-      messageIds.add(item.group.toolUse.id);
-      if (item.group.toolResult) {
-        messageIds.add(item.group.toolResult.id);
-      }
-    }
-  }
-  return messageIds;
 };
 
 const findLatestAssistantTurn = (turns: ConversationTurn[]): ConversationTurn | null => {
@@ -627,10 +660,42 @@ const logRailNavigationDiagnostic = (message: string): void => {
   window.electron?.log?.fromRenderer?.('debug', 'CoworkSessionDetail', message);
 };
 
+const logAutoScrollDiagnostic = (message: string): void => {
+  console.debug(`[CoworkSessionDetail] ${message}`);
+  window.electron?.log?.fromRenderer?.('debug', 'CoworkSessionDetail', message);
+};
+
 const getSelectionAnchorRect = (range: Range): DOMRect => {
   const lineRects = Array.from(range.getClientRects())
     .filter(rect => rect.width > 0 && rect.height > 0);
   return lineRects[0] ?? range.getBoundingClientRect();
+};
+
+const isWheelHandledByNestedScroller = (
+  target: EventTarget | null,
+  conversationContainer: HTMLElement,
+  deltaY: number,
+): boolean => {
+  let element = target instanceof HTMLElement ? target : null;
+  while (element && element !== conversationContainer) {
+    const style = window.getComputedStyle(element);
+    const hasScrollableOverflow = style.overflowY === 'auto' || style.overflowY === 'scroll';
+    if (hasScrollableOverflow && element.scrollHeight > element.clientHeight) {
+      if (style.overscrollBehaviorY === 'contain' || style.overscrollBehaviorY === 'none') {
+        return true;
+      }
+      if (canScrollElementInWheelDirection(
+        element.scrollTop,
+        element.scrollHeight,
+        element.clientHeight,
+        deltaY,
+      )) {
+        return true;
+      }
+    }
+    element = element.parentElement;
+  }
+  return false;
 };
 
 const getSelectedAssistantTextRange = (): SelectedAssistantTextRange | null => {
@@ -1093,10 +1158,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   onToggleSidebar,
   onNewChat,
   updateBadge,
+  minimizedPermission,
+  onRestorePermission,
+  onRespondToPermission,
 }) => {
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
+  const isWindows = window.electron.platform === 'win32';
   const currentSession = useSelector(selectCurrentSession);
+  const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const isStreaming = useSelector(selectIsStreaming);
   const remoteManaged = useSelector(selectRemoteManaged);
   const lastMessageContent = useSelector(selectLastMessageContent);
@@ -1120,6 +1190,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const planConfirmation = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.planConfirmations[currentSession.id] : undefined
   );
+  const queuedSteerCount = useSelector((state: RootState) => {
+    if (!currentSession?.id) return 0;
+    return (
+      (state.cowork.pendingSteers[currentSession.id]?.length ?? 0)
+      + (state.cowork.rejectedSteers[currentSession.id]?.length ?? 0)
+    );
+  });
   const messageRailIndex = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.messageRailIndexBySessionId[currentSession.id] ?? [] : []
   );
@@ -1136,6 +1213,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const promptInputRef = useRef<CoworkPromptInputRef>(null);
   const compactConfirmRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const shouldAutoScrollRef = useRef(true);
+  const userDetachedFromBottomRef = useRef(false);
   const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
   const [showCompactConfirm, setShowCompactConfirm] = useState(false);
   const [selectedTextAction, setSelectedTextAction] = useState<{
@@ -1149,11 +1228,46 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const scrollToBottomIntentRef = useRef(false);
   const scrollToBottomSettleTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const suppressSelectedTextActionUntilRef = useRef(0);
+  const minimizedPermissionPreview = minimizedPermission
+    ? getPermissionPreviewText(minimizedPermission)
+    : '';
+  // AskUserQuestion is the agent asking for input, not a risky action awaiting
+  // approval — style it neutrally instead of as an amber warning.
+  const isMinimizedQuestionPermission = minimizedPermission?.toolName === 'AskUserQuestion';
+  const handleDenyMinimizedPermission = useCallback(() => {
+    onRespondToPermission?.({
+      behavior: 'deny',
+      message: 'Permission denied',
+    });
+  }, [onRespondToPermission]);
 
   const clearScrollToBottomSettleTimers = useCallback(() => {
     scrollToBottomSettleTimersRef.current.forEach(timer => clearTimeout(timer));
     scrollToBottomSettleTimersRef.current = [];
   }, []);
+
+  const updateShouldAutoScroll = useCallback((enabled: boolean) => {
+    shouldAutoScrollRef.current = enabled;
+    setShouldAutoScroll((current) => (current === enabled ? current : enabled));
+  }, []);
+
+  const detachAutoScrollForUserIntent = useCallback((source: AutoScrollDetachSource) => {
+    const hadScrollToBottomIntent = scrollToBottomIntentRef.current;
+    if (userDetachedFromBottomRef.current && !hadScrollToBottomIntent) return;
+
+    userDetachedFromBottomRef.current = true;
+    scrollToBottomIntentRef.current = false;
+    clearScrollToBottomSettleTimers();
+    updateShouldAutoScroll(false);
+
+    const container = scrollContainerRef.current;
+    const distanceToBottom = container
+      ? Math.max(0, Math.round(container.scrollHeight - container.scrollTop - container.clientHeight))
+      : -1;
+    logAutoScrollDiagnostic(
+      `Auto-scroll detached by user input; session=${currentSession?.id ?? 'unknown'}; source=${source}; distanceToBottom=${distanceToBottom}; cancelledScrollToBottom=${hadScrollToBottomIntent}.`,
+    );
+  }, [clearScrollToBottomSettleTimers, currentSession?.id, updateShouldAutoScroll]);
 
   const closeSelectedTextAction = useCallback((options: {
     clearSelection?: boolean;
@@ -1349,8 +1463,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   ]);
 
   useEffect(() => {
-    setShouldAutoScroll(true);
-  }, [currentSession?.id]);
+    userDetachedFromBottomRef.current = false;
+    updateShouldAutoScroll(true);
+  }, [currentSession?.id, updateShouldAutoScroll]);
 
   const handleCompactContext = useCallback(() => {
     if (!currentSession?.id) {
@@ -1635,6 +1750,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [isArtifactPanelExpanded, setIsArtifactPanelExpanded] = useState(false);
   const [isExpandedPromptInputHidden, setIsExpandedPromptInputHidden] = useState(false);
   const [isExpandedConversationPreviewOpen, setIsExpandedConversationPreviewOpen] = useState(false);
+  const [goalStatusBarPortalTarget, setGoalStatusBarPortalTarget] = useState<HTMLDivElement | null>(null);
+  const [steerPreviewPortalTarget, setSteerPreviewPortalTarget] = useState<HTMLDivElement | null>(null);
   const previousArtifactPanelOpenRef = useRef(isPanelOpen);
   const fileListPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
   const browserPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
@@ -1695,6 +1812,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         task: run.task,
         label: run.label,
         sessionKey: run.sessionKey,
+        childCoworkSessionId: run.childCoworkSessionId,
         parentSessionId: targetSessionId,
         status: run.status,
         createdAt: run.createdAt,
@@ -2124,6 +2242,34 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Subagents);
     dispatch(activateArtifactSubagentTab({ sessionId }));
     void fetchSubagents(sessionId, { showLoading: subagents.length === 0 });
+  }, [
+    dispatch,
+    fetchSubagents,
+    sessionId,
+    setSessionActiveSpecialPreviewTab,
+    setSessionSubagentPreviewTabOpen,
+    subagents.length,
+  ]);
+
+  useEffect(() => {
+    const handleSelectSubagentEvent = (event: Event) => {
+      const detail = (event as CustomEvent<SubagentSessionSummary | null>).detail;
+      if (!detail) {
+        setSelectedSubagent(null);
+        return;
+      }
+      if (!sessionId || detail.parentSessionId !== sessionId) return;
+      setSelectedSubagent(detail);
+      setSessionSubagentPreviewTabOpen(true);
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Subagents);
+      dispatch(activateArtifactSubagentTab({ sessionId }));
+      void fetchSubagents(sessionId, { showLoading: subagents.length === 0 });
+    };
+
+    window.addEventListener(CoworkUiEvent.SelectSubagent, handleSelectSubagentEvent);
+    return () => {
+      window.removeEventListener(CoworkUiEvent.SelectSubagent, handleSelectSubagentEvent);
+    };
   }, [
     dispatch,
     fetchSubagents,
@@ -2720,136 +2866,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (isStreaming) return;
 
     try {
-      const messages = currentSession.messages;
-      const detected: Artifact[] = [];
-      const pushFileArtifactIfNew = (artifact: Artifact, seenFilePaths: Set<string>) => {
-        const normalized = artifact.filePath ? normalizeFilePathForDedup(artifact.filePath) : '';
-        if (!artifact.filePath || seenFilePaths.has(normalized)) return;
-        seenFilePaths.add(normalized);
-        detected.push(artifact);
-      };
-      const pushLocalServiceArtifactIfNew = (artifact: Artifact, seenLocalServiceUrls: Set<string>) => {
-        const url = artifact.url || artifact.content;
-        const normalized = normalizeLocalServiceUrlForDedup(url);
-        if (!url || seenLocalServiceUrls.has(normalized)) return;
-        seenLocalServiceUrls.add(normalized);
-        detected.push(artifact);
-      };
-
-      for (const msg of messages) {
-        if (msg.type === 'assistant' && !msg.metadata?.isThinking && msg.content) {
-          const seenFilePaths = new Set<string>();
-          const seenLocalServiceUrls = new Set<string>();
-          const localServiceArtifacts = parseLocalServiceUrlsFromText(
-            msg.content,
-            msg.id,
-            sessionId,
-            { projectDirectory: currentSession.cwd },
-          );
-          for (const serviceArtifact of localServiceArtifacts) {
-            pushLocalServiceArtifactIfNew(serviceArtifact, seenLocalServiceUrls);
-          }
-
-          const fileLinks = parseFileLinksFromMessage(msg.content, msg.id, sessionId);
-          for (const fl of fileLinks) {
-            pushFileArtifactIfNew(fl, seenFilePaths);
-          }
-
-          const contentWithoutFileLinks = stripFileLinksFromText(msg.content);
-          const pathArtifacts = parseFilePathsFromText(contentWithoutFileLinks, msg.id, sessionId);
-          for (const pa of pathArtifacts) {
-            pushFileArtifactIfNew(pa, seenFilePaths);
-          }
-
-          detected.push(...parseRemoteImageArtifactsFromText(msg.content, msg.id, sessionId, 'artifact-remote-assistant'));
-        }
-
-        if (msg.type === 'tool_result') {
-          const seenFilePaths = new Set<string>();
-          const toolMediaArtifacts = parseToolResultMediaArtifacts(msg, sessionId);
-          if (toolMediaArtifacts.length > 0) {
-            for (const mediaArtifact of toolMediaArtifacts) {
-              if (mediaArtifact.filePath) {
-                pushFileArtifactIfNew(mediaArtifact, seenFilePaths);
-              } else {
-                detected.push(mediaArtifact);
-              }
-            }
-            continue;
-          }
-
-          if (!msg.content) continue;
-
-          const mediaArtifacts = parseMediaTokensFromText(msg.content, msg.id, sessionId);
-          for (const ma of mediaArtifacts) {
-            pushFileArtifactIfNew(ma, seenFilePaths);
-          }
-
-          // Only parse bare file paths from tool results of image generation tools.
-          // Other tools (e.g. Bash running `find`) may output many file paths in their
-          // results that should NOT become artifacts.
-          const toolUseId = msg.metadata?.toolUseId;
-          const pairedToolUse = toolUseId
-            ? messages.find(m => m.type === 'tool_use' && m.metadata?.toolUseId === toolUseId)
-            : undefined;
-          const toolName = pairedToolUse?.metadata?.toolName
-            ? String(pairedToolUse.metadata.toolName)
-            : '';
-          if (shouldParseFilePathsFromToolResult(toolName)) {
-            const pathArtifacts = parseFilePathsFromText(msg.content, msg.id, sessionId, 'artifact-toolresult');
-            for (const pa of pathArtifacts) {
-              pushFileArtifactIfNew(pa, seenFilePaths);
-            }
-          }
-          detected.push(...parseRemoteImageArtifactsFromText(msg.content, msg.id, sessionId, 'artifact-remote-toolresult'));
-        }
-
-        if (msg.type === 'system') {
-          const seenFilePaths = new Set<string>();
-          const toolMediaArtifacts = parseToolResultMediaArtifacts(msg, sessionId);
-          if (toolMediaArtifacts.length > 0) {
-            for (const mediaArtifact of toolMediaArtifacts) {
-              if (mediaArtifact.filePath) {
-                pushFileArtifactIfNew(mediaArtifact, seenFilePaths);
-              } else {
-                detected.push(mediaArtifact);
-              }
-            }
-            continue;
-          }
-
-          if (!msg.content) continue;
-
-          const fileLinks = parseFileLinksFromMessage(msg.content, msg.id, sessionId);
-          for (const fl of fileLinks) {
-            pushFileArtifactIfNew(fl, seenFilePaths);
-          }
-
-          const contentWithoutFileLinks = stripFileLinksFromText(msg.content);
-          const pathArtifacts = parseFilePathsFromText(contentWithoutFileLinks, msg.id, sessionId, 'artifact-system-path');
-          for (const pa of pathArtifacts) {
-            pushFileArtifactIfNew(pa, seenFilePaths);
-          }
-
-          detected.push(...parseRemoteImageArtifactsFromText(msg.content, msg.id, sessionId, 'artifact-remote-system'));
-        }
-      }
-
-      for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i];
-        if (msg.type === 'tool_use') {
-          const toolUseId = msg.metadata?.toolUseId;
-          const toolResult = toolUseId
-            ? messages.find(m => m.type === 'tool_result' && m.metadata?.toolUseId === toolUseId)
-            : messages[i + 1]?.type === 'tool_result' ? messages[i + 1] : undefined;
-          const toolArtifact = parseToolArtifact(msg, toolResult, sessionId);
-          if (toolArtifact && toolArtifact.filePath) {
-            detected.push(toolArtifact);
-          }
-        }
-      }
-
       const cwd = currentSession.cwd;
+      const detected = collectSessionArtifacts(currentSession.messages, sessionId, cwd);
+
       for (const artifact of detected) {
         if (artifact.type === ArtifactTypeValue.LocalService) {
           dispatch(addArtifact({ sessionId, artifact, defaultProjectDirectory: cwd }));
@@ -2861,70 +2880,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
       const loadFiles = async () => {
         for (const artifact of toLoad) {
-          let rawPath = artifact.filePath!;
-          if (rawPath.startsWith('file:///')) {
-            rawPath = rawPath.slice(7);
-          } else if (rawPath.startsWith('file://')) {
-            rawPath = rawPath.slice(7);
-          } else if (rawPath.startsWith('file:/')) {
-            rawPath = rawPath.slice(5);
-          }
-          // Strip leading / before Windows drive letter
-          if (/^\/[A-Za-z]:/.test(rawPath)) {
-            rawPath = rawPath.slice(1);
-          }
-          const absPath = rawPath.startsWith('/')
-            ? rawPath
-            : (/^[A-Za-z]:/.test(rawPath) ? rawPath : `${cwd}/${rawPath}`);
-          if (artifact.type === 'video') {
-            loadedFileIdsRef.current.add(artifact.id);
-            dispatch(addArtifact({
-              sessionId,
-              artifact: { ...artifact, content: '', filePath: absPath },
-            }));
-            continue;
-          }
-          if (artifact.type === ArtifactTypeValue.Html) {
-            try {
-              const stat = await window.electron.dialog.statFile(absPath);
-              if (stat?.success && stat.isFile) {
-                dispatch(addArtifact({
-                  sessionId,
-                  artifact: { ...artifact, content: '', filePath: absPath, contentVersion: Date.now() },
-                }));
-              }
-            } catch {
-              // File unreadable or missing.
-            }
-            loadedFileIdsRef.current.add(artifact.id);
-            continue;
-          }
-          try {
-            const result = await window.electron.dialog.readFileAsDataUrl(absPath);
-            if (result?.success && result.dataUrl) {
-              const isTextType = artifact.type !== 'image' && artifact.type !== 'document';
-              let content = result.dataUrl;
-              if (isTextType) {
-                try {
-                  const base64 = result.dataUrl.split(',')[1] || '';
-                  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-                  content = new TextDecoder('utf-8').decode(bytes);
-                } catch {
-                  content = result.dataUrl;
-                }
-              }
-              loadedFileIdsRef.current.add(artifact.id);
-              dispatch(addArtifact({
-                sessionId,
-                artifact: { ...artifact, content, filePath: absPath },
-              }));
-            } else {
-              // File does not exist or is unreadable — mark as loaded to avoid retrying
-              loadedFileIdsRef.current.add(artifact.id);
-            }
-          } catch {
-            // File unreadable or missing — mark as loaded to avoid retrying
-            loadedFileIdsRef.current.add(artifact.id);
+          const loaded = await loadDetectedFileArtifact(artifact, cwd);
+          // Mark as loaded either way to avoid retrying missing files.
+          loadedFileIdsRef.current.add(artifact.id);
+          if (loaded) {
+            dispatch(addArtifact({ sessionId, artifact: loaded }));
           }
         }
       };
@@ -2968,59 +2928,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const loadFiles = async () => {
         for (const artifact of toLoad) {
           if (loadedFileIdsRef.current.has(artifact.id)) continue;
-          let rawPath = artifact.filePath!;
-          if (rawPath.startsWith('file:///')) {
-            rawPath = rawPath.slice(7);
-          } else if (rawPath.startsWith('file://')) {
-            rawPath = rawPath.slice(7);
-          } else if (rawPath.startsWith('file:/')) {
-            rawPath = rawPath.slice(5);
-          }
-          if (/^\/[A-Za-z]:/.test(rawPath)) {
-            rawPath = rawPath.slice(1);
-          }
-          const absPath = rawPath.startsWith('/')
-            ? rawPath
-            : (/^[A-Za-z]:/.test(rawPath) ? rawPath : `${cwd}/${rawPath}`);
-          if (artifact.type === ArtifactTypeValue.Html) {
-            try {
-              const stat = await window.electron.dialog.statFile(absPath);
-              if (stat?.success && stat.isFile) {
-                dispatch(addArtifact({
-                  sessionId,
-                  artifact: { ...artifact, content: '', filePath: absPath, contentVersion: Date.now() },
-                }));
-              }
-            } catch {
-              // File unreadable or missing.
-            }
-            loadedFileIdsRef.current.add(artifact.id);
-            continue;
-          }
-          try {
-            const result = await window.electron.dialog.readFileAsDataUrl(absPath);
-            if (result?.success && result.dataUrl) {
-              const isTextType = artifact.type !== 'image' && artifact.type !== 'document';
-              let content = result.dataUrl;
-              if (isTextType) {
-                try {
-                  const base64 = result.dataUrl.split(',')[1] || '';
-                  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-                  content = new TextDecoder('utf-8').decode(bytes);
-                } catch {
-                  content = result.dataUrl;
-                }
-              }
-              loadedFileIdsRef.current.add(artifact.id);
-              dispatch(addArtifact({
-                sessionId,
-                artifact: { ...artifact, content, filePath: absPath },
-              }));
-            } else {
-              loadedFileIdsRef.current.add(artifact.id);
-            }
-          } catch {
-            loadedFileIdsRef.current.add(artifact.id);
+          const loaded = await loadDetectedFileArtifact(artifact, cwd);
+          // Mark as loaded either way to avoid retrying missing files.
+          loadedFileIdsRef.current.add(artifact.id);
+          if (loaded) {
+            dispatch(addArtifact({ sessionId, artifact: loaded }));
           }
         }
       };
@@ -3046,6 +2958,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     currentRailIndexRef.current = -1;
     isNavigatingRef.current = false;
     scrollToBottomIntentRef.current = false;
+    userDetachedFromBottomRef.current = false;
     clearScrollToBottomSettleTimers();
     turnElsCacheRef.current = [];
     loadedRailRangeRef.current = null;
@@ -3394,8 +3307,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const container = scrollContainerRef.current;
     if (!container) return;
     const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    const isNearBottom = distanceToBottom <= AUTO_SCROLL_THRESHOLD;
-    setShouldAutoScroll((prev) => (prev === isNearBottom ? prev : isNearBottom));
+    const nextShouldAutoScroll = shouldAutoScrollForPosition(
+      distanceToBottom,
+      userDetachedFromBottomRef.current,
+    );
+    if (userDetachedFromBottomRef.current && nextShouldAutoScroll) {
+      userDetachedFromBottomRef.current = false;
+      logAutoScrollDiagnostic(
+        `Auto-scroll reattached at conversation bottom; session=${currentSession?.id ?? 'unknown'}; distanceToBottom=${Math.max(0, Math.round(distanceToBottom))}.`,
+      );
+    }
+    updateShouldAutoScroll(nextShouldAutoScroll);
     if (scrollToBottomIntentRef.current && distanceToBottom <= SCROLL_TO_BOTTOM_SETTLE_THRESHOLD) {
       scrollToBottomIntentRef.current = false;
       clearScrollToBottomSettleTimers();
@@ -3489,7 +3411,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     currentSession?.messages.length,
     currentSession?.messagesOffset,
     currentSession?.totalMessages,
+    updateShouldAutoScroll,
   ]);
+
+  const handleMessagesWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    if (!isWheelScrollingAwayFromBottom(event.deltaY)) return;
+    if (userDetachedFromBottomRef.current && !scrollToBottomIntentRef.current) return;
+    if (isWheelHandledByNestedScroller(event.target, event.currentTarget, event.deltaY)) return;
+    detachAutoScrollForUserIntent(AutoScrollDetachSource.ConversationWheel);
+  }, [detachAutoScrollForUserIntent]);
 
   const handleScrollToBottom = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -3512,9 +3442,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       },
     });
     clearScrollToBottomSettleTimers();
+    userDetachedFromBottomRef.current = false;
     scrollToBottomIntentRef.current = true;
     if (prefersReducedMotion) {
-      setShouldAutoScroll(true);
+      updateShouldAutoScroll(true);
     }
     container.scrollTo({
       top: container.scrollHeight,
@@ -3532,7 +3463,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         if (latestDistance <= SCROLL_TO_BOTTOM_SETTLE_THRESHOLD) {
           scrollToBottomIntentRef.current = false;
           clearScrollToBottomSettleTimers();
-          setShouldAutoScroll(true);
+          updateShouldAutoScroll(true);
           return;
         }
         latestContainer.scrollTo({
@@ -3544,11 +3475,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       }, delayMs);
       scrollToBottomSettleTimersRef.current.push(timer);
     });
-  }, [clearScrollToBottomSettleTimers, currentSession?.id, currentSession?.messages.length, currentSession?.totalMessages, isStreaming]);
+  }, [clearScrollToBottomSettleTimers, currentSession?.id, currentSession?.messages.length, currentSession?.totalMessages, isStreaming, updateShouldAutoScroll]);
 
   const handleScrollToBottomWheel = useCallback((event: React.WheelEvent<HTMLButtonElement>) => {
     const container = scrollContainerRef.current;
     if (!container) return;
+    if (isWheelScrollingAwayFromBottom(event.deltaY)) {
+      detachAutoScrollForUserIntent(AutoScrollDetachSource.ScrollToBottomControlWheel);
+    }
     const deltaMultiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
       ? WHEEL_DELTA_LINE_HEIGHT
       : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
@@ -3560,7 +3494,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       top: event.deltaY * deltaMultiplier,
       behavior: 'auto',
     });
-  }, []);
+  }, [detachAutoScrollForUserIntent]);
 
   const handleRailWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     const container = railLinesRef.current;
@@ -3650,7 +3584,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const isNavigatingToLastRailItem = railIndex >= railItemCountRef.current - 1;
     if (!isNavigatingToLastRailItem) {
       scrollToBottomIntentRef.current = false;
-      setShouldAutoScroll(false);
+      updateShouldAutoScroll(false);
     }
 
     const container = scrollContainerRef.current;
@@ -3781,7 +3715,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
     currentRailIndexRef.current = railIndex;
     setCurrentRailIndex(railIndex);
-  }, [currentSession?.id, currentSession?.messages.length, currentSession?.totalMessages, isStreaming]);
+  }, [currentSession?.id, currentSession?.messages.length, currentSession?.totalMessages, isStreaming, updateShouldAutoScroll]);
 
   // lastMessageContent and messagesLength are now sourced from memoized
   // selectors (selectLastMessageContent / selectCurrentMessagesLength)
@@ -3897,6 +3831,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const messages = currentSession?.messages;
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
+  const enterpriseQuotaSignal = useMemo(
+    () => findCurrentEnterpriseQuotaSignal(currentSession),
+    [currentSession],
+  );
+  const enterpriseQuotaPromptMessageId = enterpriseAccountContext
+    ? enterpriseQuotaSignal?.messageId ?? null
+    : null;
   const latestAssistantTurn = useMemo(() => findLatestAssistantTurn(turns), [turns]);
   const loadedRailTurnMap = useMemo(() => buildLoadedRailTurnMap(turns), [turns]);
   const messageOffsetById = useMemo(() => {
@@ -4132,7 +4073,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (isNavigatingRef.current) {
       return;
     }
-    if (!shouldAutoScroll) {
+    if (!shouldAutoScrollRef.current) {
       return;
     }
     const container = scrollContainerRef.current;
@@ -4184,6 +4125,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const artifactPanelOverlayBottom = artifactPanelIsOverlay && !isExpandedPromptInputHidden
     ? promptInputAreaHeight
     : 0;
+  const showPromptAuxiliaryBars = !remoteManaged && !(isArtifactPanelExpanded && isExpandedPromptInputHidden);
+  const showExternalGoalStatusBar = Boolean(currentSession.goal && showPromptAuxiliaryBars);
+  const showExternalSteerPreview = queuedSteerCount > 0 && showPromptAuxiliaryBars;
   const artifactPanelInnerWidth = artifactPanelIsOverlay ? '100%' : artifactPanelFrameWidth;
   const shouldShowTurnNavigationRail = railItems.length > 1 && isScrollable;
   const shouldShowScrollToBottom = isScrollable && !shouldAutoScroll;
@@ -4297,6 +4241,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 }}
                 showTypingIndicator={showTypingIndicator}
                 showCopyButtons={!isStreaming || !isLastTurn}
+                hiddenSystemMessageId={enterpriseQuotaPromptMessageId}
                 completedGoal={
                   isLastTurn && currentSession.goal?.status === CoworkGoalStatus.Complete
                     ? currentSession.goal
@@ -4322,7 +4267,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       >
         {/* Left side: Toggle buttons (when collapsed) + Title */}
         <div className="flex h-full flex-1 items-center gap-2 min-w-0">
-          {isSidebarCollapsed && (
+          {isSidebarCollapsed && !isWindows && (
             <div className={`non-draggable flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
               <button
                 type="button"
@@ -4341,7 +4286,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               {updateBadge}
             </div>
           )}
-          <h1 className="text-sm leading-none font-medium text-foreground truncate max-w-[360px]">
+          <h1 className="text-sm leading-5 font-medium text-foreground truncate max-w-[360px]">
             {getSessionTitleForDisplay(currentSession.title) || i18nService.t('coworkNewSession')}
           </h1>
         </div>
@@ -4594,8 +4539,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           >
             <ArtifactPanelIcon className="h-4 w-4" open={isPanelOpen} />
           </button>
-
-          <WindowTitleBar inline className="ml-1" />
         </div>
       </div>
 
@@ -4712,6 +4655,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         <div
           ref={scrollContainerRef}
           onScroll={handleMessagesScroll}
+          onWheel={handleMessagesWheel}
           onMouseUp={handleAssistantTextSelection}
           className="relative h-full min-h-0 overflow-y-auto pt-3"
           style={{ scrollbarGutter: 'stable both-edges' }}
@@ -4930,6 +4874,84 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <PromptInputCollapseIcon className="h-3.5 w-3.5" />
           </button>
         )}
+        {minimizedPermission && (
+          <div className={`${COWORK_DETAIL_CONTENT_CLASS} mb-2`}>
+            <div
+              className={`flex min-w-0 items-center gap-1 rounded-xl border p-1 text-sm shadow-subtle ${
+                isMinimizedQuestionPermission
+                  ? 'border-border bg-surface'
+                  : 'border-amber-200 bg-amber-50/95 dark:border-amber-900/70 dark:bg-amber-950/35'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={onRestorePermission}
+                disabled={!onRestorePermission}
+                className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                  isMinimizedQuestionPermission
+                    ? 'enabled:hover:bg-surface-raised'
+                    : 'enabled:hover:bg-amber-100/70 dark:enabled:hover:bg-amber-900/40'
+                }`}
+                title={minimizedPermissionPreview}
+              >
+                {isMinimizedQuestionPermission ? (
+                  <QuestionMarkCircleIcon className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                ) : (
+                  <ExclamationTriangleIcon className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" aria-hidden="true" />
+                )}
+                <span
+                  className={`shrink-0 font-medium ${
+                    isMinimizedQuestionPermission ? 'text-foreground' : 'text-amber-900 dark:text-amber-100'
+                  }`}
+                >
+                  {i18nService.t(
+                    isMinimizedQuestionPermission ? 'coworkQuestionAwaitingAnswer' : 'coworkPermissionAwaiting'
+                  )}
+                </span>
+                {!isMinimizedQuestionPermission && (
+                  <span className="shrink-0 text-amber-700/80 dark:text-amber-200/75">
+                    {minimizedPermission.toolName}
+                  </span>
+                )}
+                <span
+                  className={`min-w-0 flex-1 truncate ${
+                    isMinimizedQuestionPermission
+                      ? 'text-secondary'
+                      : 'text-amber-800/85 dark:text-amber-100/80'
+                  }`}
+                >
+                  {minimizedPermissionPreview}
+                </span>
+                {onRestorePermission && (
+                  <span
+                    className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium ${
+                      isMinimizedQuestionPermission
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-50'
+                    }`}
+                  >
+                    {i18nService.t(
+                      isMinimizedQuestionPermission ? 'coworkQuestionResume' : 'coworkPermissionRestore'
+                    )}
+                  </span>
+                )}
+              </button>
+              {onRespondToPermission && (
+                <button
+                  type="button"
+                  onClick={handleDenyMinimizedPermission}
+                  className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    isMinimizedQuestionPermission
+                      ? 'text-secondary hover:bg-surface-raised hover:text-foreground'
+                      : 'text-amber-800 hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-900/60'
+                  }`}
+                >
+                  {i18nService.t('coworkDeny')}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {isArtifactPanelExpanded && (expandedConversationPreview || isSessionBusy) && (
           <div className={`${COWORK_DETAIL_CONTENT_CLASS} mb-1`}>
             <div className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-subtle">
@@ -5014,12 +5036,23 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </div>
         )}
         <div className={COWORK_DETAIL_CONTENT_CLASS}>
-          <EnterpriseQuotaPrompt session={currentSession} />
+          <EnterpriseQuotaPrompt signal={enterpriseQuotaSignal} />
+          {showExternalGoalStatusBar && (
+            <div className={`relative z-10 ${showExternalSteerPreview ? 'mb-1.5' : '-mb-px'}`}>
+              <div ref={setGoalStatusBarPortalTarget} />
+            </div>
+          )}
+          {showExternalSteerPreview && (
+            <div className="relative z-10 -mb-px">
+              <div ref={setSteerPreviewPortalTarget} />
+            </div>
+          )}
           <CoworkPromptInput
             ref={promptInputRef}
             onSubmit={onContinue}
             onStop={onStop}
             isStreaming={isSessionBusy}
+            canSteer={isStreaming && !isContextBusy}
             placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
             disabled={remoteManaged}
             size={isArtifactPanelExpanded ? 'compact' : 'large'}
@@ -5034,6 +5067,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             sessionId={currentSession?.id}
             goal={!remoteManaged ? currentSession?.goal : null}
             onGoalCommand={!remoteManaged && currentSession?.id ? handleGoalCommand : undefined}
+            goalStatusBarPortalTarget={showExternalGoalStatusBar ? goalStatusBarPortalTarget : null}
+            goalStatusBarAttached={!showExternalSteerPreview}
+            steerPreviewPortalTarget={showExternalSteerPreview ? steerPreviewPortalTarget : null}
             contextUsageControl={(
               <div className="flex min-w-0 items-center gap-2">
                 <div ref={compactConfirmRef} className="relative inline-flex flex-shrink-0">

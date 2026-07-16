@@ -3,70 +3,53 @@ import {
   ExclamationTriangleIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import {
   EnterpriseMemberRole,
-  EnterpriseQuotaMessageMetadataKey,
   EnterpriseQuotaReason,
-  type EnterpriseQuotaReason as EnterpriseQuotaReasonValue,
 } from '../../../../shared/enterpriseAccount/constants';
-import { isEnterpriseQuotaReason } from '../../../../shared/enterpriseAccount/quotaError';
 import {
   getEnterpriseOverviewUrl,
   getEnterpriseRechargeUrl,
   getEnterpriseUsageUrl,
 } from '../../../services/endpoints';
 import { i18nService } from '../../../services/i18n';
-import {
-  type CoworkSession,
-  CoworkSessionStatusValue,
-} from '../../../types/cowork';
+import { logEnterpriseAccountDiagnostic } from '../diagnostics';
+import type { EnterpriseQuotaSignal } from '../quotaPromptState';
 import { selectEnterpriseAccountContext } from '../selectors';
 
 interface EnterpriseQuotaPromptProps {
-  session: CoworkSession | null;
-}
-
-interface EnterpriseQuotaSignal {
-  messageId: string;
-  reason: EnterpriseQuotaReasonValue;
+  signal: EnterpriseQuotaSignal | null;
 }
 
 interface PromptAction {
   label: string;
   url: string;
+  diagnosticAction: string;
 }
 
-const findLatestEnterpriseQuotaSignal = (
-  session: CoworkSession | null,
-): EnterpriseQuotaSignal | null => {
-  if (!session) return null;
-
-  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
-    const message = session.messages[index];
-    const reason = message.metadata?.[EnterpriseQuotaMessageMetadataKey.Reason];
-    if (isEnterpriseQuotaReason(reason)) {
-      return { messageId: message.id, reason };
-    }
-  }
-
-  return null;
-};
-
-export const EnterpriseQuotaPrompt = ({ session }: EnterpriseQuotaPromptProps) => {
+export const EnterpriseQuotaPrompt = ({ signal }: EnterpriseQuotaPromptProps) => {
   const context = useSelector(selectEnterpriseAccountContext);
   const [dismissedMessageId, setDismissedMessageId] = useState<string | null>(null);
-  const signal = useMemo(
-    () => findLatestEnterpriseQuotaSignal(session),
-    [session],
-  );
+  const contextRole = context?.role;
+  const signalMessageId = signal?.messageId;
+  const signalReason = signal?.reason;
+
+  useEffect(() => {
+    if (!contextRole || !signalMessageId || !signalReason || dismissedMessageId === signalMessageId) {
+      return;
+    }
+    logEnterpriseAccountDiagnostic(
+      'debug',
+      `showing quota prompt for reason ${signalReason} and role ${contextRole}`,
+    );
+  }, [contextRole, dismissedMessageId, signalMessageId, signalReason]);
 
   if (
     !context
     || !signal
-    || session?.status !== CoworkSessionStatusValue.Error
     || dismissedMessageId === signal.messageId
   ) {
     return null;
@@ -89,6 +72,7 @@ export const EnterpriseQuotaPrompt = ({ session }: EnterpriseQuotaPromptProps) =
         actions.push({
           label: i18nService.t('enterpriseAccountAdjustQuota'),
           url: getEnterpriseUsageUrl(context.enterpriseId),
+          diagnosticAction: 'open usage and quotas',
         });
       }
       break;
@@ -101,12 +85,14 @@ export const EnterpriseQuotaPrompt = ({ session }: EnterpriseQuotaPromptProps) =
         actions.push({
           label: i18nService.t('enterpriseQuotaGoAdmin'),
           url: getEnterpriseOverviewUrl(context.enterpriseId),
+          diagnosticAction: 'open enterprise overview',
         });
       }
       if (isSuperAdmin && context.permissions.rechargeEnterprise) {
         actions.push({
           label: i18nService.t('enterpriseQuotaRechargeOrAdjust'),
           url: getEnterpriseRechargeUrl(context.enterpriseId),
+          diagnosticAction: 'open enterprise recharge',
         });
       }
       break;
@@ -119,19 +105,26 @@ export const EnterpriseQuotaPrompt = ({ session }: EnterpriseQuotaPromptProps) =
         actions.push({
           label: i18nService.t('enterpriseQuotaGoAdmin'),
           url: getEnterpriseOverviewUrl(context.enterpriseId),
+          diagnosticAction: 'open enterprise overview',
         });
       }
       if (isSuperAdmin && context.permissions.rechargeEnterprise) {
         actions.push({
           label: i18nService.t('enterpriseQuotaRechargeOrAdjust'),
           url: getEnterpriseRechargeUrl(context.enterpriseId),
+          diagnosticAction: 'open enterprise recharge',
         });
       }
       break;
   }
 
-  const openPortalUrl = (url: string) => {
-    void window.electron.shell.openExternal(url);
+  const openPortalUrl = async (action: PromptAction) => {
+    logEnterpriseAccountDiagnostic('debug', action.diagnosticAction);
+    try {
+      await window.electron.shell.openExternal(action.url);
+    } catch (error) {
+      logEnterpriseAccountDiagnostic('warn', `${action.diagnosticAction} failed`, error);
+    }
   };
 
   return (
@@ -154,7 +147,7 @@ export const EnterpriseQuotaPrompt = ({ session }: EnterpriseQuotaPromptProps) =
                 <button
                   key={action.url}
                   type="button"
-                  onClick={() => openPortalUrl(action.url)}
+                  onClick={() => void openPortalUrl(action)}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
                 >
                   {action.label}
@@ -166,7 +159,10 @@ export const EnterpriseQuotaPrompt = ({ session }: EnterpriseQuotaPromptProps) =
         </div>
         <button
           type="button"
-          onClick={() => setDismissedMessageId(signal.messageId)}
+          onClick={() => {
+            logEnterpriseAccountDiagnostic('debug', 'dismissed quota prompt');
+            setDismissedMessageId(signal.messageId);
+          }}
           className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
           aria-label={i18nService.t('enterpriseQuotaDismiss')}
         >

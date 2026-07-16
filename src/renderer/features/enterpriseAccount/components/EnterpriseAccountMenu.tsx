@@ -15,6 +15,7 @@ import {
 } from '../../../services/endpoints';
 import { i18nService } from '../../../services/i18n';
 import type { RootState } from '../../../store';
+import { logEnterpriseAccountDiagnostic } from '../diagnostics';
 
 interface EnterpriseAccountMenuProps {
   context: EnterpriseAccountContext;
@@ -48,30 +49,46 @@ export const EnterpriseAccountMenu = ({
   const isSuperAdmin = context.role === EnterpriseMemberRole.SuperAdmin;
   const phoneSuffix = user?.phone ? user.phone.slice(-4) : '';
 
-  const openPortalUrl = async (url: string) => {
-    await window.electron.shell.openExternal(url);
-    onClose();
+  const openPortalUrl = async (url: string, action: string) => {
+    logEnterpriseAccountDiagnostic('debug', action);
+    try {
+      await window.electron.shell.openExternal(url);
+      onClose();
+    } catch (error) {
+      logEnterpriseAccountDiagnostic('warn', `${action} failed`, error);
+    }
   };
 
   const handleLogout = async () => {
-    await authService.logout();
-    onClose();
+    logEnterpriseAccountDiagnostic('debug', 'logging out from enterprise account menu');
+    try {
+      await authService.logout();
+      onClose();
+    } catch (error) {
+      logEnterpriseAccountDiagnostic('warn', 'enterprise account logout failed', error);
+    }
   };
 
   return (
-    <div className="absolute bottom-full left-[-0.5rem] z-50 mb-1 w-[15.5rem] overflow-hidden rounded-xl border border-border bg-surface shadow-popover popover-enter">
+    <div className="absolute bottom-full left-[-0.5rem] z-50 mb-1 max-h-[min(70vh,24rem)] w-[15.5rem] max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border border-border bg-surface shadow-popover popover-enter">
       <div className="border-b border-border px-4 py-3">
         <div className="truncate text-sm font-medium text-foreground">
           {user?.nickname || (phoneSuffix ? `****${phoneSuffix}` : context.enterpriseName)}
         </div>
-        <div className="mt-1 text-xs text-secondary">
+        <div className="mt-1 break-words text-xs text-secondary">
           {i18nService.t('enterpriseAccountBelongsTo').replace('{name}', context.enterpriseName)}
         </div>
-        {isSuperAdmin ? (
-          <span className="mt-2 inline-flex rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-            {i18nService.t('enterpriseAccountRoleSuperAdmin')}
-          </span>
-        ) : null}
+        <span className={`mt-2 inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium ${
+          isSuperAdmin
+            ? 'bg-primary/10 text-primary'
+            : 'bg-surface-raised text-secondary'
+        }`}>
+          {i18nService.t(
+            isSuperAdmin
+              ? 'enterpriseAccountRoleSuperAdmin'
+              : 'enterpriseAccountRoleMember',
+          )}
+        </span>
       </div>
 
       <div className="py-1">
@@ -79,13 +96,19 @@ export const EnterpriseAccountMenu = ({
           <MenuAction
             icon={<BuildingOffice2Icon className={actionIconClassName} />}
             label={i18nService.t('enterpriseAccountManagement')}
-            onClick={() => openPortalUrl(getEnterpriseOverviewUrl(context.enterpriseId))}
+            onClick={() => openPortalUrl(
+              getEnterpriseOverviewUrl(context.enterpriseId),
+              'opening enterprise overview from account menu',
+            )}
           />
         ) : null}
         <MenuAction
           icon={<ChartBarIcon className={actionIconClassName} />}
           label={i18nService.t('authUsageOverview')}
-          onClick={() => openPortalUrl(getPortalProfileUrl())}
+          onClick={() => openPortalUrl(
+            getPortalProfileUrl(),
+            'opening usage overview from enterprise account menu',
+          )}
         />
         <MenuAction
           icon={<ArrowRightStartOnRectangleIcon className={actionIconClassName} />}

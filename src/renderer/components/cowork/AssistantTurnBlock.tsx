@@ -5,8 +5,6 @@ import { classifyErrorKey } from '../../../common/coworkErrorClassify';
 import { ContextCompactionStatus } from '../../../common/coworkSystemMessages';
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
-import { EnterpriseQuotaMessageMetadataKey } from '../../../shared/enterpriseAccount/constants';
-import { isEnterpriseQuotaReason } from '../../../shared/enterpriseAccount/quotaError';
 import { dedupeArtifactsForDisplay } from '../../services/artifactParser';
 import { i18nService } from '../../services/i18n';
 import type { Artifact } from '../../types/artifact';
@@ -202,6 +200,7 @@ const AssistantTurnBlock: React.FC<{
   localServiceDirectory?: string;
   onOpenLocalService?: (artifact: Artifact) => void;
   onOpenHtmlFile?: (artifact: Artifact) => void;
+  onOpenArtifactPreview?: (artifact: Artifact) => void;
   onForkMessage?: (messageId: string) => void;
   planConfirmationMessageId?: string | null;
   onConfirmPlan?: (messageId: string) => void;
@@ -210,6 +209,7 @@ const AssistantTurnBlock: React.FC<{
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
   completedGoal?: CoworkGoal | null;
+  hiddenSystemMessageId?: string | null;
 }> = ({
   turn,
   artifacts,
@@ -218,6 +218,7 @@ const AssistantTurnBlock: React.FC<{
   localServiceDirectory,
   onOpenLocalService,
   onOpenHtmlFile,
+  onOpenArtifactPreview,
   onForkMessage,
   planConfirmationMessageId,
   onConfirmPlan,
@@ -226,6 +227,7 @@ const AssistantTurnBlock: React.FC<{
   showTypingIndicator = false,
   showCopyButtons = true,
   completedGoal,
+  hiddenSystemMessageId,
 }) => {
   const [artifactCardsExpanded, setArtifactCardsExpanded] = useState(false);
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
@@ -272,9 +274,7 @@ const AssistantTurnBlock: React.FC<{
   }, [turn.id]);
 
   const renderSystemMessage = (message: CoworkMessage) => {
-    if (isEnterpriseQuotaReason(
-      message.metadata?.[EnterpriseQuotaMessageMetadataKey.Reason],
-    )) {
+    if (message.id === hiddenSystemMessageId) {
       return null;
     }
     const isError = !hasText(message.content) && typeof message.metadata?.error === 'string';
@@ -490,6 +490,7 @@ const AssistantTurnBlock: React.FC<{
                         localServiceDirectory={localServiceDirectory}
                         onOpenLocalService={onOpenLocalService}
                         onOpenHtmlFile={onOpenHtmlFile}
+                        onOpenPreview={onOpenArtifactPreview}
                       />
                     ))}
                   </div>

@@ -71,11 +71,15 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
 export function stopOpenClawTokenProxy(): void {
   if (proxyServer) {
     proxyServer.close();
-    proxyServer = null;
-    proxyPort = null;
-    recentQuotaError = null;
     console.log('[OpenClawTokenProxy] stopped');
   }
+  proxyServer = null;
+  proxyPort = null;
+  recentQuotaError = null;
+  tokenGetter = null;
+  tokenRefresher = null;
+  serverBaseUrlGetter = null;
+  accountContextHeadersGetter = null;
 }
 
 export function getOpenClawTokenProxyPort(): number | null {
@@ -434,10 +438,16 @@ async function forwardRequest(
   body: Buffer,
   incomingHeaders: http.IncomingHttpHeaders,
 ): Promise<UpstreamResult> {
+  let accountContextHeaders: Record<string, string> = {};
+  try {
+    accountContextHeaders = accountContextHeadersGetter?.() ?? {};
+  } catch (error) {
+    console.warn('[OpenClawTokenProxy] failed to read account context headers; forwarding with token only:', error);
+  }
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${accessToken}`,
     'Content-Type': incomingHeaders['content-type'] || 'application/json',
-    ...(accountContextHeadersGetter?.() ?? {}),
+    ...accountContextHeaders,
   };
 
   // Forward accept header for SSE streaming

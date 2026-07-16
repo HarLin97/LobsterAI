@@ -278,8 +278,22 @@ class AuthService {
    * Refresh quota information.
    */
   async refreshQuota() {
+    const authStateAtStart = store.getState().auth;
+    if (!authStateAtStart.isLoggedIn || !authStateAtStart.user) {
+      return;
+    }
     try {
       const result = await window.electron.auth.getQuota();
+      const currentAuthState = store.getState().auth;
+      if (
+        !currentAuthState.isLoggedIn
+        || currentAuthState.user !== authStateAtStart.user
+      ) {
+        const message = 'Discarded stale quota response after auth state changed';
+        console.debug(`[Auth] ${message}`);
+        window.electron?.log?.fromRenderer?.('debug', 'Auth', message);
+        return;
+      }
       if (result.success) {
         if (result.quota) {
           store.dispatch(updateQuota(result.quota));
@@ -288,8 +302,14 @@ class AuthService {
           applyEnterpriseAccountContext(result.enterpriseContext);
         }
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn('[Auth] quota refresh failed:', error);
+      window.electron?.log?.fromRenderer?.(
+        'warn',
+        'Auth',
+        `Quota refresh failed: ${message.replace(/\s+/g, ' ').slice(0, 500)}`,
+      );
     }
   }
 
