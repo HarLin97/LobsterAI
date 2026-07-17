@@ -1107,7 +1107,7 @@ const App: React.FC = () => {
     // 启动时立即检查
     void maybeCheck('startup');
 
-    // 心跳：每 30 分钟检测是否距上次检查已超过 12 小时
+    // 心跳：每 30 分钟检测是否距上次检查已超过 2 小时
     const timer = window.setInterval(() => {
       void maybeCheck('heartbeat');
     }, APP_UPDATE_HEARTBEAT_INTERVAL_MS);
