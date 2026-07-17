@@ -27,9 +27,9 @@ type MediaToolRequest = {
 
 type MediaToolResponse = MediaStatusResponse;
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 150_000;
 
-const STATUS_REQUEST_TIMEOUT_MS = 120_000;
+const STATUS_REQUEST_TIMEOUT_MS = 150_000;
 
 const IMAGE_STATUS_POLL_POLICY: MediaStatusPollPolicy = {
   timeoutMs: 30 * 60_000,

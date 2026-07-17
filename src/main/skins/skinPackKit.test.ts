@@ -16,26 +16,57 @@ describe('AI Skin Designer built-in kit', () => {
   test('publishes only the bundled skin creator skill', () => {
     const kit = buildSkinPackMarketplaceKit() as {
       id: string;
+      name: { en: string; zh: string };
+      description: { en: string; zh: string };
       icon: string;
       version: string;
       workflowKind: string;
-      skills: { bundle: string; list: Array<{ id: string }> };
+      tryAsking: Array<{ en: string; zh: string }>;
+      skills: {
+        bundle: string;
+        list: Array<{
+          id: string;
+          name: { en: string; zh: string };
+        }>;
+      };
       mcpServers: unknown[];
       connectors: unknown[];
     };
 
     expect(kit).toMatchObject({
       id: SkinPackKitId.BuiltIn,
+      name: {
+        en: 'Customize LobsterAI',
+        zh: 'LobsterAI 外观定制',
+      },
+      description: {
+        zh: '用一句话定制 LobsterAI 外观，AI 会生成专属背景与徽记、匹配界面配色并自动应用。',
+      },
       icon: SkinPackKitMetadata.IconUrl,
       version: SkinPackKitMetadata.Version,
       workflowKind: SkinWorkflowKind.SkinPack,
       skills: {
         bundle: SkinPackKitBundle.BuiltIn,
-        list: [{ id: SkinPackSkillId.BuiltIn }],
+        list: [{
+          id: SkinPackSkillId.BuiltIn,
+          name: {
+            en: 'AI Appearance Designer',
+            zh: 'AI 外观设计',
+          },
+        }],
       },
       mcpServers: [],
       connectors: [],
     });
+    expect(kit.tryAsking).toHaveLength(6);
+    expect(kit.tryAsking.map(prompt => prompt.zh)).toEqual([
+      '把 LobsterAI 变成蓝白冠军之夜：传奇 10 号在金色纸雨中高举世界冠军奖杯，热血、荣耀，像一件值得收藏的球迷纪念品',
+      '把 LobsterAI 打造成红金招财主题：一位威严亲和的东方财神作为主视觉，配以金元宝、祥云和流动金线，喜庆华贵但不俗艳，适合行情分析、投资研究与每日复盘',
+      '设计一套红色灯海与东方舞台美学的应援外观：青年演员歌手的温柔剪影、银色追光和克制高级的纪念感',
+      '把 LobsterAI 打造成一间有橘猫陪伴的雨夜书房：暖灯、木质桌面、窗外雨痕，安静又治愈',
+      '把 LobsterAI 变成深蓝数据与自动化指挥舱：抽象趋势光轨、精密网格和琥珀色状态灯，适合代码、分析、盯盘与长期任务',
+      '为内容创作者打造一套黑金品牌工作室外观：摄影棚光影、杂志拼贴与克制的商品陈列，适合图片、视频和电商创作',
+    ]);
     expect(kit.skills.list).toHaveLength(1);
   });
 

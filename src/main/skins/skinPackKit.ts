@@ -12,12 +12,12 @@ import {
 const SKIN_CREATOR_SKILL_METADATA: KitSkillMetadata = {
   id: SkinPackSkillId.BuiltIn,
   name: {
-    en: 'AI Skin Creator',
-    zh: 'AI 皮肤设计师',
+    en: 'AI Appearance Designer',
+    zh: 'AI 外观设计',
   },
   description: {
-    en: 'Creates and applies a coordinated LobsterAI backdrop and home emblem.',
-    zh: '生成并应用一套协调的 LobsterAI 背景图与首页徽记。',
+    en: 'Designs and applies coordinated LobsterAI backgrounds, emblems, and interface colors.',
+    zh: '设计并应用协调的 LobsterAI 背景、徽记和界面配色。',
   },
 };
 
@@ -25,12 +25,12 @@ export function buildSkinPackMarketplaceKit(): Record<string, unknown> {
   return {
     id: SkinPackKitId.BuiltIn,
     name: {
-      en: 'AI Skin Designer',
-      zh: 'AI 皮肤设计师',
+      en: 'Customize LobsterAI',
+      zh: 'LobsterAI 外观定制',
     },
     description: {
-      en: 'Turn a style idea into a LobsterAI backdrop and home emblem, then apply the skin.',
-      zh: '把风格想法生成 LobsterAI 背景图与首页徽记，并自动应用皮肤。',
+      en: 'Describe the look you want. AI creates a custom backdrop and emblem, coordinates the interface colors, and applies it to LobsterAI.',
+      zh: '用一句话定制 LobsterAI 外观，AI 会生成专属背景与徽记、匹配界面配色并自动应用。',
     },
     icon: SkinPackKitMetadata.IconUrl,
     author: 'LobsterAI',
@@ -38,12 +38,28 @@ export function buildSkinPackMarketplaceKit(): Record<string, unknown> {
     workflowKind: SkinPackKitMetadata.WorkflowKind,
     tryAsking: [
       {
-        en: 'Create a warm retro-futurist skin with amber light and calm geometric forms',
-        zh: '生成一套暖色复古未来主义皮肤，使用琥珀光和克制的几何形态',
+        en: 'Turn LobsterAI into a blue-and-white championship night: a legendary number 10 lifting the world trophy in golden confetti, full of passion, glory, and collectible fan-memento energy',
+        zh: '把 LobsterAI 变成蓝白冠军之夜：传奇 10 号在金色纸雨中高举世界冠军奖杯，热血、荣耀，像一件值得收藏的球迷纪念品',
       },
       {
-        en: 'Design a quiet deep-ocean skin in dark blue with bioluminescent accents',
-        zh: '设计一套深蓝色的静谧深海皮肤，带少量生物荧光点缀',
+        en: 'Turn LobsterAI into a red-and-gold prosperity theme with a dignified, welcoming East Asian God of Wealth as the main visual, surrounded by gold ingots, auspicious clouds, and flowing golden lines—festive and luxurious without feeling gaudy, for market analysis, investment research, and daily reviews',
+        zh: '把 LobsterAI 打造成红金招财主题：一位威严亲和的东方财神作为主视觉，配以金元宝、祥云和流动金线，喜庆华贵但不俗艳，适合行情分析、投资研究与每日复盘',
+      },
+      {
+        en: 'Design a fan tribute look with a sea of red lights and refined East Asian stage aesthetics: a gentle young actor-singer silhouette, silver spotlights, and an elegant commemorative mood',
+        zh: '设计一套红色灯海与东方舞台美学的应援外观：青年演员歌手的温柔剪影、银色追光和克制高级的纪念感',
+      },
+      {
+        en: 'Turn LobsterAI into a rainy-night study with an orange cat: warm lamps, a wooden desk, and rain tracing the window, quiet and comforting',
+        zh: '把 LobsterAI 打造成一间有橘猫陪伴的雨夜书房：暖灯、木质桌面、窗外雨痕，安静又治愈',
+      },
+      {
+        en: 'Turn LobsterAI into a deep-blue data and automation command center with abstract trend light trails, precise grids, and amber status lights, built for coding, analysis, market monitoring, and long-running tasks',
+        zh: '把 LobsterAI 变成深蓝数据与自动化指挥舱：抽象趋势光轨、精密网格和琥珀色状态灯，适合代码、分析、盯盘与长期任务',
+      },
+      {
+        en: 'Create a black-and-gold brand-studio look for content creators with photographic lighting, editorial collage, and restrained product displays, suited to image, video, and ecommerce creation',
+        zh: '为内容创作者打造一套黑金品牌工作室外观：摄影棚光影、杂志拼贴与克制的商品陈列，适合图片、视频和电商创作',
       },
     ],
     skills: {

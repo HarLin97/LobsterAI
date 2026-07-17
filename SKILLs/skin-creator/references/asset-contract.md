@@ -26,13 +26,15 @@ Create a polished desktop application atmosphere backdrop in the shared art dire
 - Must remain recognizable at 48 px.
 - One centered, bold silhouette with minimal interior detail.
 - No words, letters, captions, or imitated product names.
-- An opaque, rounded-square badge is valid. Transparency is not required.
+- Use a full-bleed square composition whose background reaches all four canvas edges.
+- Transparency is optional, not required. An opaque thematic background is valid.
+- Do not bake in rounded corners, an inset card, white or neutral outer canvas, a border, a frame, or padding. LobsterAI owns the displayed corner radius.
 - It is a Cowork home skin emblem, not a replacement for the operating-system app icon, startup branding, export watermark, user avatar, or agent avatar.
 
 Prompt suffix template:
 
 ```text
-Create one compact square application emblem in the shared art direction. A single bold centered silhouette, strong small-size readability at 48 pixels, minimal interior detail, clean edge, no words, no letters, no caption, no watermark. Use an intentional opaque rounded-square badge background when transparent output is not guaranteed.
+Create one compact full-bleed square application emblem in the shared art direction. A single bold centered silhouette, strong small-size readability at 48 pixels, minimal interior detail, clean edge, no words, no letters, no caption, no watermark. Extend the thematic background to all four canvas edges. Do not place the emblem inside a rounded card or an outer white or neutral canvas, and do not add a border, frame, padding, or baked corner radius. Transparency is optional; when alpha output is unreliable, use a full-canvas opaque thematic background.
 ```
 
 ## Forbidden outputs

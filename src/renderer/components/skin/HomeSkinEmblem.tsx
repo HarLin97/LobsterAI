@@ -11,6 +11,10 @@ const HomeSkinEmblem: React.FC<HomeSkinEmblemProps> = ({ className }) => {
   const assetUrl = useSkinAsset(SkinAssetSlot.HomeEmblem);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const shouldUseSkinAsset = Boolean(assetUrl && failedUrl !== assetUrl);
+  const imageClassName = [
+    className,
+    shouldUseSkinAsset ? 'rounded-xl object-cover' : undefined,
+  ].filter(Boolean).join(' ');
 
   return (
     <img
@@ -20,7 +24,7 @@ const HomeSkinEmblem: React.FC<HomeSkinEmblemProps> = ({ className }) => {
       onError={() => {
         if (assetUrl) setFailedUrl(assetUrl);
       }}
-      className={className}
+      className={imageClassName}
     />
   );
 };

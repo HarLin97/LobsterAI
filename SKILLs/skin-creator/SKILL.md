@@ -118,7 +118,7 @@ Proceed only after registration succeeds.
 
 Generate exactly one square emblem using the same style bible, backend, and model. When the selected model supports reference images, use the registered backdrop source as a style reference; otherwise repeat the same style bible in the prompt. Use a stable filename hint such as `lobster-skin-emblem.png`.
 
-The emblem must not contain words or letters. An opaque rounded tile is valid and preferred over unreliable transparency in this MVP.
+The emblem must not contain words or letters. Do not rely on transparency. Generate a full-bleed square tile whose background reaches all four canvas edges; LobsterAI owns the displayed corner radius. Do not bake an inset rounded card, white outer canvas, border, frame, or padding into the image.
 
 After terminal success, register it:
 

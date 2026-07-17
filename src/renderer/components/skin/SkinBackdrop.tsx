@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 
-import { SkinAssetSlot } from '../../../shared/skin/constants';
+import {
+  SkinAssetSlot,
+  SkinPreferredAppearance,
+} from '../../../shared/skin/constants';
 import { useSkin, useSkinAsset } from '../../providers/SkinProvider';
 
 export const SkinBackdropVariant = {
@@ -46,6 +49,12 @@ const PRESENTED_CONVERSATION_OVERLAY = [
   'color-mix(in srgb, var(--lobster-skin-canvas) 68%, transparent))',
 ].join(' ');
 
+const PRESENTED_DARK_CONVERSATION_OVERLAY = [
+  'linear-gradient(to bottom,',
+  'color-mix(in srgb, var(--lobster-skin-canvas) 42%, transparent),',
+  'color-mix(in srgb, var(--lobster-skin-canvas) 58%, transparent))',
+].join(' ');
+
 const SkinBackdrop: React.FC<SkinBackdropProps> = ({ variant }) => {
   const { activeSkin } = useSkin();
   const assetUrl = useSkinAsset(SkinAssetSlot.WorkspaceBackdrop);
@@ -54,9 +63,18 @@ const SkinBackdrop: React.FC<SkinBackdropProps> = ({ variant }) => {
 
   const isHome = variant === SkinBackdropVariant.Home;
   const hasPresentation = Boolean(activeSkin?.presentation);
+  const isDarkPresentation = (
+    activeSkin?.presentation?.preferredAppearance === SkinPreferredAppearance.Dark
+  );
   const overlay = hasPresentation
-    ? isHome ? PRESENTED_HOME_OVERLAY : PRESENTED_CONVERSATION_OVERLAY
-    : isHome ? HOME_OVERLAY : CONVERSATION_OVERLAY;
+    ? isHome
+      ? PRESENTED_HOME_OVERLAY
+      : isDarkPresentation
+        ? PRESENTED_DARK_CONVERSATION_OVERLAY
+        : PRESENTED_CONVERSATION_OVERLAY
+    : isHome
+      ? HOME_OVERLAY
+      : CONVERSATION_OVERLAY;
   return (
     <div
       aria-hidden="true"
