@@ -156,14 +156,37 @@ const SkinSettingsSection: React.FC<SkinSettingsSectionProps> = ({ onStartAiSkin
       </div>
 
       <div className="mt-4 border-t border-border pt-3">
-        <div>
-          <h5 className="text-xs font-medium text-foreground">
-            {i18nService.t('aiSkinLibrary')}
-          </h5>
-          <p className="mt-1 text-xs leading-5 text-secondary">
-            {i18nService.t('aiSkinPreviewHint')}
-          </p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h5 className="text-xs font-medium text-foreground">
+              {i18nService.t('aiSkinLibrary')}
+            </h5>
+            <p className="mt-1 text-xs leading-5 text-secondary">
+              {i18nService.t('aiSkinPreviewHint')}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-secondary">
+              {i18nService.t('aiSkinCreationGuide')}
+            </p>
+          </div>
+          {onStartAiSkin && (
+            <button
+              type="button"
+              onClick={() => void handleStartAiSkin()}
+              disabled={isMutating}
+              className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <MagicIcon className="mr-1.5 h-3.5 w-3.5" />
+              {isStartingAiSkin
+                ? i18nService.t('aiSkinStarting')
+                : i18nService.t('aiSkinCreate')}
+            </button>
+          )}
         </div>
+        {startError && (
+          <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+            {i18nService.t('aiSkinStartFailed')}
+          </p>
+        )}
 
         {savedSkins.length > 0 ? (
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -262,23 +285,6 @@ const SkinSettingsSection: React.FC<SkinSettingsSectionProps> = ({ onStartAiSkin
                 <p className="mx-auto mt-1 max-w-md text-xs leading-5 text-secondary">
                   {i18nService.t('aiSkinEmptyDescription')}
                 </p>
-                {onStartAiSkin && (
-                  <button
-                    type="button"
-                    onClick={() => void handleStartAiSkin()}
-                    disabled={isMutating}
-                    className="mt-3 inline-flex h-8 items-center justify-center rounded-lg bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isStartingAiSkin
-                      ? i18nService.t('aiSkinStarting')
-                      : i18nService.t('aiSkinCreate')}
-                  </button>
-                )}
-                {startError && (
-                  <p className="mt-2 text-xs text-red-600 dark:text-red-400">
-                    {i18nService.t('aiSkinStartFailed')}
-                  </p>
-                )}
               </>
             )}
           </div>
