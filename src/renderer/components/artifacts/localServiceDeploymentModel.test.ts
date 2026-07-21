@@ -15,14 +15,18 @@ import { describe, expect, test } from 'vitest';
 import {
   buildLocalServiceDeploymentPermissionPlan,
   canCopyLocalServiceDeploymentLink,
+  getCommittedLocalServiceDeploymentPermission,
   getLocalServiceDeploymentPermission,
   getLocalServiceDeploymentPermissionState,
+  getLocalServiceDeploymentPermissionSubmitAction,
   getLocalServiceDeploymentProjectName,
   hasConfiguredLocalServiceCloudData,
+  isLocalServiceDeploymentPermissionDirty,
   isLocalServiceDeploymentPermissionLocked,
   isLocalServiceDeploymentStopped,
   LocalServiceDeploymentPermission,
   LocalServiceDeploymentPermissionChangeAction,
+  LocalServiceDeploymentPermissionSubmitAction,
   mergeLocalServiceDeploymentShareUpdate,
 } from './localServiceDeploymentModel';
 
@@ -117,7 +121,7 @@ describe('buildLocalServiceDeploymentPermissionPlan', () => {
     }]);
   });
 
-  test('updates a live public deployment to share-code access immediately', () => {
+  test('plans a live public deployment update to share-code access', () => {
     expect(
       buildLocalServiceDeploymentPermissionPlan(
         {
@@ -232,6 +236,97 @@ describe('buildLocalServiceDeploymentPermissionPlan', () => {
       action: LocalServiceDeploymentPermissionChangeAction.Blocked,
       disabledSource,
     }]);
+  });
+});
+
+describe('local service deployment permission submission state', () => {
+  const liveCodeDeployment = {
+    accessMode: HtmlShareAccessMode.Code,
+    deploymentKind: ShareDeploymentKind.NodeService,
+    shareStatus: HtmlShareStatus.Live,
+    status: ShareDeploymentStatus.Live,
+  };
+
+  test('derives the committed permission from the deployment', () => {
+    expect(getCommittedLocalServiceDeploymentPermission(liveCodeDeployment)).toBe(
+      LocalServiceDeploymentPermission.Code,
+    );
+    expect(getCommittedLocalServiceDeploymentPermission({
+      ...liveCodeDeployment,
+      shareStatus: HtmlShareStatus.Disabled,
+      status: ShareDeploymentStatus.Stopped,
+    })).toBe(LocalServiceDeploymentPermission.Stopped);
+  });
+
+  test('detects a local permission draft and clears it when restored', () => {
+    expect(isLocalServiceDeploymentPermissionDirty(
+      liveCodeDeployment,
+      LocalServiceDeploymentPermission.Public,
+    )).toBe(true);
+    expect(isLocalServiceDeploymentPermissionDirty(
+      liveCodeDeployment,
+      LocalServiceDeploymentPermission.Code,
+    )).toBe(false);
+    expect(isLocalServiceDeploymentPermissionDirty(
+      null,
+      LocalServiceDeploymentPermission.Public,
+    )).toBe(false);
+  });
+
+  test('has no permission update action before deployment or without changes', () => {
+    expect(getLocalServiceDeploymentPermissionSubmitAction(
+      null,
+      LocalServiceDeploymentPermission.Public,
+    )).toBe(LocalServiceDeploymentPermissionSubmitAction.None);
+    expect(getLocalServiceDeploymentPermissionSubmitAction(
+      liveCodeDeployment,
+      LocalServiceDeploymentPermission.Code,
+    )).toBe(LocalServiceDeploymentPermissionSubmitAction.None);
+  });
+
+  test.each([
+    LocalServiceDeploymentPermission.Public,
+    LocalServiceDeploymentPermission.Stopped,
+  ])('requires explicit permission submission for %s', selectedPermission => {
+    expect(getLocalServiceDeploymentPermissionSubmitAction(
+      liveCodeDeployment,
+      selectedPermission,
+    )).toBe(LocalServiceDeploymentPermissionSubmitAction.UpdatePermission);
+  });
+
+  test('requires redeployment to restore a stopped node service', () => {
+    expect(getLocalServiceDeploymentPermissionSubmitAction(
+      {
+        ...liveCodeDeployment,
+        shareStatus: HtmlShareStatus.Disabled,
+        status: ShareDeploymentStatus.Stopped,
+      },
+      LocalServiceDeploymentPermission.Public,
+    )).toBe(LocalServiceDeploymentPermissionSubmitAction.RedeployAndEnable);
+  });
+
+  test('updates permission directly to restore a stopped static site', () => {
+    expect(getLocalServiceDeploymentPermissionSubmitAction(
+      {
+        ...liveCodeDeployment,
+        deploymentKind: ShareDeploymentKind.StaticSite,
+        shareStatus: HtmlShareStatus.Disabled,
+        status: ShareDeploymentStatus.Stopped,
+      },
+      LocalServiceDeploymentPermission.Public,
+    )).toBe(LocalServiceDeploymentPermissionSubmitAction.UpdatePermission);
+  });
+
+  test('blocks a service stopped by an administrator', () => {
+    expect(getLocalServiceDeploymentPermissionSubmitAction(
+      {
+        ...liveCodeDeployment,
+        disabledSource: HtmlShareDisabledSource.Admin,
+        shareStatus: HtmlShareStatus.Disabled,
+        status: ShareDeploymentStatus.Stopped,
+      },
+      LocalServiceDeploymentPermission.Public,
+    )).toBe(LocalServiceDeploymentPermissionSubmitAction.Blocked);
   });
 });
 

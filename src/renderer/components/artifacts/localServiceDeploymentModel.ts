@@ -24,6 +24,18 @@ export const LocalServiceDeploymentPermission = {
 export type LocalServiceDeploymentPermission =
   (typeof LocalServiceDeploymentPermission)[keyof typeof LocalServiceDeploymentPermission];
 
+export const LocalServiceDeploymentPermissionSubmitAction = {
+  None: 'none',
+  UpdatePermission: 'update_permission',
+  RedeployAndEnable: 'redeploy_and_enable',
+  Blocked: 'blocked',
+} as const;
+
+export type LocalServiceDeploymentPermissionSubmitAction =
+  (typeof LocalServiceDeploymentPermissionSubmitAction)[
+    keyof typeof LocalServiceDeploymentPermissionSubmitAction
+  ];
+
 export interface LocalServiceDeploymentPermissionState {
   accessMode: HtmlShareAccessModeValue;
   targetStatus: HtmlShareConfigurableStatus;
@@ -103,6 +115,32 @@ export function getLocalServiceDeploymentPermissionState(
   };
 }
 
+export function getCommittedLocalServiceDeploymentPermission(
+  deployment?: Pick<
+    ShareDeploymentRecord,
+    'accessMode' | 'shareStatus' | 'status'
+  > | null,
+): LocalServiceDeploymentPermission | undefined {
+  if (!deployment) return undefined;
+  return getLocalServiceDeploymentPermission(
+    deployment.accessMode,
+    isLocalServiceDeploymentStopped(deployment.shareStatus, deployment.status)
+      ? HtmlShareStatus.Disabled
+      : HtmlShareStatus.Live,
+  );
+}
+
+export function isLocalServiceDeploymentPermissionDirty(
+  deployment: Pick<
+    ShareDeploymentRecord,
+    'accessMode' | 'shareStatus' | 'status'
+  > | null | undefined,
+  selectedPermission: LocalServiceDeploymentPermission,
+): boolean {
+  const committedPermission = getCommittedLocalServiceDeploymentPermission(deployment);
+  return committedPermission !== undefined && committedPermission !== selectedPermission;
+}
+
 export function isLocalServiceDeploymentPermissionLocked(
   disabledSource?: HtmlShareDisabledSourceValue | null,
 ): boolean {
@@ -169,6 +207,27 @@ export function buildLocalServiceDeploymentPermissionPlan(
     });
   }
   return steps;
+}
+
+export function getLocalServiceDeploymentPermissionSubmitAction(
+  deployment: Pick<
+    ShareDeploymentRecord,
+    'accessMode' | 'deploymentKind' | 'disabledSource' | 'shareStatus' | 'status'
+  > | null | undefined,
+  selectedPermission: LocalServiceDeploymentPermission,
+): LocalServiceDeploymentPermissionSubmitAction {
+  if (!deployment) return LocalServiceDeploymentPermissionSubmitAction.None;
+  const plan = buildLocalServiceDeploymentPermissionPlan(deployment, selectedPermission);
+  if (plan.length === 0) return LocalServiceDeploymentPermissionSubmitAction.None;
+  if (plan.some(step => step.action === LocalServiceDeploymentPermissionChangeAction.Blocked)) {
+    return LocalServiceDeploymentPermissionSubmitAction.Blocked;
+  }
+  if (plan.some(
+    step => step.action === LocalServiceDeploymentPermissionChangeAction.RequireRedeploy,
+  )) {
+    return LocalServiceDeploymentPermissionSubmitAction.RedeployAndEnable;
+  }
+  return LocalServiceDeploymentPermissionSubmitAction.UpdatePermission;
 }
 
 export function mergeLocalServiceDeploymentShareUpdate(
