@@ -29,6 +29,7 @@ import { ContinuityCapsuleSource } from './coworkContinuityCapsule';
 import {
   buildOpenClawChatSendPayloadTooLargeError,
   buildOpenClawRuntimeErrorDetail,
+  buildRuntimeErrorMetadata,
   ensurePlanModeProposedPlanBlock,
   estimateOpenClawChatSendFrameBytes,
   isPlanModeResponseComplete,
@@ -273,6 +274,28 @@ test('resolveOpenClawRuntimeError keeps structured enterprise quota reason', () 
       code: 41606,
       reason: 'member_monthly_quota_exhausted',
     },
+  });
+});
+
+test('buildRuntimeErrorMetadata preserves technical details with enterprise quota fields', () => {
+  const errorDetail = {
+    rawErrorMessage: 'LLM request failed.',
+    provider: 'lobsterai-server',
+    httpCode: '402',
+  };
+
+  expect(buildRuntimeErrorMetadata({
+    message: 'Enterprise credits have been used up.',
+    enterpriseQuotaError: {
+      code: 41607,
+      reason: 'enterprise_pool_exhausted',
+    },
+    errorDetail,
+  })).toEqual({
+    error: 'Enterprise credits have been used up.',
+    errorDetail,
+    enterpriseErrorCode: 41607,
+    enterpriseQuotaReason: 'enterprise_pool_exhausted',
   });
 });
 
@@ -3940,6 +3963,45 @@ test('chat final terminal error persists visible system message when no assistan
   expect(session.status).toBe('error');
   expect(errorSpy).toHaveBeenCalledWith(session.id, expect.stringContaining('网络连接失败'));
   expect(persistedError?.content).toContain('网络连接失败');
+});
+
+test('chat final terminal error persists enterprise quota signal and technical details', async () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+
+  session.status = 'running';
+  adapter.on('error', vi.fn());
+  adapter.activeTurns.set(session.id, createActiveTurn(
+    session.id,
+    sessionKey,
+    'run-enterprise-quota',
+  ));
+
+  adapter.handleChatEvent({
+    state: 'final',
+    runId: 'run-enterprise-quota',
+    sessionKey,
+    stopReason: 'error',
+    errorMessage: 'LLM request failed.',
+    errorCode: 41607,
+    provider: 'lobsterai-server',
+    rawErrorPreview: '41607 enterprise pool exhausted',
+  }, 1);
+  await Promise.resolve();
+
+  const persistedError = session.messages.find((message) => message.type === 'system');
+  expect(session.status).toBe('error');
+  expect(persistedError?.metadata).toEqual(expect.objectContaining({
+    enterpriseErrorCode: 41607,
+    enterpriseQuotaReason: 'enterprise_pool_exhausted',
+    errorDetail: expect.objectContaining({
+      provider: 'lobsterai-server',
+      rawErrorMessage: 'LLM request failed.',
+    }),
+  }));
 });
 
 test('chat error ignores non-managed OpenClaw session key when local session id is unknown', () => {

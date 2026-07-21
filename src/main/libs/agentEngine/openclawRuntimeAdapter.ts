@@ -1687,10 +1687,11 @@ export function buildOpenClawRuntimeErrorDetail(
   });
 }
 
-const buildRuntimeErrorMetadata = (
-  resolvedError: ResolvedOpenClawRuntimeError,
+export const buildRuntimeErrorMetadata = (
+  resolvedError: ResolvedOpenClawRuntimeError & { errorDetail?: CoworkErrorDetail },
 ): CoworkMessageMetadata => ({
   error: resolvedError.message,
+  ...(resolvedError.errorDetail ? { errorDetail: resolvedError.errorDetail } : {}),
   ...(resolvedError.enterpriseQuotaError
     ? {
       [EnterpriseQuotaMessageMetadataKey.ErrorCode]: resolvedError.enterpriseQuotaError.code,
@@ -7083,8 +7084,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         // If a different run started while the fallback was pending, leave it alone.
         if (errorRunId && !turn.knownRunIds.has(errorRunId)) return;
         const resolvedError = resolveOpenClawRuntimeError(rawErrorMessage, errorMetadata);
-        const errorDetail = this.buildTurnErrorDetail(sessionId, turn, rawErrorMessage, errorMessage, errorMetadata);
         const errorMessage = resolvedError.message;
+        const errorDetail = this.buildTurnErrorDetail(
+          sessionId,
+          turn,
+          rawErrorMessage,
+          errorMessage,
+          errorMetadata,
+        );
         console.log(`[OpenClawRuntime] lifecycle error fallback surfaced an error after waiting for the gateway chat error event in session ${sessionId}: ${errorMessage}`);
         // Abort the retrying run on the gateway so the session is freed for new messages.
         // Without this, the gateway continues retrying indefinitely and rejects subsequent chat.send requests.
@@ -7103,7 +7110,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         const errorMsg = this.store.addMessage(sessionId, {
           type: 'system',
           content: errorMessage,
-          metadata: { error: errorMessage, ...(errorDetail ? { errorDetail } : {}) },
+          metadata: buildRuntimeErrorMetadata({
+            ...resolvedError,
+            ...(errorDetail ? { errorDetail } : {}),
+          }),
         });
         this.emit('message', sessionId, errorMsg);
         this.emit('error', sessionId, errorMessage);
@@ -8227,14 +8237,18 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (finalTextIsOpenClawFailure) {
       const rawErrorMessage = finalText.trim() || 'OpenClaw run failed';
       const errorMetadata = normalizeOpenClawSafeRuntimeErrorMetadata(payload);
-      const errorMessage = resolveOpenClawRuntimeErrorMessage(rawErrorMessage, errorMetadata);
+      const resolvedError = resolveOpenClawRuntimeError(rawErrorMessage, errorMetadata);
+      const errorMessage = resolvedError.message;
       const errorDetail = this.buildTurnErrorDetail(sessionId, turn, rawErrorMessage, errorMessage, errorMetadata);
       const erroredSessionKey = turn.sessionKey;
       this.store.updateSession(sessionId, { status: 'error' });
       const errorMsg = this.store.addMessage(sessionId, {
         type: 'system',
         content: errorMessage,
-        metadata: { error: errorMessage, ...(errorDetail ? { errorDetail } : {}) },
+        metadata: buildRuntimeErrorMetadata({
+          ...resolvedError,
+          ...(errorDetail ? { errorDetail } : {}),
+        }),
       });
       this.emit('message', sessionId, errorMsg);
       this.emit('error', sessionId, errorMessage);
@@ -8389,14 +8403,23 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         || 'OpenClaw run failed';
       const errorMetadata = normalizeOpenClawSafeRuntimeErrorMetadata(payload);
       const resolvedError = resolveOpenClawRuntimeError(rawErrorMessage, errorMetadata);
-      const errorDetail = this.buildTurnErrorDetail(sessionId, turn, rawErrorMessage, errorMessage, errorMetadata);
       const errorMessage = resolvedError.message;
+      const errorDetail = this.buildTurnErrorDetail(
+        sessionId,
+        turn,
+        rawErrorMessage,
+        errorMessage,
+        errorMetadata,
+      );
       const erroredSessionKey = turn.sessionKey;
       this.store.updateSession(sessionId, { status: 'error' });
       const errorMsg = this.store.addMessage(sessionId, {
         type: 'system',
         content: errorMessage,
-        metadata: { error: errorMessage, ...(errorDetail ? { errorDetail } : {}) },
+        metadata: buildRuntimeErrorMetadata({
+          ...resolvedError,
+          ...(errorDetail ? { errorDetail } : {}),
+        }),
       });
       this.emit('message', sessionId, errorMsg);
       this.emit('error', sessionId, errorMessage);

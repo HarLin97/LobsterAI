@@ -273,6 +273,48 @@ describe('enterprise quota request', () => {
     });
   });
 
+  test('rejects invalid IPC parameters before making a network request', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchWithAuth = vi.fn();
+    const deps = {
+      getServerBaseUrl: () => 'https://example.test',
+      fetchWithAuth,
+    };
+
+    await expect(requestEnterpriseQuotaIncrease(
+      deps,
+      -1,
+      EnterpriseQuotaRequestType.MemberQuota,
+    )).resolves.toEqual({ success: false, error: 'Invalid enterprise ID' });
+    await expect(requestEnterpriseQuotaIncrease(
+      deps,
+      1001,
+      'unexpected' as EnterpriseQuotaRequestType,
+    )).resolves.toEqual({
+      success: false,
+      error: 'Invalid enterprise quota request type',
+    });
+    expect(fetchWithAuth).not.toHaveBeenCalled();
+  });
+
+  test('times out a quota request so the renderer cannot remain stuck submitting', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = await requestEnterpriseQuotaIncrease({
+      getServerBaseUrl: () => 'https://example.test',
+      fetchWithAuth: async (_url, options) => new Promise<Response>((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'));
+        }, { once: true });
+      }),
+      requestTimeoutMs: 5,
+    }, 1001, EnterpriseQuotaRequestType.EnterprisePool);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Enterprise quota request timed out',
+    });
+  });
+
   test('normalizes a blocked quota status from enterprise context', () => {
     expect(normalizeEnterpriseAccountContext({
       accountMode: EnterpriseAccountMode.Enterprise,

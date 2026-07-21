@@ -576,11 +576,6 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
         )}
       </button>
       {showMenu && isLoggedIn && (
-        <UserMenu
-          onClose={() => setShowMenu(false)}
-          onOpenFinalReward={() => setFinalRewardOpen(true)}
-        />
-      )&& (
         enterpriseAccountContext
           ? (
             <EnterpriseAccountMenu
@@ -588,7 +583,12 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
               onClose={() => setShowMenu(false)}
             />
           )
-          : <UserMenu onClose={() => setShowMenu(false)} />
+          : (
+            <UserMenu
+              onClose={() => setShowMenu(false)}
+              onOpenFinalReward={() => setFinalRewardOpen(true)}
+            />
+          )
       )}
       <CreditsFinalRewardModal
         open={finalRewardOpen}

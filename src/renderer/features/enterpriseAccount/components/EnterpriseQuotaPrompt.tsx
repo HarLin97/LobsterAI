@@ -47,10 +47,20 @@ export const EnterpriseQuotaPrompt = ({
     const poolBlocked = quotaReason === EnterpriseQuotaReason.EnterprisePoolExhausted
       || quotaReason === EnterpriseQuotaReason.EnterpriseCreditBatchesExpired;
     if (poolBlocked) {
+      const creditBatchesExpired = quotaReason
+        === EnterpriseQuotaReason.EnterpriseCreditBatchesExpired;
       return {
-        title: i18nService.t('enterpriseQuotaPoolTitle'),
+        title: i18nService.t(
+          creditBatchesExpired ? 'enterpriseQuotaExpiredTitle' : 'enterpriseQuotaPoolTitle',
+        ),
         description: i18nService.t(
-          isSuperAdmin ? 'enterpriseQuotaPoolAdminDesc' : 'enterpriseQuotaPoolMemberDesc',
+          creditBatchesExpired
+            ? isSuperAdmin
+              ? 'enterpriseQuotaExpiredAdminDesc'
+              : 'enterpriseQuotaExpiredMemberDesc'
+            : isSuperAdmin
+              ? 'enterpriseQuotaPoolAdminDesc'
+              : 'enterpriseQuotaPoolMemberDesc',
         ),
         interrupt: i18nService.t('enterpriseQuotaPoolInterrupt'),
         button: i18nService.t(
@@ -99,23 +109,40 @@ export const EnterpriseQuotaPrompt = ({
     if (isSuperAdmin || requestState !== 'idle') return;
 
     setRequestState('submitting');
-    const result = await window.electron.enterpriseAccount.requestQuotaIncrease(
-      context.enterpriseId,
-      presentation.requestType,
+    logEnterpriseAccountDiagnostic(
+      'debug',
+      `submitting ${presentation.requestType} request for enterprise ${context.enterpriseId}`,
     );
-    if (!result.success) {
+    try {
+      const result = await window.electron.enterpriseAccount.requestQuotaIncrease(
+        context.enterpriseId,
+        presentation.requestType,
+      );
+      if (!result.success) {
+        logEnterpriseAccountDiagnostic('warn', 'quota request returned an error', result.error);
+        setRequestState('idle');
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('enterpriseQuotaRequestFailed'),
+        }));
+        return;
+      }
+      logEnterpriseAccountDiagnostic(
+        'debug',
+        `quota request accepted (request ${result.requestId ?? 'unknown'}, created ${result.created === true})`,
+      );
+      setRequestState('submitted');
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: result.created
+          ? i18nService.t('enterpriseQuotaRequestSubmitted')
+          : i18nService.t('enterpriseQuotaRequestAlreadyPending'),
+      }));
+    } catch (error) {
+      logEnterpriseAccountDiagnostic('warn', 'quota request IPC failed', error);
       setRequestState('idle');
       window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: result.error || i18nService.t('enterpriseQuotaRequestFailed'),
+        detail: i18nService.t('enterpriseQuotaRequestFailed'),
       }));
-      return;
     }
-    setRequestState('submitted');
-    window.dispatchEvent(new CustomEvent('app:showToast', {
-      detail: result.created
-        ? i18nService.t('enterpriseQuotaRequestSubmitted')
-        : i18nService.t('enterpriseQuotaRequestAlreadyPending'),
-    }));
   };
 
   const actionLabel = requestState === 'submitted'
@@ -136,11 +163,11 @@ export const EnterpriseQuotaPrompt = ({
           <span className="h-px flex-1 bg-border" aria-hidden="true" />
         </div>
       ) : null}
-      <div className="flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-3 shadow-subtle">
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-background px-4 py-3 shadow-subtle">
         <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-raised text-foreground">
           <ExclamationCircleIcon className="h-4 w-4" aria-hidden="true" />
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-48">
           <div className="text-sm font-semibold text-foreground">{presentation.title}</div>
           <div className="mt-0.5 text-xs leading-5 text-secondary">{presentation.description}</div>
         </div>
@@ -148,7 +175,7 @@ export const EnterpriseQuotaPrompt = ({
           type="button"
           onClick={() => void handleAction()}
           disabled={requestState !== 'idle'}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-neutral-950 px-3.5 py-2 text-xs font-medium text-white transition-opacity hover:opacity-80 disabled:cursor-default disabled:opacity-60 dark:bg-white dark:text-neutral-950"
+          className="inline-flex max-w-full shrink-0 items-center justify-center gap-1.5 whitespace-normal rounded-full bg-neutral-950 px-3.5 py-2 text-center text-xs font-medium text-white transition-opacity hover:opacity-80 disabled:cursor-default disabled:opacity-60 dark:bg-white dark:text-neutral-950"
         >
           {requestState === 'submitted' ? (
             <CheckCircleIcon className="h-3.5 w-3.5" aria-hidden="true" />

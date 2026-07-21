@@ -20,7 +20,10 @@ import {
 } from '../shared/cowork/constants';
 import { DataMigrationIpc } from '../shared/dataMigration/constants';
 import { DialogIpc } from '../shared/dialog/constants';
-import { EnterpriseAccountIpcChannel } from '../shared/enterpriseAccount/constants';
+import {
+  EnterpriseAccountIpcChannel,
+  type EnterpriseQuotaRequestType,
+} from '../shared/enterpriseAccount/constants';
 import {
   type HtmlShareAccessMode,
   type HtmlShareConfigurableStatus,
@@ -163,7 +166,7 @@ contextBridge.exposeInMainWorld('electron', {
   enterpriseAccount: {
     getContext: () => ipcRenderer.invoke(EnterpriseAccountIpcChannel.GetContext),
     getIdentities: () => ipcRenderer.invoke(EnterpriseAccountIpcChannel.GetIdentities),
-    requestQuotaIncrease: (enterpriseId: number, requestType: string) => (
+    requestQuotaIncrease: (enterpriseId: number, requestType: EnterpriseQuotaRequestType) => (
       ipcRenderer.invoke(EnterpriseAccountIpcChannel.RequestQuotaIncrease, enterpriseId, requestType)
     ),
   },

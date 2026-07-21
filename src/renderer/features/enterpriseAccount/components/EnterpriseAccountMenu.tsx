@@ -60,7 +60,16 @@ export const EnterpriseAccountMenu = ({
   useEffect(() => {
     let active = true;
     void window.electron.enterpriseAccount.getIdentities().then(result => {
-      if (active && result.success) setIdentities(result.identities);
+      if (!active) return;
+      if (result.success) {
+        setIdentities(result.identities);
+      } else {
+        logEnterpriseAccountDiagnostic(
+          'warn',
+          'enterprise identity list request returned an error',
+          result.error,
+        );
+      }
     }).catch(error => {
       logEnterpriseAccountDiagnostic('warn', 'enterprise identity list request failed', error);
     });
@@ -97,7 +106,7 @@ export const EnterpriseAccountMenu = ({
   };
 
   return (
-    <div className="absolute bottom-full left-[-0.5rem] z-50 mb-1 w-[15.5rem] max-w-[calc(100vw-1rem)] overflow-visible rounded-xl border border-border bg-surface shadow-popover popover-enter">
+    <div className="absolute bottom-full left-[-0.5rem] z-50 mb-1 max-h-[calc(100vh-3rem)] w-[15.5rem] max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border border-border bg-surface shadow-popover popover-enter">
       <div className="border-b border-border px-4 py-3">
         <div className="truncate text-sm font-medium text-foreground">
           {user?.nickname || (phoneSuffix ? `****${phoneSuffix}` : context.enterpriseName)}
@@ -157,7 +166,7 @@ export const EnterpriseAccountMenu = ({
       </div>
 
       {identities.length > 1 ? (
-        <div className="absolute bottom-0 left-full ml-2 w-[16rem] overflow-hidden rounded-xl border border-border bg-surface shadow-popover popover-enter">
+        <div className="border-t border-border">
           <div className="border-b border-border px-4 py-2.5 text-xs font-medium text-secondary">
             {i18nService.t('enterpriseAccountChooseEnterprise')}
           </div>

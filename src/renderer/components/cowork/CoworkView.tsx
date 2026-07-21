@@ -280,6 +280,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       details: imageAttachments?.map(a => ({ name: a.name, mimeType: a.mimeType, base64Length: a.base64Data?.length ?? 0 })) ?? [],
     });
     if (homeQuotaReason) {
+      logCoworkViewModel(`blocked new session submission for enterprise quota reason ${homeQuotaReason}`);
       window.dispatchEvent(new CustomEvent('app:showToast', {
         detail: i18nService.t('enterpriseQuotaHomeSubmitBlocked'),
       }));
@@ -891,7 +892,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                   isStreaming={isStreaming}
                   disabled={!isEngineReady}
                   submitDisabled={Boolean(homeQuotaReason)}
-              placeholder={i18nService.t('coworkPlaceholder')}
+                  placeholder={i18nService.t('coworkPlaceholder')}
                   size="large"
                   workingDirectory={currentAgentWorkingDirectory}
                   onWorkingDirectoryChange={async (dir: string) => {
@@ -905,10 +906,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                   onGoalCommand={handleStartGoalSession}
                 />
                 <EnterpriseQuotaPrompt
-              reason={homeQuotaReason}
-              surface="home"
-            />
-          </div>
+                  reason={homeQuotaReason}
+                  surface="home"
+                />
+              </div>
 
               {/* Quick Actions */}
               <div

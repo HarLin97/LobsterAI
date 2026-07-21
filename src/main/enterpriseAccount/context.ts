@@ -5,7 +5,7 @@ import {
   EnterpriseApiErrorCode,
   EnterpriseMemberRole,
   EnterpriseQuotaReason,
-  type EnterpriseQuotaRequestType,
+  EnterpriseQuotaRequestType,
 } from '../../shared/enterpriseAccount/constants';
 import type {
   EnterpriseAccountContext,
@@ -39,6 +39,12 @@ export interface EnterpriseAccountIdentitiesApiDeps {
 export type EnterpriseQuotaRequestApiDeps = EnterpriseAccountIdentitiesApiDeps;
 
 const DEFAULT_ENTERPRISE_CONTEXT_REQUEST_TIMEOUT_MS = 10_000;
+
+function resolveRequestTimeoutMs(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_ENTERPRISE_CONTEXT_REQUEST_TIMEOUT_MS;
+}
 
 function isRecord(value: unknown): value is JsonRecord {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -254,11 +260,7 @@ export async function fetchEnterpriseAccountContext(
   deps: EnterpriseAccountContextApiDeps,
 ): Promise<EnterpriseAccountContextResult> {
   const url = `${deps.getServerBaseUrl()}/api/enterprise/context`;
-  const requestTimeoutMs = typeof deps.requestTimeoutMs === 'number'
-    && Number.isFinite(deps.requestTimeoutMs)
-    && deps.requestTimeoutMs > 0
-    ? deps.requestTimeoutMs
-    : DEFAULT_ENTERPRISE_CONTEXT_REQUEST_TIMEOUT_MS;
+  const requestTimeoutMs = resolveRequestTimeoutMs(deps.requestTimeoutMs);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
@@ -334,14 +336,11 @@ export async function fetchEnterpriseAccountIdentities(
   deps: EnterpriseAccountIdentitiesApiDeps,
 ): Promise<EnterpriseAccountIdentitiesResult> {
   const url = `${deps.getServerBaseUrl()}/api/enterprise/identities`;
-  const requestTimeoutMs = typeof deps.requestTimeoutMs === 'number'
-    && Number.isFinite(deps.requestTimeoutMs)
-    && deps.requestTimeoutMs > 0
-    ? deps.requestTimeoutMs
-    : DEFAULT_ENTERPRISE_CONTEXT_REQUEST_TIMEOUT_MS;
+  const requestTimeoutMs = resolveRequestTimeoutMs(deps.requestTimeoutMs);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
+    console.debug('[EnterpriseAccount] refreshing enterprise identities');
     const response = await deps.fetchWithAuth(url, {
       headers: { Accept: 'application/json' },
       signal: controller.signal,
@@ -359,18 +358,27 @@ export async function fetchEnterpriseAccountIdentities(
       };
     }
     if (!response.ok || code !== 0) {
+      console.warn(`[EnterpriseAccount] identity refresh rejected (HTTP ${response.status}, code ${code ?? 'unknown'})`);
       return {
         success: false,
         identities: [],
         error: message || `HTTP ${response.status}`,
       };
     }
+    const identities = normalizeEnterpriseAccountIdentities(body.data);
+    console.debug(`[EnterpriseAccount] refreshed ${identities.length} enterprise identities`);
     return {
       success: true,
-      identities: normalizeEnterpriseAccountIdentities(body.data),
+      identities,
     };
   } catch (error) {
     const timedOut = controller.signal.aborted;
+    console.warn(
+      timedOut
+        ? `[EnterpriseAccount] identity refresh timed out after ${requestTimeoutMs}ms`
+        : '[EnterpriseAccount] identity refresh failed',
+      error,
+    );
     return {
       success: false,
       identities: [],
@@ -390,8 +398,22 @@ export async function requestEnterpriseQuotaIncrease(
   enterpriseId: number,
   requestType: EnterpriseQuotaRequestType,
 ): Promise<EnterpriseQuotaRequestResult> {
-  const url = `${deps.getServerBaseUrl()}/api/enterprise/${enterpriseId}/quota-requests`;
+  const normalizedEnterpriseId = readEnterpriseId(enterpriseId);
+  if (normalizedEnterpriseId === null) {
+    console.warn('[EnterpriseAccount] rejected quota request with invalid enterprise id');
+    return { success: false, error: 'Invalid enterprise ID' };
+  }
+  if (!Object.values(EnterpriseQuotaRequestType).some(type => type === requestType)) {
+    console.warn('[EnterpriseAccount] rejected quota request with invalid request type');
+    return { success: false, error: 'Invalid enterprise quota request type' };
+  }
+
+  const url = `${deps.getServerBaseUrl()}/api/enterprise/${normalizedEnterpriseId}/quota-requests`;
+  const requestTimeoutMs = resolveRequestTimeoutMs(deps.requestTimeoutMs);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
+    console.debug(`[EnterpriseAccount] submitting ${requestType} quota request for enterprise ${normalizedEnterpriseId}`);
     const response = await deps.fetchWithAuth(url, {
       method: 'POST',
       headers: {
@@ -399,6 +421,7 @@ export async function requestEnterpriseQuotaIncrease(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ requestType }),
+      signal: controller.signal,
     });
     const rawBody = await response.json() as unknown;
     const body = isRecord(rawBody) ? rawBody : {};
@@ -406,22 +429,39 @@ export async function requestEnterpriseQuotaIncrease(
     const message = readString(body.message);
     const data = isRecord(body.data) ? body.data : {};
     if (deps.isRequestCurrent?.() === false) {
+      console.debug('[EnterpriseAccount] discarded quota request response after auth state changed');
       return { success: false, error: 'Authentication state changed during quota request' };
     }
     if (!response.ok || code !== 0) {
+      console.warn(`[EnterpriseAccount] quota request rejected (HTTP ${response.status}, code ${code ?? 'unknown'})`);
       return { success: false, error: message || `HTTP ${response.status}` };
     }
-    return {
+    const result: EnterpriseQuotaRequestResult = {
       success: true,
       requestId: readEnterpriseId(data.requestId) ?? undefined,
       requestType,
       status: 'pending',
       created: data.created === true,
     };
+    console.debug(`[EnterpriseAccount] quota request accepted (request ${result.requestId ?? 'unknown'}, created ${result.created === true})`);
+    return result;
   } catch (error) {
+    const timedOut = controller.signal.aborted;
+    console.warn(
+      timedOut
+        ? `[EnterpriseAccount] quota request timed out after ${requestTimeoutMs}ms`
+        : '[EnterpriseAccount] quota request failed',
+      error,
+    );
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to submit enterprise quota request',
+      error: timedOut
+        ? 'Enterprise quota request timed out'
+        : error instanceof Error
+          ? error.message
+          : 'Failed to submit enterprise quota request',
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
