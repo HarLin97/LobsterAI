@@ -37,6 +37,12 @@ import {
 } from './ArtifactFileShareDialog';
 import ArtifactFileShareDialog from './ArtifactFileShareDialog';
 import {
+  ArtifactFileShareIntent,
+  type ArtifactFileShareIntent as ArtifactFileShareIntentValue,
+  getArtifactFileShareCreateAccessMode,
+  isArtifactFileSharePermissionDirty,
+} from './artifactFileShareDialogModel';
+import {
   ArtifactFileSharePermission,
   type ArtifactFileSharePermission as ArtifactFileSharePermissionValue,
   ArtifactFileSharePermissionChangeAction,
@@ -68,18 +74,17 @@ interface ArtifactFileShareDialogState {
   artifact: Artifact;
   request?: ArtifactFileShareRequest;
   phase: ArtifactFileSharePhase;
+  intent?: ArtifactFileShareIntentValue;
   operation?: ArtifactFileShareOperation;
   share?: ArtifactFileShareRecord;
-  pendingPermission?: ArtifactFileSharePermissionValue;
+  selectedPermission?: ArtifactFileSharePermissionValue;
   message?: string;
   error?: string;
   showSubscriptionAction?: boolean;
 }
 
 interface PreparedArtifactFileShare {
-  share: ArtifactFileShareRecord;
-  warnings?: string[];
-  created: boolean;
+  share?: ArtifactFileShareRecord;
 }
 
 interface ArtifactFileShareControllerValue {
@@ -180,6 +185,7 @@ function requireShareRecord(
 async function createShare(
   api: HtmlShareApi,
   request: ArtifactFileShareRequest,
+  accessMode: HtmlShareAccessModeValue,
 ): Promise<HtmlShareResult> {
   if (request.source === ArtifactFileShareRequestSource.HtmlFile) {
     return api.createFromHtmlFile({
@@ -187,7 +193,7 @@ async function createShare(
       artifactId: request.artifactId,
       filePath: request.filePath || '',
       title: request.title,
-      accessMode: HtmlShareAccessMode.Code,
+      accessMode,
     });
   }
   return api.createFromArtifactFile({
@@ -195,7 +201,7 @@ async function createShare(
     sessionId: request.sessionId,
     artifactId: request.artifactId,
     title: request.title,
-    accessMode: HtmlShareAccessMode.Code,
+    accessMode,
     fileName: request.fileName,
     filePath: request.filePath,
     content: request.content,
@@ -283,6 +289,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
   }, [resetFeedback]);
 
   const isDialogOpen = Boolean(dialog);
+  const isDialogBusy = Boolean(dialog?.operation);
   const dialogFocusKey = dialog ? `${dialog.artifact.id}:${dialog.phase}` : '';
 
   useEffect(() => {
@@ -301,6 +308,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
+        if (isDialogBusy) return;
         closeDialog();
         return;
       }
@@ -335,7 +343,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
       window.cancelAnimationFrame(frameId);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [closeDialog, dialogFocusKey]);
+  }, [closeDialog, dialogFocusKey, isDialogBusy]);
 
   const showTimedCopyStatus = useCallback(
     (status: ArtifactFileShareCopyStatus) => {
@@ -406,7 +414,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
     [lookupShare],
   );
 
-  const prepareShare = useCallback(
+  const loadShare = useCallback(
     (api: HtmlShareApi, request: ArtifactFileShareRequest): Promise<PreparedArtifactFileShare> => {
       const key = request.lookupKey;
       const pending = preparationPromisesRef.current.get(key);
@@ -418,18 +426,9 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
 
         const existingShare = getShareRecord(lookup.share);
         if (existingShare) {
-          return { share: existingShare, created: false };
+          return { share: existingShare };
         }
-
-        const result = await createShare(api, {
-          ...request,
-          accessMode: HtmlShareAccessMode.Code,
-        });
-        return {
-          share: requireShareRecord(result),
-          warnings: result.warnings,
-          created: true,
-        };
+        return {};
       })().finally(() => {
         if (preparationPromisesRef.current.get(key) === preparation) {
           preparationPromisesRef.current.delete(key);
@@ -452,8 +451,8 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
         artifact,
         request,
         phase: ArtifactFileSharePhase.Preparing,
-        pendingPermission: ArtifactFileSharePermission.Code,
-        message: t('artifactFileSharePreparing'),
+        selectedPermission: ArtifactFileSharePermission.Code,
+        message: t('artifactFileShareChecking'),
       });
 
       try {
@@ -465,7 +464,6 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
               ? {
                   ...previous,
                   phase: ArtifactFileSharePhase.Entitlement,
-                  pendingPermission: undefined,
                   message: entitlement.message,
                   showSubscriptionAction: true,
                 }
@@ -479,23 +477,22 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
         if (mutationBarrier) await mutationBarrier;
         if (generationRef.current !== runId) return;
 
-        const prepared = await prepareShare(api, request);
+        const prepared = await loadShare(api, request);
         if (generationRef.current !== runId) return;
+        const intent = prepared.share
+          ? ArtifactFileShareIntent.Manage
+          : ArtifactFileShareIntent.Create;
+        const selectedPermission = prepared.share
+          ? deriveArtifactFileSharePermission(prepared.share)
+          : ArtifactFileSharePermission.Code;
         setDialog({
           artifact,
-          request: prepared.created
-            ? { ...request, accessMode: HtmlShareAccessMode.Code }
-            : request,
+          request,
           phase: ArtifactFileSharePhase.Ready,
+          intent,
           share: prepared.share,
-          message: prepared.warnings?.length ? prepared.warnings.slice(0, 3).join('\n') : undefined,
+          selectedPermission,
         });
-        if (prepared.created) {
-          logShare(
-            'debug',
-            `Created ${request.sourceType} share for artifact ${request.artifactId}.`,
-          );
-        }
       } catch (error) {
         if (generationRef.current !== runId) return;
         const message = error instanceof Error ? error.message : t('htmlShareFailed');
@@ -506,7 +503,6 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
                 ...previous,
                 phase: ArtifactFileSharePhase.Error,
                 operation: undefined,
-                pendingPermission: undefined,
                 message: undefined,
                 error: message,
               }
@@ -514,7 +510,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
         );
       }
     },
-    [getEntitlementMessage, prepareShare, resetFeedback],
+    [getEntitlementMessage, loadShare, resetFeedback],
   );
 
   const openShare = useCallback(
@@ -549,124 +545,248 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
     void initializeShare(dialog.artifact, dialog.request);
   }, [dialog, initializeShare]);
 
-  const changePermission = useCallback(
-    async (targetPermission: ArtifactFileSharePermissionValue): Promise<void> => {
+  const selectPermission = useCallback(
+    (targetPermission: ArtifactFileSharePermissionValue): void => {
       const snapshot = dialog;
       if (
         !snapshot?.request ||
         snapshot.phase !== ArtifactFileSharePhase.Ready ||
-        !snapshot.share ||
+        !snapshot.intent ||
+        snapshot.operation ||
+        (snapshot.intent === ArtifactFileShareIntent.Create &&
+          targetPermission === ArtifactFileSharePermission.Stopped) ||
         mutationBarriersRef.current.has(snapshot.request.lookupKey)
       ) {
         return;
       }
-      const permissionPlan = buildArtifactFileSharePermissionPlan(snapshot.share, targetPermission);
-      if (
-        permissionPlan.length === 0 ||
-        permissionPlan.some(step => step.action === ArtifactFileSharePermissionChangeAction.Blocked)
-      )
-        return;
-
-      const api = window.electron?.htmlShare;
-      if (!api) return;
-      const runId = generationRef.current + 1;
-      generationRef.current = runId;
-      let releaseMutationBarrier: (() => void) | undefined;
-      const mutationBarrier = new Promise<void>(resolve => {
-        releaseMutationBarrier = resolve;
-      });
-      const mutationKey = snapshot.request.lookupKey;
-      mutationBarriersRef.current.set(mutationKey, mutationBarrier);
-      const originalShare = snapshot.share;
+      resetFeedback();
       setDialog(previous =>
-        previous
+        previous && previous.artifact.id === snapshot.artifact.id
           ? {
               ...previous,
-              operation: ArtifactFileShareOperation.Permission,
-              pendingPermission: targetPermission,
+              selectedPermission: targetPermission,
               error: undefined,
               message: undefined,
             }
           : previous,
       );
-
-      let lastConfirmedShare = originalShare;
-      try {
-        let nextShare = originalShare;
-        for (const step of permissionPlan) {
-          if (step.action === ArtifactFileSharePermissionChangeAction.UpdateAccess) {
-            nextShare = requireShareRecord(
-              await api.updateAccessMode({
-                shareId: nextShare.shareId,
-                accessMode: step.accessMode,
-              }),
-              nextShare,
-            );
-          } else if (step.action === ArtifactFileSharePermissionChangeAction.UpdateStatus) {
-            nextShare = requireShareRecord(
-              await api.updateStatus({
-                shareId: nextShare.shareId,
-                status: step.status,
-              }),
-              nextShare,
-            );
-          } else if (step.action === ArtifactFileSharePermissionChangeAction.RestoreActiveLimit) {
-            nextShare = requireShareRecord(
-              await updateShareFile(api, snapshot.request, nextShare, nextShare.accessMode),
-              nextShare,
-            );
-          }
-          lastConfirmedShare = nextShare;
-          if (generationRef.current !== runId) return;
-        }
-
-        nextShare = await refreshShare(api, snapshot.request, nextShare);
-        if (generationRef.current !== runId) return;
-        setDialog(previous =>
-          previous && previous.artifact.id === snapshot.artifact.id
-            ? {
-                ...previous,
-                share: nextShare,
-                operation: undefined,
-                pendingPermission: undefined,
-                error: undefined,
-              }
-            : previous,
-        );
-      } catch (error) {
-        if (generationRef.current !== runId) return;
-        const refreshedShare = await refreshShare(api, snapshot.request, lastConfirmedShare);
-        if (generationRef.current !== runId) return;
-        const message =
-          error instanceof Error ? error.message : t('htmlShareAccessModeUpdateFailed');
-        setDialog(previous =>
-          previous && previous.artifact.id === snapshot.artifact.id
-            ? {
-                ...previous,
-                share: refreshedShare,
-                operation: undefined,
-                pendingPermission: undefined,
-                error: message,
-              }
-            : previous,
-        );
-      } finally {
-        if (mutationBarriersRef.current.get(mutationKey) === mutationBarrier) {
-          mutationBarriersRef.current.delete(mutationKey);
-        }
-        releaseMutationBarrier?.();
-      }
     },
-    [dialog, refreshShare],
+    [dialog, resetFeedback],
   );
+
+  const submitCreateShare = useCallback(async (): Promise<void> => {
+    const snapshot = dialog;
+    const targetPermission = snapshot?.selectedPermission;
+    if (
+      !snapshot?.request ||
+      snapshot.phase !== ArtifactFileSharePhase.Ready ||
+      snapshot.intent !== ArtifactFileShareIntent.Create ||
+      snapshot.share ||
+      !targetPermission ||
+      targetPermission === ArtifactFileSharePermission.Stopped ||
+      snapshot.operation ||
+      mutationBarriersRef.current.has(snapshot.request.lookupKey)
+    ) {
+      return;
+    }
+    const api = window.electron?.htmlShare;
+    const accessMode = getArtifactFileShareCreateAccessMode(targetPermission);
+    if (!api || !accessMode) return;
+    const runId = generationRef.current + 1;
+    generationRef.current = runId;
+    let releaseMutationBarrier: (() => void) | undefined;
+    const mutationBarrier = new Promise<void>(resolve => {
+      releaseMutationBarrier = resolve;
+    });
+    const mutationKey = snapshot.request.lookupKey;
+    mutationBarriersRef.current.set(mutationKey, mutationBarrier);
+    resetFeedback();
+    setDialog(previous =>
+      previous && previous.artifact.id === snapshot.artifact.id
+        ? {
+            ...previous,
+            operation: ArtifactFileShareOperation.Creating,
+            error: undefined,
+            message: undefined,
+          }
+        : previous,
+    );
+
+    try {
+      const result = await createShare(api, snapshot.request, accessMode);
+      let share = requireShareRecord(result);
+      if (generationRef.current !== runId) return;
+      share = await refreshShare(api, snapshot.request, share);
+      if (generationRef.current !== runId) return;
+      setDialog(previous =>
+        previous && previous.artifact.id === snapshot.artifact.id
+          ? {
+              ...previous,
+              intent: ArtifactFileShareIntent.Manage,
+              share,
+              selectedPermission: deriveArtifactFileSharePermission(share),
+              operation: undefined,
+              message: result.warnings?.length
+                ? result.warnings.slice(0, 3).join('\n')
+                : t('htmlShareSuccessMessage'),
+              error: undefined,
+            }
+          : previous,
+      );
+      logShare(
+        'debug',
+        `Created ${snapshot.request.sourceType} share for artifact ${snapshot.request.artifactId}.`,
+      );
+    } catch (error) {
+      if (generationRef.current !== runId) return;
+      const message = error instanceof Error ? error.message : t('htmlShareFailed');
+      logShare(
+        'warn',
+        `Failed to create share for artifact ${snapshot.request.artifactId}: ${message}`,
+      );
+      setDialog(previous =>
+        previous && previous.artifact.id === snapshot.artifact.id
+          ? { ...previous, operation: undefined, error: message }
+          : previous,
+      );
+    } finally {
+      if (mutationBarriersRef.current.get(mutationKey) === mutationBarrier) {
+        mutationBarriersRef.current.delete(mutationKey);
+      }
+      releaseMutationBarrier?.();
+    }
+  }, [dialog, refreshShare, resetFeedback]);
+
+  const submitPermissionChange = useCallback(async (): Promise<void> => {
+    const snapshot = dialog;
+    const targetPermission = snapshot?.selectedPermission;
+    if (
+      !snapshot?.request ||
+      snapshot.phase !== ArtifactFileSharePhase.Ready ||
+      snapshot.intent !== ArtifactFileShareIntent.Manage ||
+      !snapshot.share ||
+      !targetPermission ||
+      snapshot.operation ||
+      mutationBarriersRef.current.has(snapshot.request.lookupKey)
+    ) {
+      return;
+    }
+    const permissionPlan = buildArtifactFileSharePermissionPlan(snapshot.share, targetPermission);
+    if (
+      permissionPlan.length === 0 ||
+      permissionPlan.some(step => step.action === ArtifactFileSharePermissionChangeAction.Blocked)
+    ) {
+      return;
+    }
+
+    const api = window.electron?.htmlShare;
+    if (!api) return;
+    const runId = generationRef.current + 1;
+    generationRef.current = runId;
+    let releaseMutationBarrier: (() => void) | undefined;
+    const mutationBarrier = new Promise<void>(resolve => {
+      releaseMutationBarrier = resolve;
+    });
+    const mutationKey = snapshot.request.lookupKey;
+    mutationBarriersRef.current.set(mutationKey, mutationBarrier);
+    const originalShare = snapshot.share;
+    setDialog(previous =>
+      previous && previous.artifact.id === snapshot.artifact.id
+        ? {
+            ...previous,
+            operation: ArtifactFileShareOperation.Permission,
+            error: undefined,
+            message: undefined,
+          }
+        : previous,
+    );
+
+    let lastConfirmedShare = originalShare;
+    try {
+      let nextShare = originalShare;
+      for (const step of permissionPlan) {
+        if (step.action === ArtifactFileSharePermissionChangeAction.UpdateAccess) {
+          nextShare = requireShareRecord(
+            await api.updateAccessMode({
+              shareId: nextShare.shareId,
+              accessMode: step.accessMode,
+            }),
+            nextShare,
+          );
+        } else if (step.action === ArtifactFileSharePermissionChangeAction.UpdateStatus) {
+          nextShare = requireShareRecord(
+            await api.updateStatus({
+              shareId: nextShare.shareId,
+              status: step.status,
+            }),
+            nextShare,
+          );
+        } else if (step.action === ArtifactFileSharePermissionChangeAction.RestoreActiveLimit) {
+          nextShare = requireShareRecord(
+            await updateShareFile(api, snapshot.request, nextShare, nextShare.accessMode),
+            nextShare,
+          );
+        }
+        lastConfirmedShare = nextShare;
+        if (generationRef.current !== runId) return;
+      }
+
+      nextShare = await refreshShare(api, snapshot.request, nextShare);
+      if (generationRef.current !== runId) return;
+      setDialog(previous =>
+        previous && previous.artifact.id === snapshot.artifact.id
+          ? {
+              ...previous,
+              share: nextShare,
+              selectedPermission: deriveArtifactFileSharePermission(nextShare),
+              operation: undefined,
+              message: t('artifactFileSharePermissionUpdated'),
+              error: undefined,
+            }
+          : previous,
+      );
+    } catch (error) {
+      if (generationRef.current !== runId) return;
+      const refreshedShare = await refreshShare(api, snapshot.request, lastConfirmedShare);
+      if (generationRef.current !== runId) return;
+      const retryPlan = buildArtifactFileSharePermissionPlan(refreshedShare, targetPermission);
+      const canRetry = !retryPlan.some(
+        step => step.action === ArtifactFileSharePermissionChangeAction.Blocked,
+      );
+      const message =
+        error instanceof Error ? error.message : t('htmlShareAccessModeUpdateFailed');
+      setDialog(previous =>
+        previous && previous.artifact.id === snapshot.artifact.id
+          ? {
+              ...previous,
+              share: refreshedShare,
+              selectedPermission: canRetry
+                ? targetPermission
+                : deriveArtifactFileSharePermission(refreshedShare),
+              operation: undefined,
+              error: message,
+            }
+          : previous,
+      );
+    } finally {
+      if (mutationBarriersRef.current.get(mutationKey) === mutationBarrier) {
+        mutationBarriersRef.current.delete(mutationKey);
+      }
+      releaseMutationBarrier?.();
+    }
+  }, [dialog, refreshShare]);
 
   const updateFile = useCallback(async (): Promise<void> => {
     const snapshot = dialog;
     if (
       !snapshot?.request ||
       snapshot.phase !== ArtifactFileSharePhase.Ready ||
+      snapshot.intent !== ArtifactFileShareIntent.Manage ||
       !snapshot.share ||
+      snapshot.operation ||
       snapshot.share.status === HtmlShareStatus.Disabled ||
+      snapshot.share.status === HtmlShareStatus.Failed ||
+      snapshot.selectedPermission !== deriveArtifactFileSharePermission(snapshot.share) ||
       mutationBarriersRef.current.has(snapshot.request.lookupKey)
     ) {
       return;
@@ -706,6 +826,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
           ? {
               ...previous,
               share,
+              selectedPermission: deriveArtifactFileSharePermission(share),
               operation: undefined,
               message: undefined,
             }
@@ -730,7 +851,14 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
 
   const copyShare = useCallback(async (): Promise<void> => {
     const share = dialog?.share;
-    if (!share) return;
+    if (
+      !share ||
+      dialog?.intent !== ArtifactFileShareIntent.Manage ||
+      dialog.selectedPermission !== deriveArtifactFileSharePermission(share) ||
+      dialog.operation
+    ) {
+      return;
+    }
     const copyResult = buildArtifactFileShareCopyText({
       accessMode: share.accessMode,
       status:
@@ -752,7 +880,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
     showTimedCopyStatus(
       copied ? ArtifactFileShareCopyStatus.Copied : ArtifactFileShareCopyStatus.Failed,
     );
-  }, [dialog?.share, showTimedCopyStatus]);
+  }, [dialog, showTimedCopyStatus]);
 
   const openSubscriptionPage = useCallback(() => {
     void window.electron?.shell?.openExternal(getPortalPricingUrl(PortalPricingKeyfrom.HtmlShare));
@@ -764,9 +892,17 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
   );
 
   const share = dialog?.share;
-  const permission = share
+  const committedPermission = share
     ? deriveArtifactFileSharePermission(share)
-    : ArtifactFileSharePermission.Code;
+    : undefined;
+  const selectedPermission = dialog?.selectedPermission ??
+    committedPermission ??
+    ArtifactFileSharePermission.Code;
+  const isPermissionDirty = isArtifactFileSharePermissionDirty(
+    dialog?.intent,
+    committedPermission,
+    selectedPermission,
+  );
   const stoppedNotice =
     share?.status !== HtmlShareStatus.Disabled
       ? undefined
@@ -800,9 +936,38 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
         },
       })
     : null;
-  const canCopy = Boolean(dialog?.phase === ArtifactFileSharePhase.Ready && copyResult?.copyable);
+  const permissionPlan = share && isPermissionDirty
+    ? buildArtifactFileSharePermissionPlan(share, selectedPermission)
+    : [];
+  const canCreate = Boolean(
+    dialog?.phase === ArtifactFileSharePhase.Ready &&
+    dialog.intent === ArtifactFileShareIntent.Create &&
+    !dialog.operation &&
+    selectedPermission !== ArtifactFileSharePermission.Stopped,
+  );
+  const canSubmitPermission = Boolean(
+    dialog?.phase === ArtifactFileSharePhase.Ready &&
+    dialog.intent === ArtifactFileShareIntent.Manage &&
+    isPermissionDirty &&
+    !isPermissionLocked &&
+    !dialog.operation &&
+    permissionPlan.length > 0 &&
+    !permissionPlan.some(
+      step => step.action === ArtifactFileSharePermissionChangeAction.Blocked,
+    ),
+  );
+  const canCopy = Boolean(
+    dialog?.phase === ArtifactFileSharePhase.Ready &&
+    dialog.intent === ArtifactFileShareIntent.Manage &&
+    !dialog.operation &&
+    !isPermissionDirty &&
+    copyResult?.copyable,
+  );
   const canUpdateFile = Boolean(
     dialog?.phase === ArtifactFileSharePhase.Ready &&
+    dialog.intent === ArtifactFileShareIntent.Manage &&
+    !dialog.operation &&
+    !isPermissionDirty &&
     share &&
     share.status !== HtmlShareStatus.Disabled &&
     share.status !== HtmlShareStatus.Failed,
@@ -815,17 +980,22 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
             artifact={dialog.artifact}
             phase={dialog.phase}
             operation={dialog.operation}
-            permission={permission}
-            pendingPermission={dialog.pendingPermission}
+            intent={dialog.intent}
+            committedPermission={committedPermission}
+            selectedPermission={selectedPermission}
+            isPermissionDirty={isPermissionDirty}
             stoppedNotice={stoppedNotice}
             isPermissionLocked={isPermissionLocked}
             message={dialogMessage}
             error={dialog.error}
             shareCodeUnavailable={Boolean(
               share?.accessMode === HtmlShareAccessMode.Code &&
+              !isPermissionDirty &&
               (share.shareCodeUnavailable || !share.shareCode),
             )}
             canRetry={Boolean(dialog.request)}
+            canCreate={canCreate}
+            canSubmitPermission={canSubmitPermission}
             canCopy={canCopy}
             canUpdateFile={canUpdateFile}
             copyStatus={copyStatus}
@@ -835,7 +1005,9 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
             onClose={closeDialog}
             onRetry={retryShare}
             onOpenSubscription={openSubscriptionPage}
-            onPermissionChange={permissionValue => void changePermission(permissionValue)}
+            onPermissionChange={selectPermission}
+            onCreate={() => void submitCreateShare()}
+            onSubmitPermission={() => void submitPermissionChange()}
             onUpdateFile={() => void updateFile()}
             onCopy={() => void copyShare()}
           />,

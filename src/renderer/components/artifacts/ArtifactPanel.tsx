@@ -101,15 +101,19 @@ import FileDirectoryView from './FileDirectoryView';
 import {
   buildLocalServiceDeploymentPermissionPlan,
   canCopyLocalServiceDeploymentLink,
+  getCommittedLocalServiceDeploymentPermission,
   getLocalServiceDeploymentPermission,
   getLocalServiceDeploymentPermissionState,
+  getLocalServiceDeploymentPermissionSubmitAction,
   getLocalServiceDeploymentProjectName,
   hasConfiguredLocalServiceCloudData,
+  isLocalServiceDeploymentPermissionDirty,
   isLocalServiceDeploymentPermissionLocked,
   isLocalServiceDeploymentStopped,
   LocalServiceDeploymentPermission,
   type LocalServiceDeploymentPermission as LocalServiceDeploymentPermissionValue,
   LocalServiceDeploymentPermissionChangeAction,
+  LocalServiceDeploymentPermissionSubmitAction,
   mergeLocalServiceDeploymentShareUpdate,
 } from './localServiceDeploymentModel';
 import NodeDeploymentPersistenceOperationStatus, {
@@ -271,6 +275,7 @@ interface NodeDeploymentDialogState {
   remotePersistence?: ShareDeploymentPersistence | null;
   error?: string;
   accessSyncError?: string;
+  accessSyncSuccess?: string;
 }
 
 interface BrowserLocalServiceContext {
@@ -2389,14 +2394,16 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                   previous.deploymentProjectDirectory,
                 ) === projectDirectory,
             );
-            const hasPendingRedeployPermission = Boolean(
+            const previousSelectedPermission = getLocalServiceDeploymentPermission(
+              previous.accessMode,
+              previous.targetShareStatus,
+            );
+            const hasPendingPermissionDraft = Boolean(
               isSameDeploymentIdentity &&
-                effectiveDeployment?.deploymentKind !== ShareDeploymentKind.StaticSite &&
-                isLocalServiceDeploymentStopped(
-                  effectiveDeployment?.shareStatus,
-                  effectiveDeployment?.status,
-                ) &&
-                previous.targetShareStatus === HtmlShareStatus.Live,
+                isLocalServiceDeploymentPermissionDirty(
+                  effectiveDeployment,
+                  previousSelectedPermission,
+                ),
             );
             return {
               ...nextDialog,
@@ -2408,11 +2415,11 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
               remotePersistence: isSameDeploymentIdentity
                 ? previous.remotePersistence
                 : undefined,
-              accessMode: hasPendingRedeployPermission
+              accessMode: hasPendingPermissionDraft
                 ? normalizeHtmlShareAccessMode(previous.accessMode)
                 : normalizeHtmlShareAccessMode(effectiveDeployment?.accessMode),
-              targetShareStatus: hasPendingRedeployPermission
-                ? HtmlShareStatus.Live
+              targetShareStatus: hasPendingPermissionDraft
+                ? previous.targetShareStatus ?? HtmlShareStatus.Live
                 : isLocalServiceDeploymentStopped(
                     effectiveDeployment?.shareStatus,
                     effectiveDeployment?.status,
@@ -2496,9 +2503,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     sessionId,
   ]);
 
-  const selectNodeDeploymentPermission = useCallback(async (
+  const selectNodeDeploymentPermission = useCallback((
     permission: LocalServiceDeploymentPermissionValue,
-  ): Promise<void> => {
+  ): void => {
     const snapshot = nodeDeploymentDialog;
     if (
       !snapshot ||
@@ -2514,76 +2521,86 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     if (permission === LocalServiceDeploymentPermission.Stopped && !snapshot.deployment) {
       return;
     }
+    if (
+      snapshot.deployment &&
+      isLocalServiceDeploymentPermissionLocked(snapshot.deployment.disabledSource)
+    ) {
+      return;
+    }
 
     const permissionState = getLocalServiceDeploymentPermissionState(
       permission,
       snapshot.accessMode,
     );
-    if (!snapshot.deployment) {
-      setNodeDeploymentDialog(previous => previous
-        ? {
-            ...previous,
-            accessMode: permissionState.accessMode,
-            targetShareStatus: permissionState.targetStatus,
-            error: undefined,
-          }
-        : previous);
+    setNodeDeploymentDialog(previous => {
+      if (!previous || !isNodeDeploymentEditorDialogKind(previous.kind)) return previous;
+      if (
+        previous.deployment?.deploymentId !== snapshot.deployment?.deploymentId ||
+        previous.localService?.url !== snapshot.localService?.url
+      ) {
+        return previous;
+      }
+      return {
+        ...previous,
+        phase: previous.deployment?.status === ShareDeploymentStatus.DeployFailed
+          ? previous.phase
+          : NodeDeploymentPhase.Idle,
+        accessMode: permissionState.accessMode,
+        targetShareStatus: permissionState.targetStatus,
+        error: undefined,
+        accessSyncError: undefined,
+        accessSyncSuccess: undefined,
+      };
+    });
+  }, [
+    isNodeDeploymentAccessUpdating,
+    isNodeDeploymentBusy,
+    isNodeDeploymentLookupPending,
+    nodeDeploymentDialog,
+  ]);
+
+  const submitNodeDeploymentPermissionChange = useCallback(async (): Promise<void> => {
+    const snapshot = nodeDeploymentDialog;
+    if (
+      !snapshot?.deployment ||
+      !isNodeDeploymentEditorDialogKind(snapshot.kind) ||
+      isNodeDeploymentBusy ||
+      isNodeDeploymentAccessUpdating ||
+      isNodeDeploymentLookupPending ||
+      isNodeDeploymentPending(snapshot.deployment.status)
+    ) {
       return;
     }
 
-    const plan = buildLocalServiceDeploymentPermissionPlan(snapshot.deployment, permission);
-    if (plan.some(step => step.action === LocalServiceDeploymentPermissionChangeAction.Blocked)) {
-      return;
-    }
-    const redeployStep = plan.find(
-      step => step.action === LocalServiceDeploymentPermissionChangeAction.RequireRedeploy,
+    const selectedPermission = getLocalServiceDeploymentPermission(
+      snapshot.accessMode,
+      snapshot.targetShareStatus,
     );
-    if (
-      redeployStep?.action === LocalServiceDeploymentPermissionChangeAction.RequireRedeploy
-    ) {
-      const deploymentId = snapshot.deployment.deploymentId;
-      setNodeDeploymentDialog(previous =>
-        previous?.deployment?.deploymentId === deploymentId
-          ? {
-              ...previous,
-              phase: NodeDeploymentPhase.Idle,
-              accessMode: redeployStep.accessMode,
-              targetShareStatus: HtmlShareStatus.Live,
-              accessSyncError: undefined,
-            }
-          : previous,
-      );
+    const permissionState = getLocalServiceDeploymentPermissionState(
+      selectedPermission,
+      snapshot.deployment.accessMode,
+    );
+    const submitAction = getLocalServiceDeploymentPermissionSubmitAction(
+      snapshot.deployment,
+      selectedPermission,
+    );
+    if (submitAction !== LocalServiceDeploymentPermissionSubmitAction.UpdatePermission) {
       return;
     }
-    if (plan.length === 0) {
-      if (
-        permission === LocalServiceDeploymentPermission.Stopped &&
-        isLocalServiceDeploymentStopped(
-          snapshot.deployment.shareStatus,
-          snapshot.deployment.status,
-        )
-      ) {
-        const deploymentId = snapshot.deployment.deploymentId;
-        setNodeDeploymentDialog(previous =>
-          previous?.deployment?.deploymentId === deploymentId
-            ? {
-                ...previous,
-                phase: NodeDeploymentPhase.Idle,
-                accessMode: normalizeHtmlShareAccessMode(snapshot.deployment?.accessMode),
-                targetShareStatus: HtmlShareStatus.Disabled,
-                accessSyncError: undefined,
-              }
-            : previous,
-        );
-      }
-      return;
-    }
+    const plan = buildLocalServiceDeploymentPermissionPlan(
+      snapshot.deployment,
+      selectedPermission,
+    );
 
     const api = window.electron?.htmlShare;
     const shareId = snapshot.deployment.shareId;
     if (!api || !shareId) {
       setNodeDeploymentDialog(previous => previous
-        ? { ...previous, accessSyncError: t('htmlShareAccessModeUpdateFailed') }
+        ? {
+            ...previous,
+            accessSyncError: t('htmlShareAccessModeUpdateFailed'),
+            accessSyncSuccess: undefined,
+          }
         : previous);
       return;
     }
@@ -2600,6 +2617,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             targetShareStatus: permissionState.targetStatus,
             error: undefined,
             accessSyncError: undefined,
+            accessSyncSuccess: undefined,
           }
         : previous,
     );
@@ -2666,6 +2684,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
               accessMode: confirmedPermission.accessMode,
               targetShareStatus: confirmedPermission.targetStatus,
               accessSyncError: undefined,
+              accessSyncSuccess: t('nodeDeploymentPermissionUpdated'),
             }
           : previous,
       );
@@ -2698,6 +2717,19 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         ),
         authoritativeDeployment.accessMode,
       );
+      const retrySubmitAction = getLocalServiceDeploymentPermissionSubmitAction(
+        authoritativeDeployment,
+        selectedPermission,
+      );
+      const shouldPreservePermissionDraft =
+        retrySubmitAction === LocalServiceDeploymentPermissionSubmitAction.UpdatePermission ||
+        retrySubmitAction === LocalServiceDeploymentPermissionSubmitAction.RedeployAndEnable;
+      const retryPermission = shouldPreservePermissionDraft
+        ? getLocalServiceDeploymentPermissionState(
+            selectedPermission,
+            authoritativeDeployment.accessMode,
+          )
+        : authoritativePermission;
       if (snapshot.localService && snapshot.projectDirectory) {
         rememberNodeDeployment(
           getNodeDeploymentLookupKey(
@@ -2717,9 +2749,10 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
               ...previous,
               phase: authoritativeStopped ? NodeDeploymentPhase.Idle : previous.phase,
               deployment: authoritativeDeployment,
-              accessMode: authoritativePermission.accessMode,
-              targetShareStatus: authoritativePermission.targetStatus,
+              accessMode: retryPermission.accessMode,
+              targetShareStatus: retryPermission.targetStatus,
               accessSyncError: message,
+              accessSyncSuccess: undefined,
             }
           : previous,
       );
@@ -2790,6 +2823,23 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const closeNodeDeploymentDialog = useCallback(() => {
     if (isNodeDeploymentAccessUpdating) return;
     setIsNodeDeploymentDialogOpen(false);
+    setNodeDeploymentDialog(previous => {
+      const committedPermission = getCommittedLocalServiceDeploymentPermission(
+        previous?.deployment,
+      );
+      if (!previous?.deployment || !committedPermission) return previous;
+      const committedState = getLocalServiceDeploymentPermissionState(
+        committedPermission,
+        previous.deployment.accessMode,
+      );
+      return {
+        ...previous,
+        accessMode: committedState.accessMode,
+        targetShareStatus: committedState.targetStatus,
+        accessSyncError: undefined,
+        accessSyncSuccess: undefined,
+      };
+    });
     if (localServiceDeploymentRequest?.requestId) {
       onLocalServiceDeploymentRequestConsumed?.(localServiceDeploymentRequest.requestId);
     }
@@ -2852,6 +2902,31 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     }
     if (currentDialog.analysis?.blockers.length) return;
 
+    const selectedPermission = getLocalServiceDeploymentPermission(
+      currentDialog.accessMode,
+      currentDialog.targetShareStatus,
+    );
+    const permissionSubmitAction = getLocalServiceDeploymentPermissionSubmitAction(
+      currentDialog.deployment,
+      selectedPermission,
+    );
+    if (
+      permissionSubmitAction === LocalServiceDeploymentPermissionSubmitAction.UpdatePermission ||
+      permissionSubmitAction === LocalServiceDeploymentPermissionSubmitAction.Blocked
+    ) {
+      return;
+    }
+    if (
+      currentDialog.deployment?.deploymentKind !== ShareDeploymentKind.StaticSite &&
+      isLocalServiceDeploymentStopped(
+        currentDialog.deployment?.shareStatus,
+        currentDialog.deployment?.status,
+      ) &&
+      selectedPermission === LocalServiceDeploymentPermission.Stopped
+    ) {
+      return;
+    }
+
     const runId = nodeDeploymentActionRunIdRef.current + 1;
     nodeDeploymentActionRunIdRef.current = runId;
     const port = Number(currentDialog.port);
@@ -2889,6 +2964,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
           message: t('nodeDeploymentPreparingMessage'),
           error: undefined,
           accessSyncError: undefined,
+          accessSyncSuccess: undefined,
         }
       : previous);
     try {
@@ -3818,24 +3894,32 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const isDynamicNodeDeployment = Boolean(
     nodeDeployment && nodeDeployment.deploymentKind !== ShareDeploymentKind.StaticSite,
   );
+  const nodeDeploymentSelectedPermission = getLocalServiceDeploymentPermission(
+    nodeDeploymentDialog?.accessMode,
+    nodeDeploymentDialog?.targetShareStatus,
+  );
+  const isNodeDeploymentPermissionDirty = isLocalServiceDeploymentPermissionDirty(
+    nodeDeployment,
+    nodeDeploymentSelectedPermission,
+  );
+  const nodeDeploymentPermissionSubmitAction =
+    getLocalServiceDeploymentPermissionSubmitAction(
+      nodeDeployment,
+      nodeDeploymentSelectedPermission,
+    );
   const isNodeDeploymentRedeployRequired = Boolean(
-    isDynamicNodeDeployment &&
-      isNodeDeploymentShareDisabled &&
-      nodeDeploymentDialog?.targetShareStatus === HtmlShareStatus.Live,
+    nodeDeploymentPermissionSubmitAction ===
+      LocalServiceDeploymentPermissionSubmitAction.RedeployAndEnable,
   );
   const isNodeDeploymentStoppedWithoutRedeployTarget = Boolean(
     isDynamicNodeDeployment &&
       isNodeDeploymentShareDisabled &&
-      nodeDeploymentDialog?.targetShareStatus === HtmlShareStatus.Disabled,
+      nodeDeploymentSelectedPermission === LocalServiceDeploymentPermission.Stopped,
   );
   const isNodeDeploymentAnalysisReady = Boolean(
     nodeDeploymentAnalysis?.success &&
       normalizeNodeDeploymentProjectDirectoryForCompare(nodeDeploymentAnalysis.projectDirectory) ===
         normalizeNodeDeploymentProjectDirectoryForCompare(nodeDeploymentDialog?.projectDirectory),
-  );
-  const nodeDeploymentSelectedPermission = getLocalServiceDeploymentPermission(
-    nodeDeploymentDialog?.accessMode,
-    nodeDeploymentDialog?.targetShareStatus,
   );
   const isStaticNodeDeployment =
     nodeDeploymentAnalysis?.deploymentKind === ShareDeploymentKind.StaticSite;
@@ -3854,11 +3938,26 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       (isNodeDeploymentBusy &&
         (nodeDeploymentDialog?.phase !== NodeDeploymentPhase.Analyzing || !nodeDeployment)),
   );
+  const isNodeDeploymentPermissionSubmitDisabled = Boolean(
+    nodeDeploymentPermissionSubmitAction !==
+      LocalServiceDeploymentPermissionSubmitAction.UpdatePermission ||
+      isNodeDeploymentBusy ||
+      isNodeDeploymentAccessUpdating ||
+      isNodeDeploymentLookupPending ||
+      isNodeDeploymentPending(nodeDeployment?.status),
+  );
+  const isNodeDeploymentStopDraft = Boolean(
+    isDynamicNodeDeployment &&
+      nodeDeployment &&
+      !isNodeDeploymentShareDisabled &&
+      nodeDeploymentSelectedPermission === LocalServiceDeploymentPermission.Stopped,
+  );
   const isNodeDeploymentSubmitDisabled = Boolean(
     !isNodeDeploymentEditorDialog ||
       isNodeDeploymentPendingOperation ||
       nodeDeploymentDialog?.phase === NodeDeploymentPhase.Live ||
       isNodeDeploymentStoppedWithoutRedeployTarget ||
+      (isNodeDeploymentPermissionDirty && !isNodeDeploymentRedeployRequired) ||
       !isNodeDeploymentAnalysisReady ||
       !nodeDeploymentDialog?.projectDirectory?.trim() ||
       (!isStaticNodeDeployment && !nodeDeploymentDialog?.startCommand?.trim()) ||
@@ -3870,7 +3969,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   );
   const canCopyNodeDeploymentLink = canCopyLocalServiceDeploymentLink(
     nodeDeployment,
-    isNodeDeploymentPendingOperation,
+    isNodeDeploymentPendingOperation || isNodeDeploymentPermissionDirty,
   );
   const nodeDeploymentCopyButtonLabel =
     htmlShareCopyStatus === HtmlShareCopyStatus.Failed
@@ -3893,7 +3992,11 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       case NodeDeploymentPhase.Failed:
       case NodeDeploymentPhase.Idle:
       default:
-        return nodeDeployment ? t('nodeDeploymentRetry') : t('nodeDeploymentSubmit');
+        return nodeDeployment
+          ? isNodeDeploymentRedeployRequired
+            ? t('nodeDeploymentRedeployAndShare')
+            : t('nodeDeploymentRetry')
+          : t('nodeDeploymentSubmit');
     }
   })();
   const showNodeDeploymentSubmitSpinner = Boolean(
@@ -4575,7 +4678,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                                 value={option.value}
                                 checked={nodeDeploymentSelectedPermission === option.value}
                                 disabled={isDisabled}
-                                onChange={() => void selectNodeDeploymentPermission(option.value)}
+                                onChange={() => selectNodeDeploymentPermission(option.value)}
                                 className="h-4 w-4 accent-primary"
                               />
                               <span>{option.label}</span>
@@ -4589,6 +4692,14 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                           role="status"
                         >
                           {t('nodeDeploymentRedeployRequiredNotice')}
+                        </div>
+                      )}
+                      {isNodeDeploymentStopDraft && (
+                        <div
+                          className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+                          role="status"
+                        >
+                          {t('nodeDeploymentStopDraftNotice')}
                         </div>
                       )}
                     </section>
@@ -4875,6 +4986,14 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                         {nodeDeploymentDialog.accessSyncError}
                       </div>
                     )}
+                    {nodeDeploymentDialog.accessSyncSuccess && (
+                      <div
+                        className="mt-3 whitespace-pre-wrap text-xs leading-5 text-green-600 dark:text-green-300"
+                        role="status"
+                      >
+                        {nodeDeploymentDialog.accessSyncSuccess}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="min-h-[180px] whitespace-pre-wrap break-words rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200" role="alert">
@@ -4903,6 +5022,25 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                     )}
                     {nodeDeploymentSubmitLabel}
                   </button>
+                  {nodeDeploymentPermissionSubmitAction ===
+                    LocalServiceDeploymentPermissionSubmitAction.UpdatePermission && (
+                    <button
+                      type="button"
+                      onClick={() => void submitNodeDeploymentPermissionChange()}
+                      disabled={isNodeDeploymentPermissionSubmitDisabled}
+                      className="inline-flex h-10 min-w-[132px] items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isNodeDeploymentAccessUpdating && (
+                        <ArrowPathIcon
+                          className="h-4 w-4 motion-safe:animate-spin"
+                          aria-hidden="true"
+                        />
+                      )}
+                      {isNodeDeploymentAccessUpdating
+                        ? t('nodeDeploymentPermissionUpdating')
+                        : t('nodeDeploymentUpdatePermissionAction')}
+                    </button>
+                  )}
                   {canCopyNodeDeploymentLink && nodeDeployment && (
                     <button
                       type="button"
