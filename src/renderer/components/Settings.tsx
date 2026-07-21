@@ -3888,7 +3888,9 @@ const Settings: React.FC<SettingsProps> = ({
       handleCancelModelEdit();
       return;
     }
-    if (e.key === 'Enter') {
+    // Plain Enter must keep its default behavior (e.g. newline in the custom
+    // params textarea); only Cmd/Ctrl+Enter saves from the keyboard.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSaveNewModel();
     }

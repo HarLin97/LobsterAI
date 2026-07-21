@@ -325,6 +325,51 @@ function parseProxySSEPacket(packet: string): ParsedProxySSEPacket {
   };
 }
 
+// Tracks whether an SSE response ever produced a terminal packet. Upstream
+// connection resets surface here as a clean 'end' with no [DONE]/finish_reason,
+// which downstream OpenClaw would otherwise treat as a completed turn.
+type ProxySSEStreamScanState = {
+  sawTerminalPacket: boolean;
+};
+
+function createProxySSEStreamScanState(): ProxySSEStreamScanState {
+  return { sawTerminalPacket: false };
+}
+
+function isTerminalProxySSEPacket(packet: ParsedProxySSEPacket): boolean {
+  const { event, payload } = packet;
+  if (!payload) {
+    return false;
+  }
+  if (payload === '[DONE]') {
+    return true;
+  }
+  // Explicit upstream error payloads must pass through untouched so the client
+  // receives the error details instead of a connection reset.
+  if (event === 'error' || event === 'message_stop') {
+    return true;
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    if (!isRecord(parsed)) {
+      return false;
+    }
+    if (parsed.type === 'error' || parsed.error != null || parsed.type === 'message_stop') {
+      return true;
+    }
+    for (const choice of toArray(parsed.choices)) {
+      if (isRecord(choice) && choice.finish_reason != null && choice.finish_reason !== '') {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
 function findSSEPacketBoundary(buffer: string): { index: number; separatorLength: number } | null {
   const match = /\r?\n\r?\n/.exec(buffer);
   if (!match || typeof match.index !== 'number') {
@@ -383,7 +428,26 @@ function rememberQuotaError(error: Omit<OpenClawTokenProxyQuotaError, 'capturedA
   };
 }
 
-function scanProxySSEBufferForQuotaError(buffer: string, now = Date.now()): string {
+function inspectProxySSEPacket(
+  packet: string,
+  now: number,
+  scanState?: ProxySSEStreamScanState,
+): void {
+  const parsed = parseProxySSEPacket(packet);
+  const quotaError = extractQuotaErrorFromProxyErrorPayload(parsed.payload, parsed.event);
+  if (quotaError) {
+    rememberQuotaError(quotaError, now);
+  }
+  if (scanState && !scanState.sawTerminalPacket && isTerminalProxySSEPacket(parsed)) {
+    scanState.sawTerminalPacket = true;
+  }
+}
+
+function scanProxySSEBufferForQuotaError(
+  buffer: string,
+  now = Date.now(),
+  scanState?: ProxySSEStreamScanState,
+): string {
   let remaining = buffer;
   let boundary = findSSEPacketBoundary(remaining);
 
@@ -391,10 +455,7 @@ function scanProxySSEBufferForQuotaError(buffer: string, now = Date.now()): stri
     const packet = remaining.slice(0, boundary.index);
     remaining = remaining.slice(boundary.index + boundary.separatorLength);
 
-    const quotaError = extractQuotaErrorFromProxySSEPacket(packet);
-    if (quotaError) {
-      rememberQuotaError(quotaError, now);
-    }
+    inspectProxySSEPacket(packet, now, scanState);
 
     boundary = findSSEPacketBoundary(remaining);
   }
@@ -402,15 +463,16 @@ function scanProxySSEBufferForQuotaError(buffer: string, now = Date.now()): stri
   return remaining;
 }
 
-function flushProxySSEBufferForQuotaError(buffer: string, now = Date.now()): void {
-  const remaining = scanProxySSEBufferForQuotaError(buffer, now);
+function flushProxySSEBufferForQuotaError(
+  buffer: string,
+  now = Date.now(),
+  scanState?: ProxySSEStreamScanState,
+): void {
+  const remaining = scanProxySSEBufferForQuotaError(buffer, now, scanState);
   if (!remaining.trim()) {
     return;
   }
-  const quotaError = extractQuotaErrorFromProxySSEPacket(remaining);
-  if (quotaError) {
-    rememberQuotaError(quotaError, now);
-  }
+  inspectProxySSEPacket(remaining, now, scanState);
 }
 
 function scanProxyBodyForQuotaError(body: Buffer, now = Date.now()): void {
@@ -501,66 +563,110 @@ function pipeStreamingResponseWithQuotaScan(
     return;
   }
 
+  // SSE responses must end with a terminal packet ([DONE], finish_reason, or an
+  // error payload). Anything else is a truncated stream and must not be
+  // presented to the client as a cleanly completed response.
+  const scanState = createProxySSEStreamScanState();
+
   if (isNodeReadableStream(body)) {
-    pipeNodeReadableResponseWithQuotaScan(body, res);
+    pipeNodeReadableResponseWithQuotaScan(body, res, scanState);
     return;
   }
 
-  pipeWebReadableResponseWithQuotaScan(body as unknown as ReadableStream<Uint8Array>, res);
+  pipeWebReadableResponseWithQuotaScan(body as unknown as ReadableStream<Uint8Array>, res, scanState);
+}
+
+// Destroying the response mid-stream aborts the chunked encoding, so the
+// client observes a network error instead of a clean end and can retry or
+// surface the failure. res.destroy() must stay argument-less: passing an error
+// would re-emit it on the response with no listener attached.
+function abortProxyResponse(res: http.ServerResponse): void {
+  if (res.destroyed) {
+    return;
+  }
+  res.destroy();
+}
+
+function endProxyResponseAfterScan(
+  res: http.ServerResponse,
+  scanState?: ProxySSEStreamScanState,
+): void {
+  if (scanState && !scanState.sawTerminalPacket) {
+    console.error('[OpenClawTokenProxy] upstream SSE ended without a terminal packet; aborting response to signal truncation');
+    abortProxyResponse(res);
+    return;
+  }
+  res.end();
 }
 
 function pipeNodeReadableResponseWithQuotaScan(
   stream: NodeJS.ReadableStream,
   res: http.ServerResponse,
+  scanState?: ProxySSEStreamScanState,
 ): void {
   const decoder = new TextDecoder();
   let sseBuffer = '';
+
+  res.on('error', (err) => {
+    console.debug('[OpenClawTokenProxy] response write error:', err);
+  });
 
   stream.on('data', (chunk: Buffer | Uint8Array | string) => {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     sseBuffer = scanProxySSEBufferForQuotaError(
       sseBuffer + decoder.decode(buffer, { stream: true }),
+      Date.now(),
+      scanState,
     );
     res.write(buffer);
   });
 
   stream.on('end', () => {
     const tail = decoder.decode();
-    flushProxySSEBufferForQuotaError(sseBuffer + tail);
-    res.end();
+    flushProxySSEBufferForQuotaError(sseBuffer + tail, Date.now(), scanState);
+    endProxyResponseAfterScan(res, scanState);
   });
 
   stream.on('error', (err) => {
     console.error('[OpenClawTokenProxy] stream read error:', err);
-    res.end();
+    flushProxySSEBufferForQuotaError(sseBuffer + decoder.decode(), Date.now(), scanState);
+    abortProxyResponse(res);
   });
 }
 
 function pipeWebReadableResponseWithQuotaScan(
   webStream: ReadableStream<Uint8Array>,
   res: http.ServerResponse,
+  scanState?: ProxySSEStreamScanState,
 ): void {
   const reader = webStream.getReader();
   const decoder = new TextDecoder();
   let sseBuffer = '';
 
+  res.on('error', (err) => {
+    console.debug('[OpenClawTokenProxy] response write error:', err);
+  });
+
   const pump = (): void => {
     reader.read().then(({ done, value }) => {
       if (done) {
         const tail = decoder.decode();
-        flushProxySSEBufferForQuotaError(sseBuffer + tail);
-        res.end();
+        flushProxySSEBufferForQuotaError(sseBuffer + tail, Date.now(), scanState);
+        endProxyResponseAfterScan(res, scanState);
         return;
       }
 
       sseBuffer = scanProxySSEBufferForQuotaError(
         sseBuffer + decoder.decode(value, { stream: true }),
+        Date.now(),
+        scanState,
       );
       res.write(value);
       pump();
     }).catch((err) => {
       console.error('[OpenClawTokenProxy] stream read error:', err);
-      res.end();
+      flushProxySSEBufferForQuotaError(sseBuffer + decoder.decode(), Date.now(), scanState);
+      abortProxyResponse(res);
     });
   };
 
@@ -575,4 +681,10 @@ export const __openClawTokenProxyTestUtils = {
   scanProxySSEBufferForQuotaError,
   flushProxySSEBufferForQuotaError,
   rememberQuotaError,
+  createProxySSEStreamScanState,
+  isTerminalProxySSEPacket,
+  parseProxySSEPacket,
+  pipeNodeReadableResponseWithQuotaScan,
+  pipeWebReadableResponseWithQuotaScan,
+  pipeStreamingResponseWithQuotaScan,
 };
