@@ -659,6 +659,7 @@ interface MarkdownContentProps {
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   showRevealInFolderAction?: boolean;
   enableLargePreview?: boolean;
+  forceExpanded?: boolean;
   onImageClick?: (image: { src: string; alt?: string | null }) => void;
 }
 
@@ -669,11 +670,12 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   resolveLocalFilePath,
   showRevealInFolderAction = false,
   enableLargePreview = true,
+  forceExpanded = false,
   onImageClick,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const canUseLargePreview = enableLargePreview && shouldUseLargeMarkdownPreview(content);
-  const useLargePreview = canUseLargePreview && !isExpanded;
+  const useLargePreview = canUseLargePreview && !isExpanded && !forceExpanded;
   const components = useMemo(
     () => createMarkdownComponents(resolveLocalFilePath, showRevealInFolderAction, onImageClick, spacing),
     [resolveLocalFilePath, showRevealInFolderAction, onImageClick, spacing]
@@ -712,7 +714,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
 
   return (
     <div className={`markdown-content min-w-0 max-w-full ${markdownTextClassName} ${className}`}>
-      {canUseLargePreview && (
+      {canUseLargePreview && isExpanded && (
         <div className="mb-2 flex justify-end">
           <button
             type="button"
