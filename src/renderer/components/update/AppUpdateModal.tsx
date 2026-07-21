@@ -3,6 +3,7 @@ import React from 'react';
 import { type AppUpdateRuntimeState, AppUpdateStatus, isManualDownloadUrl } from '../../../shared/appUpdate/constants';
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
+import { formatAppUpdateError } from './appUpdateErrorText';
 
 interface AppUpdateModalProps {
   updateState: AppUpdateRuntimeState;
@@ -132,9 +133,15 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
           </p>
         )}
 
+        {canInstall && !isInstallError && (
+          <p className="mt-4 text-sm text-secondary">
+            {i18nService.t('updateReadyHint')}
+          </p>
+        )}
+
         {updateState.errorMessage && (
           <p className="mt-4 text-sm text-secondary break-words">
-            {updateState.errorMessage}
+            {formatAppUpdateError(updateState.errorMessage)}
           </p>
         )}
       </div>

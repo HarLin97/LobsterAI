@@ -1,4 +1,8 @@
-import { PhotoIcon } from '@heroicons/react/24/outline';
+import { ChatBubbleLeftIcon, PhotoIcon } from '@heroicons/react/24/outline';
+import {
+  BrowserAnnotationScreenshotStatus,
+  type CoworkBrowserAnnotationMessageBatch,
+} from '@shared/cowork/browserAnnotations';
 import React, { useCallback, useMemo, useState } from 'react';
 
 import { hasGoalSettingMessageMetadata } from '../../../common/goalCommandDisplay';
@@ -219,13 +223,29 @@ const UserMessageItem: React.FC<{
     : buildKitReferences(messageKitIds, marketplaceKits);
 
   const selectedTextSnippets = (metadata?.selectedTextSnippets ?? []) as CoworkSelectedTextSnippet[];
+  const browserAnnotations = (metadata?.browserAnnotations ?? []) as CoworkBrowserAnnotationMessageBatch[];
+  const browserAnnotationCount = browserAnnotations.reduce(
+    (total, batch) => total + batch.annotations.length,
+    0,
+  );
   const imageAttachmentPreviews = Array.isArray(metadata?.imageAttachmentPreviews)
     ? metadata.imageAttachmentPreviews as CoworkImageAttachmentPreview[]
     : [];
   const legacyImageAttachments = (metadata?.imageAttachments ?? []) as CoworkImageAttachment[];
-  const displayImageAttachments = imageAttachmentPreviews.length > 0
+  const allImageAttachments = imageAttachmentPreviews.length > 0
     ? imageAttachmentPreviews
     : legacyImageAttachments;
+  const browserAnnotationImageIndexes = new Set(
+    browserAnnotations.flatMap(batch => batch.annotations.flatMap((annotation) => {
+      const transportImageIndex = annotation.screenshot.status === BrowserAnnotationScreenshotStatus.Ready
+        ? annotation.screenshot.asset.transportImageIndex
+        : undefined;
+      return typeof transportImageIndex === 'number' ? [transportImageIndex] : [];
+    })),
+  );
+  const displayImageAttachments = allImageAttachments.filter(
+    (_attachment, index) => !browserAnnotationImageIndexes.has(index + 1),
+  );
   const hasCapabilityBadges = messageKitReferences.length > 0 || messageSkills.length > 0;
   const handleImagePreviewOpen = useCallback((image: ImagePreviewSource) => {
     reportConversationMessageAction({
@@ -256,6 +276,17 @@ const UserMessageItem: React.FC<{
           <div className="flex items-start gap-3 flex-row-reverse">
             <div className="w-full min-w-0 flex flex-col items-end">
               <div className="w-fit max-w-full rounded-2xl px-4 py-2.5 bg-surface text-foreground shadow-subtle">
+                {browserAnnotationCount > 0 && (
+                  <div className={(selectedTextSnippets.length > 0 || displayContent?.trim() || displayImageAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
+                    <div
+                      className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-surface-raised px-2.5 text-xs text-foreground"
+                      title={browserAnnotations.flatMap(batch => batch.annotations.map(item => item.comment)).join('\n')}
+                    >
+                      <ChatBubbleLeftIcon className="h-3.5 w-3.5" />
+                      {i18nService.t('browserAnnotationsCount').replace('{count}', String(browserAnnotationCount))}
+                    </div>
+                  </div>
+                )}
                 {selectedTextSnippets.length > 0 && (
                   <div className={(displayContent?.trim() || displayImageAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
                     <SelectedTextSnippetBadge

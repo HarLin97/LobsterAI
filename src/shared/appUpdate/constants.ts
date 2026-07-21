@@ -24,7 +24,16 @@ export const AppUpdateIpc = {
   CancelDownload: 'appUpdate:cancelDownload',
   InstallReady: 'appUpdate:installReady',
   StateChanged: 'appUpdate:stateChanged',
+  GetCompletedUpdate: 'appUpdate:getCompletedUpdate',
 } as const;
+
+/**
+ * Marker stored in AppUpdateRuntimeState.errorMessage when the user declined
+ * the Windows UAC elevation prompt for a silent install. The OS-provided
+ * exception text is localized, so this stable token is what crosses the IPC
+ * boundary; the renderer maps it to a translated message.
+ */
+export const APP_UPDATE_ELEVATION_DECLINED_ERROR = 'update-elevation-declined';
 
 export interface ChangeLogEntry {
   title: string;
@@ -64,7 +73,7 @@ export interface AppUpdateCheckResult {
   error?: string;
 }
 
-export const APP_UPDATE_POLL_INTERVAL_MS = 12 * 60 * 60 * 1000;
+export const APP_UPDATE_POLL_INTERVAL_MS = 2 * 60 * 60 * 1000;
 export const APP_UPDATE_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
 
 /**

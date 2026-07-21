@@ -302,8 +302,13 @@
   FileWrite $2 "$8 phase=tar-extract-error extractor=$R3 exit=$R2 reason=entry-missing-after-extract$\r$\n"
   FileClose $2
   ; A bogus system-tar success still gets a shot at the bundled extractor.
+  ;
+  ; /SD IDOK on this and the failure boxes below: NSIS shows MessageBox even
+  ; in /S installs unless a silent default is declared, and the in-app silent
+  ; update must never block on an orphan dialog. First-launch recovery retries
+  ; the extraction either way.
   StrCmp $R3 "system-tar" TarExtractElectron
-  MessageBox MB_OK|MB_ICONEXCLAMATION "Resource extraction finished but the AI runtime files are still missing. LobsterAI will retry the extraction automatically on first launch. If the app still reports missing runtime files, add the install directory to your antivirus allowlist and reinstall. Details: $APPDATA\LobsterAI\install-timing.log"
+  MessageBox MB_OK|MB_ICONEXCLAMATION "Resource extraction finished but the AI runtime files are still missing. LobsterAI will retry the extraction automatically on first launch. If the app still reports missing runtime files, add the install directory to your antivirus allowlist and reinstall. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
   Goto TarExtractFailed
 
   TarExtractProcessFailed:
@@ -312,7 +317,7 @@
     !insertmacro GetTimestamp $8
     FileWrite $2 "$8 phase=tar-extract-error extractor=$R3 exit=$R2 elapsed_ms=$5 reason=process-start-failed$\r$\n"
     FileClose $2
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Resource extraction failed: could not start the extractor process (exit=$R2). This is usually caused by antivirus software. LobsterAI will retry the extraction automatically on first launch; if that fails too, add the install directory to your antivirus allowlist and reinstall. Details: $APPDATA\LobsterAI\install-timing.log"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Resource extraction failed: could not start the extractor process (exit=$R2). This is usually caused by antivirus software. LobsterAI will retry the extraction automatically on first launch; if that fails too, add the install directory to your antivirus allowlist and reinstall. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
     Goto TarExtractFailed
 
   TarExtractTimeout:
@@ -321,7 +326,7 @@
     !insertmacro GetTimestamp $8
     FileWrite $2 "$8 phase=tar-extract-error extractor=$R3 exit=$R2 elapsed_ms=$5 reason=timeout$\r$\n"
     FileClose $2
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Resource extraction timed out after 10 minutes -- the extractor process appears to be blocked, usually by antivirus software. LobsterAI will retry the extraction automatically on first launch; if that fails too, add the install directory to your antivirus allowlist and reinstall. Details: $APPDATA\LobsterAI\install-timing.log"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Resource extraction timed out after 10 minutes -- the extractor process appears to be blocked, usually by antivirus software. LobsterAI will retry the extraction automatically on first launch; if that fails too, add the install directory to your antivirus allowlist and reinstall. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
     Goto TarExtractFailed
 
   TarExtractNonZero:
@@ -330,7 +335,7 @@
     !insertmacro GetTimestamp $8
     FileWrite $2 "$8 phase=tar-extract-error extractor=$R3 exit=$R2 elapsed_ms=$5 reason=nonzero-exit$\r$\n"
     FileClose $2
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Resource extraction failed (exit code $R2). LobsterAI will retry the extraction automatically on first launch; if that fails too, add the install directory to your antivirus allowlist and reinstall. Details: $APPDATA\LobsterAI\install-timing.log"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Resource extraction failed (exit code $R2). LobsterAI will retry the extraction automatically on first launch; if that fails too, add the install directory to your antivirus allowlist and reinstall. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
     Goto TarExtractFailed
 
   TarExtractSucceeded:

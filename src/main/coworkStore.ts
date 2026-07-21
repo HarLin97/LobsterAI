@@ -14,6 +14,7 @@ import {
   CoworkForkMode,
   type CoworkForkMode as CoworkForkModeType,
 } from '../shared/cowork/constants';
+import type { CoworkErrorDetail } from '../shared/cowork/errorDetail';
 import {
   type CoworkGoal,
   normalizeCoworkGoal,
@@ -428,6 +429,7 @@ export interface CoworkMessageMetadata {
   toolResult?: string;
   toolUseId?: string | null;
   error?: string;
+  errorDetail?: CoworkErrorDetail;
   isError?: boolean;
   isStreaming?: boolean;
   isFinal?: boolean;
@@ -761,6 +763,28 @@ export class CoworkStore {
 
   private getAll<T>(sql: string, params: (string | number | null)[] = []): T[] {
     return this.db.prepare(sql).all(...params) as T[];
+  }
+
+  private mapConversationMessageRows(sessionId: string, rows: CoworkMessageRow[]): CoworkMessage[] {
+    return rows.map(row => {
+      let metadata: Record<string, unknown> | undefined;
+      if (row.metadata) {
+        try {
+          metadata = JSON.parse(row.metadata);
+        } catch {
+          console.warn(
+            `[CoworkStore] corrupt metadata detected for message ${row.id} in session ${sessionId}, discarding metadata`,
+          );
+        }
+      }
+      return {
+        id: row.id,
+        type: row.type as CoworkMessageType,
+        content: row.content,
+        timestamp: row.created_at,
+        metadata,
+      };
+    });
   }
 
   private escapeLikePattern(value: string): string {
@@ -1687,6 +1711,51 @@ export class CoworkStore {
       timestamp: row.created_at,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
     }));
+  }
+
+  /**
+   * Read a bounded conversation tail independently from the renderer's mixed-message page.
+   * Channel history reconciliation uses this to compare the same-sized user/assistant window
+   * returned by the gateway without loading an unbounded transcript into memory.
+   */
+  getRecentConversationMessages(sessionId: string, limit: number): CoworkMessage[] {
+    if (!Number.isFinite(limit) || limit <= 0) return [];
+    const boundedLimit = Math.floor(limit);
+
+    const rows = this.getAll<CoworkMessageRow>(
+      `
+      SELECT id, type, content, metadata, created_at, sequence
+      FROM (
+        SELECT id, type, content, metadata, created_at, sequence, ROWID as rowid_
+        FROM cowork_messages
+        WHERE session_id = ? AND type IN ('user', 'assistant')
+        ORDER BY COALESCE(sequence, created_at) DESC, created_at DESC, ROWID DESC
+        LIMIT ?
+      )
+      ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, rowid_ ASC
+    `,
+      [sessionId, boundedLimit],
+    );
+
+    return this.mapConversationMessageRows(sessionId, rows);
+  }
+
+  /**
+   * Read the complete user/assistant transcript for a rare reconciliation fallback.
+   * Routine polling must use getRecentConversationMessages() to keep reads bounded.
+   */
+  getAllConversationMessages(sessionId: string): CoworkMessage[] {
+    const rows = this.getAll<CoworkMessageRow>(
+      `
+      SELECT id, type, content, metadata, created_at, sequence
+      FROM cowork_messages
+      WHERE session_id = ? AND type IN ('user', 'assistant')
+      ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC
+    `,
+      [sessionId],
+    );
+
+    return this.mapConversationMessageRows(sessionId, rows);
   }
 
   getSessionMessageRailIndex(sessionId: string): CoworkMessageRailIndexItem[] {

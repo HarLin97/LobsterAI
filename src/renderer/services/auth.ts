@@ -57,6 +57,32 @@ const readPositiveNumber = (value: unknown): number | undefined => (
     : undefined
 );
 
+type AuthRendererLogLevel = 'debug' | 'info' | 'warn';
+
+const writeAuthRendererLog = (
+  level: AuthRendererLogLevel,
+  message: string,
+  error?: unknown,
+): void => {
+  if (level === 'warn') {
+    if (error === undefined) {
+      console.warn(`[Auth] ${message}`);
+    } else {
+      console.warn(`[Auth] ${message}:`, error);
+    }
+  } else if (level === 'debug') {
+    console.debug(`[Auth] ${message}`);
+  } else {
+    console.log(`[Auth] ${message}`);
+  }
+
+  try {
+    window.electron?.log?.fromRenderer?.(level, 'AuthService', message);
+  } catch {
+    // Logging is best-effort and must never interrupt authentication.
+  }
+};
+
 export function mapPricingCatalogTextModelsToServerModels(
   textModels: PricingCatalogTextModel[],
 ): Model[] {
@@ -100,6 +126,7 @@ class AuthService {
   private unsubQuotaChanged: (() => void) | null = null;
   private unsubWindowState: (() => void) | null = null;
   private lastRefreshTime = 0;
+  private loginAttemptSequence = 0;
 
   private applyAuthenticatedState(
     user: UserProfile,
@@ -168,8 +195,21 @@ class AuthService {
    * Initiate login (opens system browser).
    */
   async login() {
-    const loginUrl = await this.fetchLoginUrl();
-    await window.electron.auth.login(loginUrl);
+    const attemptId = ++this.loginAttemptSequence;
+    writeAuthRendererLog('info', `login attempt ${attemptId} started`);
+
+    try {
+      const loginUrl = await this.fetchLoginUrl();
+      const result = await window.electron.auth.login(loginUrl);
+      if (result.success) {
+        writeAuthRendererLog('info', `login attempt ${attemptId} handed off to the system browser`);
+      } else {
+        writeAuthRendererLog('warn', `login attempt ${attemptId} could not open the system browser`);
+      }
+    } catch (error) {
+      writeAuthRendererLog('warn', `login attempt ${attemptId} failed before browser handoff`, error);
+      throw error;
+    }
   }
 
   /**
@@ -187,16 +227,16 @@ class AuthService {
       if (response.ok && typeof response.data === 'object' && response.data !== null) {
         const value = (response.data as any)?.data?.value;
         if (typeof value === 'string' && value.trim()) {
-          console.log('[Auth] fetched login URL from overmind');
+          writeAuthRendererLog('debug', 'resolved login URL from overmind');
           return value.trim();
         }
       }
     } catch (e) {
-      console.error('[Auth] Failed to fetch login URL from overmind:', e);
+      writeAuthRendererLog('warn', 'failed to resolve login URL from overmind', e);
     }
     // Fallback: use Portal login page directly
     const { getPortalLoginUrl } = await import('./endpoints');
-    console.log('[Auth] using fallback portal login URL');
+    writeAuthRendererLog('info', 'using fallback portal login URL');
     return getPortalLoginUrl();
   }
 
@@ -204,9 +244,11 @@ class AuthService {
    * Handle OAuth callback with auth code.
    */
   async handleCallback(code: string): Promise<boolean> {
+    writeAuthRendererLog('info', 'received login callback; starting token exchange');
     try {
       const result = await window.electron.auth.exchange(code);
       if (result.success && result.user) {
+        writeAuthRendererLog('info', 'login callback exchange succeeded');
         this.applyAuthenticatedState(
           result.user,
           result.quota,
@@ -217,8 +259,9 @@ class AuthService {
         this.refreshQuota();
         return true;
       }
+      writeAuthRendererLog('warn', 'login callback exchange was rejected');
     } catch (e) {
-      console.error('Auth callback failed:', e);
+      writeAuthRendererLog('warn', 'login callback exchange failed', e);
     }
     return false;
   }

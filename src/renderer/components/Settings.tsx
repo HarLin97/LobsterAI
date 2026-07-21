@@ -26,7 +26,11 @@ import { i18nService, LanguageType } from '../services/i18n';
 import { imService } from '../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
 import { formatShortcutForDisplay, getShortcutConflictSignature, matchesShortcut } from '../services/shortcuts';
-import { themeService } from '../services/theme';
+import {
+  type ThemeAppearanceAppliedDetail,
+  themeService,
+  ThemeServiceEvent,
+} from '../services/theme';
 import { applyTypographyPreferences } from '../services/typography';
 import type { RootState } from '../store';
 import { selectCoworkConfig } from '../store/selectors/coworkSelectors';
@@ -78,6 +82,8 @@ import {
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
 import EmailSkillConfig from './skills/EmailSkillConfig';
+import SkinPresentationScope from './skin/SkinPresentationScope';
+import SkinSettingsSection from './skin/SkinSettingsSection';
 import ThemedSelect from './ui/ThemedSelect';
 
 type TabType = 'general' | 'appearance' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'email' | 'plugins' | 'about';
@@ -876,6 +882,7 @@ export type SettingsOpenOptions = {
 
 interface SettingsProps extends SettingsOpenOptions {
   onClose: () => void;
+  onStartAiSkin?: (text: string, kitId: string) => void;
   initialTabRequestId?: number;
   onUpdateFound?: (info: AppUpdateInfo) => void;
   enterpriseConfig?: {
@@ -1347,6 +1354,7 @@ const SettingsNumberInputRow: React.FC<{
 
 const Settings: React.FC<SettingsProps> = ({
   onClose,
+  onStartAiSkin,
   initialTab,
   initialTabRequestId,
   notice,
@@ -1401,6 +1409,25 @@ const Settings: React.FC<SettingsProps> = ({
   const initialCodeFontSizeRef = useRef<number>(FontPreferences.CodeFontSizeDefault);
   const initialLanguageRef = useRef<LanguageType>(i18nService.getLanguage());
   const didSaveRef = useRef(false);
+
+  useEffect(() => {
+    const handleAppearanceApplied = (event: Event) => {
+      const detail = (event as CustomEvent<ThemeAppearanceAppliedDetail>).detail;
+      if (!detail) {
+        return;
+      }
+
+      initialThemeRef.current = detail.appearance;
+      initialThemeIdRef.current = detail.themeId;
+      setTheme(detail.appearance);
+      setThemeId(detail.themeId);
+    };
+
+    window.addEventListener(ThemeServiceEvent.AppearanceApplied, handleAppearanceApplied);
+    return () => {
+      window.removeEventListener(ThemeServiceEvent.AppearanceApplied, handleAppearanceApplied);
+    };
+  }, []);
 
   // Plugin settings handle (deferred save)
   const pluginsSettingsRef = useRef<PluginsSettingsHandle>(null);
@@ -2169,8 +2196,6 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   useEffect(() => {
-    const initialThemeId = initialThemeIdRef.current;
-    const initialTheme = initialThemeRef.current;
     const initialUiFontSize = initialUiFontSizeRef.current;
     const initialCodeFontSize = initialCodeFontSizeRef.current;
     const initialLanguage = initialLanguageRef.current;
@@ -2178,7 +2203,7 @@ const Settings: React.FC<SettingsProps> = ({
       if (didSaveRef.current) {
         return;
       }
-      themeService.restoreTheme(initialThemeId, initialTheme);
+      themeService.restoreTheme(initialThemeIdRef.current, initialThemeRef.current);
       applyTypographyPreferences({
         uiFontSize: initialUiFontSize,
         codeFontSize: initialCodeFontSize,
@@ -4594,6 +4619,8 @@ const Settings: React.FC<SettingsProps> = ({
           );
         })()}
 
+        <SkinSettingsSection onStartAiSkin={onStartAiSkin} />
+
         <div className="mt-5 divide-y divide-border rounded-xl border border-border bg-surface">
           <div className="px-4 py-3">
             <SettingsNumberInputRow
@@ -5742,7 +5769,9 @@ const Settings: React.FC<SettingsProps> = ({
       overlayClassName="fixed inset-0 z-50 modal-backdrop flex items-center justify-center p-3 sm:p-4"
       className="w-[calc(100vw-1.5rem)] max-w-[900px] min-w-0 sm:w-[calc(100vw-2rem)]"
     >
-      <div
+      <SkinPresentationScope
+        enabled
+        data-skin-settings="true"
         className="relative flex h-[80vh] max-h-[calc(100vh-2rem)] w-full min-w-0 rounded-2xl border-border border shadow-modal overflow-hidden modal-content"
         onClick={handleSettingsClick}
       >
@@ -6168,7 +6197,7 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
-      </div>
+      </SkinPresentationScope>
     </Modal>
   );
 };

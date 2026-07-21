@@ -5,7 +5,10 @@ import path from 'path';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 
-import { type AppUpdateSource } from '../../shared/appUpdate/constants';
+import {
+  APP_UPDATE_ELEVATION_DECLINED_ERROR,
+  type AppUpdateSource,
+} from '../../shared/appUpdate/constants';
 
 export interface AppUpdateDownloadProgress {
   received: number;
@@ -834,21 +837,119 @@ async function installMacDmg(dmgPath: string): Promise<void> {
   }
 }
 
+/**
+ * NSIS silent-upgrade arguments understood by the electron-builder assisted
+ * installer: `/S` suppresses the whole wizard and reuses the install directory
+ * recorded in the registry, `--force-run` relaunches the app after the files
+ * are in place (via ExecShellAsUser, so the new instance is not elevated), and
+ * `--updated` marks the run as an upgrade for the template's shortcut/page
+ * logic and is forwarded to the relaunched app as an argv flag.
+ */
+export const WINDOWS_SILENT_INSTALL_ARGS = ['/S', '--force-run', '--updated'] as const;
+
+/** Win32 ERROR_CANCELLED: the user declined the UAC elevation prompt. */
+export const WINDOWS_UAC_DECLINED_EXIT_CODE = 1223;
+
+/**
+ * How long the hidden launcher may sit on the UAC prompt. The secure-desktop
+ * consent dialog auto-cancels itself after ~2 minutes; 5 minutes leaves margin
+ * so a slow decision is never mistaken for a hang.
+ */
+const WINDOWS_INSTALLER_LAUNCH_TIMEOUT_MS = 300_000;
+
+/**
+ * The installer's manifest requests administrator (customHeader in
+ * scripts/nsis-installer.nsh), so CreateProcess-based spawns fail with
+ * ERROR_ELEVATION_REQUIRED instead of showing the UAC prompt; only
+ * ShellExecute semantics can elevate, and shell.openPath cannot pass the
+ * silent-install arguments. PowerShell's Start-Process goes through
+ * ShellExecute and reports a declined prompt as Win32Exception 1223, which
+ * this script turns into a distinct exit code — the exception *message* is
+ * localized by the OS, so the native error code is the only stable signal.
+ */
+export function buildWindowsSilentInstallScript(exePath: string): string {
+  const escapedPath = exePath.replace(/'/g, "''");
+  const argumentList = WINDOWS_SILENT_INSTALL_ARGS.map(arg => `'${arg}'`).join(',');
+  return (
+    `$ErrorActionPreference = 'Stop'; ` +
+    `try { Start-Process -FilePath '${escapedPath}' -ArgumentList ${argumentList} } ` +
+    `catch { ` +
+    `$native = $_.Exception.NativeErrorCode; ` +
+    `if ($null -eq $native -and $_.Exception.InnerException) { $native = $_.Exception.InnerException.NativeErrorCode }; ` +
+    `[Console]::Error.WriteLine($_.Exception.Message); ` +
+    `if ($native -eq ${WINDOWS_UAC_DECLINED_EXIT_CODE}) { exit ${WINDOWS_UAC_DECLINED_EXIT_CODE} }; ` +
+    `exit 1 }`
+  );
+}
+
+function execFileWithExitCode(
+  file: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<{ code: number; stderr: string }> {
+  return new Promise(resolve => {
+    execFile(
+      file,
+      args,
+      { maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs, windowsHide: true },
+      (error, _stdout, stderr) => {
+        if (!error) {
+          resolve({ code: 0, stderr });
+          return;
+        }
+        // Non-numeric codes (spawn failures like ENOENT, timeout kills) all
+        // collapse into the generic-failure code 1.
+        const rawCode = (error as { code?: unknown }).code;
+        resolve({
+          code: typeof rawCode === 'number' ? rawCode : 1,
+          stderr: stderr || error.message,
+        });
+      },
+    );
+  });
+}
+
 async function installWindowsNsis(exePath: string): Promise<void> {
   // Launch the installer while the app still owns the foreground so the UAC
   // elevation prompt (the installer requests admin) appears in front of the
-  // user. Launching it from a hidden background process after the app exited
-  // left the prompt flashing in the taskbar where users never noticed it, so
-  // the elevation timed out and the update silently went nowhere.
+  // user. The install itself is silent: no wizard, existing install directory,
+  // automatic relaunch. The whole update needs no interaction beyond the
+  // elevation consent.
   //
-  // Quitting in parallel with the installer starting is safe: once the user
-  // confirms the wizard, the NSIS customCheckAppRunning macro stops remaining
-  // LobsterAI processes by image name and polls until they are gone before
-  // replacing files. The installer process itself is named lobsterai-update-*,
-  // so it is not affected by that kill. Until the user confirms, the installer
-  // touches nothing, so cancelling the wizard leaves the current install
-  // usable (this app instance has quit, but the user can simply relaunch it).
-  console.log(`[AppUpdate] Launching Windows installer in the foreground: ${exePath}`);
+  // The app quits only after the elevated process actually started: a declined
+  // prompt keeps this instance running so the coordinator returns to Ready and
+  // offers a retry instead of quitting into nothing.
+  //
+  // Quitting in parallel with the installer running is safe: the NSIS
+  // customCheckAppRunning macro stops remaining LobsterAI processes by image
+  // name and polls until they are gone before replacing files. The installer
+  // process itself is named lobsterai-update-*, so it is not affected by that
+  // kill.
+  console.log(`[AppUpdate] Launching Windows installer silently: ${exePath}`);
+  const launch = await execFileWithExitCode(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', buildWindowsSilentInstallScript(exePath)],
+    WINDOWS_INSTALLER_LAUNCH_TIMEOUT_MS,
+  );
+
+  if (launch.code === 0) {
+    console.log('[AppUpdate] Silent installer launched, quitting app');
+    app.quit();
+    return;
+  }
+
+  if (launch.code === WINDOWS_UAC_DECLINED_EXIT_CODE) {
+    // The user said no. Do not fall back to the interactive installer here —
+    // it would immediately raise a second elevation prompt.
+    console.warn('[AppUpdate] silent install declined at the UAC prompt');
+    throw new Error(APP_UPDATE_ELEVATION_DECLINED_ERROR);
+  }
+
+  // PowerShell unavailable or blocked (policy, security software): fall back
+  // to the interactive wizard so the user still has an update path.
+  console.error(
+    `[AppUpdate] silent installer launch failed (code=${launch.code}): ${launch.stderr.trim()}`,
+  );
   const launchError = await shell.openPath(exePath);
   if (launchError) {
     console.error(`[AppUpdate] failed to launch installer: ${launchError}`);
@@ -858,6 +959,6 @@ async function installWindowsNsis(exePath: string): Promise<void> {
     throw new Error(launchError);
   }
 
-  console.log('[AppUpdate] Installer launched, quitting app');
+  console.log('[AppUpdate] Installer launched interactively, quitting app');
   app.quit();
 }

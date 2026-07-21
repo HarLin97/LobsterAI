@@ -1,8 +1,10 @@
+import type { CoworkBrowserAnnotationMessageBatch } from '../../shared/cowork/browserAnnotations';
 import type {
   CoworkContextUsageFailureReason,
   CoworkContextUsageSource,
   CoworkForkMode,
 } from '../../shared/cowork/constants';
+import type { CoworkErrorDetail } from '../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../shared/cowork/goal';
 import type {
   CoworkImageAttachmentPayload,
@@ -69,6 +71,7 @@ export interface CoworkMessageMetadata {
   toolResult?: string;
   toolUseId?: string | null;
   error?: string;
+  errorDetail?: CoworkErrorDetail;
   isError?: boolean;
   isStreaming?: boolean;
   isFinal?: boolean;
@@ -89,6 +92,7 @@ export interface CoworkMessageMetadata {
   model?: string;
   agentName?: string;
   selectedTextSnippets?: CoworkSelectedTextSnippet[];
+  browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
   goalSetting?: {
     action: 'start' | 'create' | 'set';
     objective: string;
@@ -363,6 +367,7 @@ export interface CoworkStartOptions {
   mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
   mediaReferences?: import('./mediaGeneration').MediaAttachmentRef[];
   selectedTextSnippets?: CoworkSelectedTextSnippet[];
+  browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
 }
 
 // Continue session options
@@ -379,6 +384,7 @@ export interface CoworkContinueOptions {
   mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
   mediaReferences?: import('./mediaGeneration').MediaAttachmentRef[];
   selectedTextSnippets?: CoworkSelectedTextSnippet[];
+  browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
 }
 
 // IPC result types

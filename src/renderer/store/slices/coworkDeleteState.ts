@@ -9,6 +9,7 @@ type CoworkDeleteStateShape = {
   currentSession: SessionLike | null;
   isStreaming: boolean;
   draftSelectedTextSnippets?: Record<string, unknown>;
+  draftBrowserAnnotationBatches?: Record<string, unknown>;
 };
 
 export const removeSessionFromState = (
@@ -19,6 +20,9 @@ export const removeSessionFromState = (
   state.unreadSessionIds = state.unreadSessionIds.filter((id) => id !== sessionId);
   if (state.draftSelectedTextSnippets) {
     delete state.draftSelectedTextSnippets[sessionId];
+  }
+  if (state.draftBrowserAnnotationBatches) {
+    delete state.draftBrowserAnnotationBatches[sessionId];
   }
 
   if (state.currentSessionId === sessionId) {
@@ -38,6 +42,11 @@ export const removeSessionsFromState = (
   if (state.draftSelectedTextSnippets) {
     for (const sessionId of sessionIds) {
       delete state.draftSelectedTextSnippets[sessionId];
+    }
+  }
+  if (state.draftBrowserAnnotationBatches) {
+    for (const sessionId of sessionIds) {
+      delete state.draftBrowserAnnotationBatches[sessionId];
     }
   }
 
