@@ -55,6 +55,7 @@ import {
   MAC_SWAP_ROLLED_BACK_EXIT_CODE,
   MAC_SWAP_STAGING_INFIX,
   parseHdiutilAttachOutput,
+  WINDOWS_NO_DEFENDER_EXCLUSION_ARG,
   WINDOWS_UAC_DECLINED_EXIT_CODE,
 } from './appUpdateInstaller';
 
@@ -160,6 +161,26 @@ describe('Windows update install', () => {
     expect(cpMocks.execFile).not.toHaveBeenCalled();
     expect(mocks.openPath).not.toHaveBeenCalled();
     expect(mocks.quit).not.toHaveBeenCalled();
+  });
+
+  test('forwards the enterprise no-exclusion switch to the installer', async () => {
+    mockSilentLaunchResult(null);
+
+    await installUpdate(INSTALLER_PATH, { noDefenderExclusion: true });
+
+    const [, args] = cpMocks.execFile.mock.calls[0] as [string, string[]];
+    const script = args[args.length - 1];
+    expect(script).toContain(`'/S','--force-run','--updated','${WINDOWS_NO_DEFENDER_EXCLUSION_ARG}'`);
+  });
+
+  test('omits the no-exclusion switch by default', async () => {
+    mockSilentLaunchResult(null);
+
+    await installUpdate(INSTALLER_PATH);
+
+    const [, args] = cpMocks.execFile.mock.calls[0] as [string, string[]];
+    const script = args[args.length - 1];
+    expect(script).not.toContain(WINDOWS_NO_DEFENDER_EXCLUSION_ARG);
   });
 });
 

@@ -13,6 +13,12 @@ export type EnterpriseManifest = {
   name: string;
   ui?: Record<string, EnterpriseUIAction>;
   disableUpdate?: boolean;
+  /**
+   * Windows only: forbid the update installer from adding Windows Defender
+   * exclusions during installation (passed through as /NoDefenderExclusion).
+   * Installs are slower but generate zero AV-configuration events.
+   */
+  disableDefenderExclusion?: boolean;
   sync: {
     openclaw: boolean;
     skills: boolean | 'merge' | 'overwrite';

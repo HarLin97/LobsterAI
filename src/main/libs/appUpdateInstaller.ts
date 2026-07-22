@@ -222,7 +222,15 @@ export async function downloadUpdate(
   }
 }
 
-export async function installUpdate(filePath: string): Promise<void> {
+export interface InstallUpdateOptions {
+  /** Windows only: forward /NoDefenderExclusion to the installer (enterprise opt-out). */
+  noDefenderExclusion?: boolean;
+}
+
+export async function installUpdate(
+  filePath: string,
+  options?: InstallUpdateOptions,
+): Promise<void> {
   console.log(`[AppUpdate] Installing update from: ${filePath}`);
   console.log(`[AppUpdate] Platform: ${process.platform}, Arch: ${process.arch}`);
 
@@ -244,7 +252,7 @@ export async function installUpdate(filePath: string): Promise<void> {
     return installMacDmg(filePath);
   }
   if (process.platform === 'win32') {
-    return installWindowsNsis(filePath);
+    return installWindowsNsis(filePath, options);
   }
   throw new Error('Unsupported platform');
 }
@@ -847,6 +855,9 @@ async function installMacDmg(dmgPath: string): Promise<void> {
  */
 export const WINDOWS_SILENT_INSTALL_ARGS = ['/S', '--force-run', '--updated'] as const;
 
+/** Installer switch that forbids adding Windows Defender exclusions. */
+export const WINDOWS_NO_DEFENDER_EXCLUSION_ARG = '/NoDefenderExclusion';
+
 /** Win32 ERROR_CANCELLED: the user declined the UAC elevation prompt. */
 export const WINDOWS_UAC_DECLINED_EXIT_CODE = 1223;
 
@@ -867,9 +878,14 @@ const WINDOWS_INSTALLER_LAUNCH_TIMEOUT_MS = 300_000;
  * this script turns into a distinct exit code — the exception *message* is
  * localized by the OS, so the native error code is the only stable signal.
  */
-export function buildWindowsSilentInstallScript(exePath: string): string {
+export function buildWindowsSilentInstallScript(
+  exePath: string,
+  extraArgs: readonly string[] = [],
+): string {
   const escapedPath = exePath.replace(/'/g, "''");
-  const argumentList = WINDOWS_SILENT_INSTALL_ARGS.map(arg => `'${arg}'`).join(',');
+  const argumentList = [...WINDOWS_SILENT_INSTALL_ARGS, ...extraArgs]
+    .map(arg => `'${arg}'`)
+    .join(',');
   return (
     `$ErrorActionPreference = 'Stop'; ` +
     `try { Start-Process -FilePath '${escapedPath}' -ArgumentList ${argumentList} } ` +
@@ -909,7 +925,10 @@ function execFileWithExitCode(
   });
 }
 
-async function installWindowsNsis(exePath: string): Promise<void> {
+async function installWindowsNsis(
+  exePath: string,
+  options?: InstallUpdateOptions,
+): Promise<void> {
   // Launch the installer while the app still owns the foreground so the UAC
   // elevation prompt (the installer requests admin) appears in front of the
   // user. The install itself is silent: no wizard, existing install directory,
@@ -926,9 +945,12 @@ async function installWindowsNsis(exePath: string): Promise<void> {
   // process itself is named lobsterai-update-*, so it is not affected by that
   // kill.
   console.log(`[AppUpdate] Launching Windows installer silently: ${exePath}`);
+  const extraArgs = options?.noDefenderExclusion === true
+    ? [WINDOWS_NO_DEFENDER_EXCLUSION_ARG]
+    : [];
   const launch = await execFileWithExitCode(
     'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', buildWindowsSilentInstallScript(exePath)],
+    ['-NoProfile', '-NonInteractive', '-Command', buildWindowsSilentInstallScript(exePath, extraArgs)],
     WINDOWS_INSTALLER_LAUNCH_TIMEOUT_MS,
   );
 
@@ -946,7 +968,10 @@ async function installWindowsNsis(exePath: string): Promise<void> {
   }
 
   // PowerShell unavailable or blocked (policy, security software): fall back
-  // to the interactive wizard so the user still has an update path.
+  // to the interactive wizard so the user still has an update path. Known
+  // trade-off: shell.openPath cannot carry arguments, so this path ignores
+  // noDefenderExclusion — acceptable for the rare triple overlap of
+  // enterprise opt-out + broken PowerShell + interactive fallback.
   console.error(
     `[AppUpdate] silent installer launch failed (code=${launch.code}): ${launch.stderr.trim()}`,
   );

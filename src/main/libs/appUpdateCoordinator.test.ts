@@ -228,4 +228,33 @@ describe('AppUpdateCoordinator', () => {
 
     expect(coordinator.consumeCompletedUpdateVersion()).toBeNull();
   });
+
+  test('forwards the enterprise Defender-exclusion opt-out to the installer', async () => {
+    const store = createStoreStub();
+    store.set('enterprise_config', { disableDefenderExclusion: true });
+    seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const coordinator = new AppUpdateCoordinator(store);
+    mocks.installUpdate.mockResolvedValue(undefined);
+
+    await coordinator.installReadyUpdate();
+
+    expect(mocks.installUpdate).toHaveBeenCalledWith(
+      expect.any(String),
+      { noDefenderExclusion: true },
+    );
+  });
+
+  test('does not request the Defender opt-out without enterprise config', async () => {
+    const store = createStoreStub();
+    seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const coordinator = new AppUpdateCoordinator(store);
+    mocks.installUpdate.mockResolvedValue(undefined);
+
+    await coordinator.installReadyUpdate();
+
+    expect(mocks.installUpdate).toHaveBeenCalledWith(
+      expect.any(String),
+      { noDefenderExclusion: false },
+    );
+  });
 });
