@@ -199,4 +199,62 @@ describe('AppUpdateCoordinator', () => {
     expect(state.status).toBe(AppUpdateStatus.Ready);
     expect(state.installIncomplete).toBe(true);
   });
+
+  test('reports a completed update once when relaunched as the attempted version', async () => {
+    const store = createStoreStub();
+    seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const coordinator = new AppUpdateCoordinator(store);
+    mocks.installUpdate.mockResolvedValue(undefined);
+    await coordinator.installReadyUpdate();
+
+    // The installer finished and relaunched the app as the new version.
+    mocks.getVersion.mockReturnValue(READY_VERSION);
+    const relaunched = new AppUpdateCoordinator(store);
+
+    expect(relaunched.getState().status).toBe(AppUpdateStatus.Idle);
+    expect(relaunched.consumeCompletedUpdateVersion()).toBe(READY_VERSION);
+    expect(relaunched.consumeCompletedUpdateVersion()).toBeNull();
+    expect(store.get(readyFileStoreKey(AppUpdateSource.Auto))).toBeUndefined();
+  });
+
+  test('does not report a completed update without a prior install attempt', () => {
+    const store = createStoreStub();
+    seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+
+    // App is already on the ready version, but no install was ever launched
+    // (e.g. the user updated manually with the wizard from a browser download).
+    mocks.getVersion.mockReturnValue(READY_VERSION);
+    const coordinator = new AppUpdateCoordinator(store);
+
+    expect(coordinator.consumeCompletedUpdateVersion()).toBeNull();
+  });
+
+  test('forwards the enterprise Defender-exclusion opt-out to the installer', async () => {
+    const store = createStoreStub();
+    store.set('enterprise_config', { disableDefenderExclusion: true });
+    seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const coordinator = new AppUpdateCoordinator(store);
+    mocks.installUpdate.mockResolvedValue(undefined);
+
+    await coordinator.installReadyUpdate();
+
+    expect(mocks.installUpdate).toHaveBeenCalledWith(
+      expect.any(String),
+      { noDefenderExclusion: true },
+    );
+  });
+
+  test('does not request the Defender opt-out without enterprise config', async () => {
+    const store = createStoreStub();
+    seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const coordinator = new AppUpdateCoordinator(store);
+    mocks.installUpdate.mockResolvedValue(undefined);
+
+    await coordinator.installReadyUpdate();
+
+    expect(mocks.installUpdate).toHaveBeenCalledWith(
+      expect.any(String),
+      { noDefenderExclusion: false },
+    );
+  });
 });

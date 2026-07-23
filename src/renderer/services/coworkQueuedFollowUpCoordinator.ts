@@ -274,6 +274,7 @@ export class CoworkQueuedFollowUpCoordinator {
         mediaSelection: queuedSteer.mediaSelection,
         mediaReferences: prepared.payload.mediaReferences,
         selectedTextSnippets: prepared.payload.selectedTextSnippets,
+        browserAnnotations: queuedSteer.browserAnnotations,
       });
       if (operation.cancelled) {
         this.startingQueuedTurnSessionIds.delete(sessionId);

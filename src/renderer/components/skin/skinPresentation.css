@@ -2,6 +2,8 @@
   background-color: var(--lobster-skin-panel) !important;
 }
 
+[data-skin-presentation="immersive_shell"][data-skin-settings="true"],
+[data-skin-presentation="immersive_shell"][data-skin-task-search="true"],
 [data-skin-presentation="immersive_shell"]
   :is(
     [data-skin-sidebar],
@@ -36,6 +38,15 @@
   --lobster-input-border: var(--lobster-skin-border);
   --lobster-scroll-thumb: color-mix(in srgb, var(--lobster-skin-accent) 48%, transparent);
   --lobster-scroll-thumb-hover: var(--lobster-skin-accent);
+}
+
+[data-skin-presentation="immersive_shell"][data-skin-task-search="true"] {
+  background-color: var(--lobster-skin-panel) !important;
+}
+
+[data-skin-presentation="immersive_shell"][data-skin-task-search="true"]
+  [data-skin-search-result-active="true"] {
+  background-color: var(--lobster-skin-panel-raised) !important;
 }
 
 [data-skin-presentation="immersive_shell"] [data-skin-cowork-frame="true"],
@@ -91,6 +102,10 @@
 
 [data-skin-presentation="immersive_shell"] [data-skin-session-titlebar] {
   border-color: color-mix(in srgb, var(--lobster-skin-border) 55%, transparent) !important;
+}
+
+[data-skin-presentation="immersive_shell"] [data-skin-artifact-add-tab="true"] {
+  background-color: transparent !important;
 }
 
 [data-skin-presentation="immersive_shell"] [data-skin-sidebar] button:hover {

@@ -4,6 +4,13 @@ import { i18nService } from '@/services/i18n';
 import type { Artifact } from '@/types/artifact';
 
 import {
+  ArtifactFileShareIntent,
+  type ArtifactFileShareIntent as ArtifactFileShareIntentValue,
+  ArtifactFileSharePrimaryAction,
+  getArtifactFileSharePrimaryAction,
+  isArtifactFileSharePermissionOptionDisabled,
+} from './artifactFileShareDialogModel';
+import {
   ArtifactFileSharePermission,
   type ArtifactFileSharePermission as ArtifactFileSharePermissionValue,
 } from './artifactFileSharePermission';
@@ -14,7 +21,6 @@ const t = (key: string) => i18nService.t(key);
 export const ArtifactFileSharePhase = {
   Preparing: 'preparing',
   Ready: 'ready',
-  Entitlement: 'entitlement',
   Error: 'error',
 } as const;
 
@@ -51,24 +57,28 @@ interface ArtifactFileShareDialogProps {
   artifact: Artifact;
   phase: ArtifactFileSharePhase;
   operation?: ArtifactFileShareOperation;
-  permission: ArtifactFileSharePermissionValue;
-  pendingPermission?: ArtifactFileSharePermissionValue;
+  intent?: ArtifactFileShareIntentValue;
+  committedPermission?: ArtifactFileSharePermissionValue;
+  selectedPermission: ArtifactFileSharePermissionValue;
+  isPermissionDirty: boolean;
   stoppedNotice?: string;
   isPermissionLocked?: boolean;
   message?: string;
   error?: string;
   shareCodeUnavailable?: boolean;
   canRetry: boolean;
+  canCreate: boolean;
+  canSubmitPermission: boolean;
   canCopy: boolean;
   canUpdateFile: boolean;
   copyStatus: ArtifactFileShareCopyStatus;
   updateStatus: ArtifactFileShareUpdateStatus;
-  showSubscriptionAction?: boolean;
   closeButtonRef: RefObject<HTMLButtonElement>;
   onClose: () => void;
   onRetry: () => void;
-  onOpenSubscription: () => void;
   onPermissionChange: (permission: ArtifactFileSharePermissionValue) => void;
+  onCreate: () => void;
+  onSubmitPermission: () => void;
   onUpdateFile: () => void;
   onCopy: () => void;
 }
@@ -118,33 +128,42 @@ const ArtifactFileShareDialog = ({
   artifact,
   phase,
   operation,
-  permission,
-  pendingPermission,
+  intent,
+  committedPermission,
+  selectedPermission,
+  isPermissionDirty,
   stoppedNotice,
   isPermissionLocked = false,
   message,
   error,
   shareCodeUnavailable = false,
   canRetry,
+  canCreate,
+  canSubmitPermission,
   canCopy,
   canUpdateFile,
   copyStatus,
   updateStatus,
-  showSubscriptionAction = false,
   closeButtonRef,
   onClose,
   onRetry,
-  onOpenSubscription,
   onPermissionChange,
+  onCreate,
+  onSubmitPermission,
   onUpdateFile,
   onCopy,
 }: ArtifactFileShareDialogProps) => {
   const isPreparing = phase === ArtifactFileSharePhase.Preparing;
   const isReady = phase === ArtifactFileSharePhase.Ready;
+  const isCreating = operation === ArtifactFileShareOperation.Creating;
   const isPermissionUpdating = operation === ArtifactFileShareOperation.Permission;
   const isUpdatingFile = operation === ArtifactFileShareOperation.UpdateFile;
   const permissionDisabled = !isReady || Boolean(operation) || isPermissionLocked;
-  const displayedPermission = pendingPermission ?? permission;
+  const primaryAction = getArtifactFileSharePrimaryAction(
+    intent,
+    isReady,
+    isPermissionDirty,
+  );
   const copyButtonLabel =
     copyStatus === ArtifactFileShareCopyStatus.Copied
       ? t('copied')
@@ -178,7 +197,8 @@ const ArtifactFileShareDialog = ({
             ref={closeButtonRef}
             type="button"
             onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-foreground"
+            disabled={Boolean(operation)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             aria-label={t('close')}
             title={t('close')}
           >
@@ -208,13 +228,16 @@ const ArtifactFileShareDialog = ({
             aria-label={t('artifactFileShareAccessPermission')}
           >
             {PERMISSION_OPTIONS.map(option => {
-              const isSelected = displayedPermission === option.value;
-              const isPending = isPermissionUpdating && pendingPermission === option.value;
+              const isSelected = selectedPermission === option.value;
+              const isPending = isPermissionUpdating && selectedPermission === option.value;
+              const isOptionDisabled =
+                permissionDisabled ||
+                isArtifactFileSharePermissionOptionDisabled(intent, option.value);
               return (
                 <label
                   key={option.value}
                   className={`inline-flex min-h-10 items-center gap-2 text-sm transition-colors ${
-                    permissionDisabled
+                    isOptionDisabled
                       ? 'cursor-not-allowed text-muted'
                       : 'cursor-pointer text-foreground'
                   }`}
@@ -224,7 +247,7 @@ const ArtifactFileShareDialog = ({
                     name="artifact-file-share-permission"
                     value={option.value}
                     checked={isSelected}
-                    disabled={permissionDisabled}
+                    disabled={isOptionDisabled}
                     onChange={() => onPermissionChange(option.value)}
                     className="h-4 w-4 accent-primary"
                   />
@@ -248,12 +271,15 @@ const ArtifactFileShareDialog = ({
             {!isPreparing && isPermissionUpdating && !error && (
               <span role="status">{t('htmlShareAccessModeUpdating')}</span>
             )}
+            {!isPreparing && isCreating && !error && (
+              <span role="status">{t('artifactFileShareCreating')}</span>
+            )}
             {!isPreparing && error && (
               <span className="text-red-500" role="alert">
                 {error}
               </span>
             )}
-            {!isPreparing && !error && !isPermissionUpdating && message && (
+            {!isPreparing && !error && !isPermissionUpdating && !isCreating && message && (
               <span role="status">{message}</span>
             )}
             {!isPreparing && !error && !message && shareCodeUnavailable && (
@@ -272,43 +298,58 @@ const ArtifactFileShareDialog = ({
               {t('artifactFileShareRetry')}
             </button>
           )}
-          {phase === ArtifactFileSharePhase.Entitlement && showSubscriptionAction && (
+          {isReady && intent === ArtifactFileShareIntent.Manage && (
             <button
               type="button"
-              onClick={onOpenSubscription}
-              className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover"
+              onClick={onUpdateFile}
+              disabled={!canUpdateFile || Boolean(operation)}
+              title={
+                committedPermission === ArtifactFileSharePermission.Stopped
+                  ? t('htmlShareDisabledCannotUpdate')
+                  : undefined
+              }
+              className="inline-flex h-10 min-w-[96px] items-center justify-center rounded-lg border border-border bg-background px-4 text-sm font-medium text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {t('htmlShareOpenSubscription')}
+              {updateButtonLabel}
             </button>
           )}
-          {(isPreparing || isReady) && (
-            <>
-              <button
-                type="button"
-                onClick={onUpdateFile}
-                disabled={!canUpdateFile || Boolean(operation)}
-                title={
-                  permission === ArtifactFileSharePermission.Stopped
-                    ? t('htmlShareDisabledCannotUpdate')
-                    : undefined
-                }
-                className="inline-flex h-10 min-w-[96px] items-center justify-center rounded-lg border border-border bg-background px-4 text-sm font-medium text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {updateButtonLabel}
-              </button>
-              <button
-                type="button"
-                onClick={onCopy}
-                disabled={!canCopy || Boolean(operation)}
-                className={`inline-flex h-10 min-w-[104px] items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                  copyStatus === ArtifactFileShareCopyStatus.Failed
-                    ? 'bg-red-500 text-white hover:bg-red-500/90'
-                    : 'bg-primary text-primary-foreground hover:bg-primary-hover'
-                }`}
-              >
-                {copyButtonLabel}
-              </button>
-            </>
+          {primaryAction === ArtifactFileSharePrimaryAction.Create && (
+            <button
+              type="button"
+              onClick={onCreate}
+              disabled={!canCreate || Boolean(operation)}
+              className="inline-flex h-10 min-w-[104px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isCreating
+                ? t('artifactFileShareCreating')
+                : t('artifactFileShareCreateAction')}
+            </button>
+          )}
+          {primaryAction === ArtifactFileSharePrimaryAction.UpdatePermission && (
+            <button
+              type="button"
+              onClick={onSubmitPermission}
+              disabled={!canSubmitPermission || Boolean(operation)}
+              className="inline-flex h-10 min-w-[128px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isPermissionUpdating
+                ? t('artifactFileSharePermissionUpdating')
+                : t('artifactFileShareUpdatePermissionAction')}
+            </button>
+          )}
+          {primaryAction === ArtifactFileSharePrimaryAction.Copy && (
+            <button
+              type="button"
+              onClick={onCopy}
+              disabled={!canCopy || Boolean(operation)}
+              className={`inline-flex h-10 min-w-[104px] items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                copyStatus === ArtifactFileShareCopyStatus.Failed
+                  ? 'bg-red-500 text-white hover:bg-red-500/90'
+                  : 'bg-primary text-primary-foreground hover:bg-primary-hover'
+              }`}
+            >
+              {copyButtonLabel}
+            </button>
           )}
         </div>
       </div>

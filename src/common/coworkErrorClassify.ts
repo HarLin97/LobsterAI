@@ -3,6 +3,9 @@
  * Used by both renderer (UI) and main process (IM replies).
  */
 
+import { OpenClawGatewayFailureKind } from '../shared/openclawEngine/constants';
+import { OpenClawTranscriptSafetyErrorCode } from '../shared/openclawTranscript/constants';
+
 export const CoworkErrorI18nKey = {
   AuthInvalid: 'coworkErrorAuthInvalid',
   OAuthInvalid: 'coworkErrorOAuthInvalid',
@@ -13,6 +16,8 @@ export const CoworkErrorI18nKey = {
   RateLimit: 'coworkErrorRateLimit',
   NetworkError: 'coworkErrorNetworkError',
   ServerError: 'coworkErrorServerError',
+  TranscriptOversized: 'coworkErrorTranscriptOversized',
+  GatewayHeapOutOfMemory: 'coworkErrorGatewayHeapOutOfMemory',
 } as const;
 
 const LOBSTERAI_QUOTA_EXHAUSTED_PATTERN =
@@ -44,6 +49,8 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   // Model not found: standard, Qwen, Ollama
   [/model.*not.*(found|exist)/i, 'coworkErrorModelNotFound'],
   // Gateway / connection issues
+  [new RegExp(OpenClawTranscriptSafetyErrorCode.ActiveTranscriptOversized, 'i'), CoworkErrorI18nKey.TranscriptOversized],
+  [new RegExp(`gatewayFailureKind=${OpenClawGatewayFailureKind.HeapOutOfMemory}|JavaScript heap out of memory`, 'i'), CoworkErrorI18nKey.GatewayHeapOutOfMemory],
   [/gateway request timeout for sessions\.patch/i, 'coworkGatewaySessionSyncTimeout'],
   [/gateway.*disconnect|client disconnected/i, 'coworkErrorGatewayDisconnected'],
   [/service restart/i, 'coworkErrorServiceRestart'],

@@ -18,6 +18,7 @@ import { OpenClawEnginePhase, OpenClawGatewayRepairErrorCode } from '../../share
 import { ProviderAuthType, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, normalizeFontPreference, ShortcutAction, type ShortcutConfig } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import { useSkin } from '../providers/SkinProvider';
 import { apiService } from '../services/api';
 import { configService } from '../services/config';
 import { coworkService } from '../services/cowork';
@@ -27,7 +28,7 @@ import { imService } from '../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
 import { formatShortcutForDisplay, getShortcutConflictSignature, matchesShortcut } from '../services/shortcuts';
 import {
-  type ThemeAppearanceAppliedDetail,
+  type ThemeDefaultChangedDetail,
   themeService,
   ThemeServiceEvent,
 } from '../services/theme';
@@ -82,6 +83,7 @@ import {
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
 import EmailSkillConfig from './skills/EmailSkillConfig';
+import SkinPresentationScope from './skin/SkinPresentationScope';
 import SkinSettingsSection from './skin/SkinSettingsSection';
 import ThemedSelect from './ui/ThemedSelect';
 
@@ -881,6 +883,7 @@ export type SettingsOpenOptions = {
 
 interface SettingsProps extends SettingsOpenOptions {
   onClose: () => void;
+  onStartAiSkin?: (text: string, kitId: string) => void;
   initialTabRequestId?: number;
   onUpdateFound?: (info: AppUpdateInfo) => void;
   enterpriseConfig?: {
@@ -1352,6 +1355,7 @@ const SettingsNumberInputRow: React.FC<{
 
 const Settings: React.FC<SettingsProps> = ({
   onClose,
+  onStartAiSkin,
   initialTab,
   initialTabRequestId,
   notice,
@@ -1361,10 +1365,16 @@ const Settings: React.FC<SettingsProps> = ({
   enterpriseConfig,
 }) => {
   const dispatch = useDispatch();
+  const {
+    activeSkin,
+    isAppearanceChanging,
+    selectThemeById,
+    selectThemeMode,
+  } = useSkin();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
-  const [themeId, setThemeId] = useState<string>(themeService.getThemeId());
+  const [themeId, setThemeId] = useState<string>(themeService.getDefaultThemeId());
   const [uiFontSize, setUiFontSize] = useState<number>(FontPreferences.UiFontSizeDefault);
   const [codeFontSize, setCodeFontSize] = useState<number>(FontPreferences.CodeFontSizeDefault);
   const [language, setLanguage] = useState<LanguageType>('zh');
@@ -1400,29 +1410,26 @@ const Settings: React.FC<SettingsProps> = ({
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<ProviderType | null>(null);
   const [isImportingProviders, setIsImportingProviders] = useState(false);
   const [isExportingProviders, setIsExportingProviders] = useState(false);
-  const initialThemeRef = useRef<'light' | 'dark' | 'system'>(themeService.getTheme());
-  const initialThemeIdRef = useRef<string>(themeService.getThemeId());
+  const initialThemeIdRef = useRef<string>(themeService.getDefaultThemeId());
   const initialUiFontSizeRef = useRef<number>(FontPreferences.UiFontSizeDefault);
   const initialCodeFontSizeRef = useRef<number>(FontPreferences.CodeFontSizeDefault);
   const initialLanguageRef = useRef<LanguageType>(i18nService.getLanguage());
   const didSaveRef = useRef(false);
 
   useEffect(() => {
-    const handleAppearanceApplied = (event: Event) => {
-      const detail = (event as CustomEvent<ThemeAppearanceAppliedDetail>).detail;
+    const handleDefaultThemeChanged = (event: Event) => {
+      const detail = (event as CustomEvent<ThemeDefaultChangedDetail>).detail;
       if (!detail) {
         return;
       }
 
-      initialThemeRef.current = detail.appearance;
-      initialThemeIdRef.current = detail.themeId;
-      setTheme(detail.appearance);
+      setTheme(detail.mode);
       setThemeId(detail.themeId);
     };
 
-    window.addEventListener(ThemeServiceEvent.AppearanceApplied, handleAppearanceApplied);
+    window.addEventListener(ThemeServiceEvent.DefaultChanged, handleDefaultThemeChanged);
     return () => {
-      window.removeEventListener(ThemeServiceEvent.AppearanceApplied, handleAppearanceApplied);
+      window.removeEventListener(ThemeServiceEvent.DefaultChanged, handleDefaultThemeChanged);
     };
   }, []);
 
@@ -1941,11 +1948,13 @@ const Settings: React.FC<SettingsProps> = ({
         FontPreferences.CodeFontSizeMin,
         FontPreferences.CodeFontSizeMax,
       );
-      initialThemeRef.current = config.theme;
+      const defaultThemeId = themeService.getDefaultThemeId();
+      initialThemeIdRef.current = defaultThemeId;
       initialUiFontSizeRef.current = resolvedUiFontSize;
       initialCodeFontSizeRef.current = resolvedCodeFontSize;
       initialLanguageRef.current = config.language;
       setTheme(config.theme);
+      setThemeId(defaultThemeId);
       setUiFontSize(resolvedUiFontSize);
       setCodeFontSize(resolvedCodeFontSize);
       setLanguage(config.language);
@@ -2200,7 +2209,6 @@ const Settings: React.FC<SettingsProps> = ({
       if (didSaveRef.current) {
         return;
       }
-      themeService.restoreTheme(initialThemeIdRef.current, initialThemeRef.current);
       applyTypographyPreferences({
         uiFontSize: initialUiFontSize,
         codeFontSize: initialCodeFontSize,
@@ -3323,6 +3331,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (isSaving || isAppearanceChanging) return;
     setIsSaving(true);
     setError(null);
 
@@ -3429,8 +3438,6 @@ const Settings: React.FC<SettingsProps> = ({
         },
       });
 
-      // 应用主题
-      themeService.setTheme(theme);
       applyTypographyPreferences({ uiFontSize, codeFontSize });
 
       // 应用语言
@@ -3885,7 +3892,9 @@ const Settings: React.FC<SettingsProps> = ({
       handleCancelModelEdit();
       return;
     }
-    if (e.key === 'Enter') {
+    // Plain Enter must keep its default behavior (e.g. newline in the custom
+    // params textarea); only Cmd/Ctrl+Enter saves from the keyboard.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSaveNewModel();
     }
@@ -4452,6 +4461,32 @@ const Settings: React.FC<SettingsProps> = ({
     });
   }, [uiFontSize]);
 
+  const handleThemeModeSelection = useCallback(async (
+    mode: 'light' | 'dark' | 'system',
+  ) => {
+    setError(null);
+    try {
+      const selection = await selectThemeMode(mode);
+      setTheme(selection.mode);
+      setThemeId(selection.themeId);
+    } catch (selectionError) {
+      console.error('[Settings] Failed to select the default theme mode', selectionError);
+      setError(i18nService.t('themeApplyFailed'));
+    }
+  }, [selectThemeMode]);
+
+  const handleThemeIdSelection = useCallback(async (nextThemeId: string) => {
+    setError(null);
+    try {
+      const selection = await selectThemeById(nextThemeId);
+      setTheme(selection.mode);
+      setThemeId(selection.themeId);
+    } catch (selectionError) {
+      console.error('[Settings] Failed to select the default color theme', selectionError);
+      setError(i18nService.t('themeApplyFailed'));
+    }
+  }, [selectThemeById]);
+
   const renderAppearanceSettings = () => (
     <div className="space-y-8">
       <div>
@@ -4461,17 +4496,14 @@ const Settings: React.FC<SettingsProps> = ({
 
         <div className="grid grid-cols-3 gap-3 mb-4">
           {(['light', 'dark', 'system'] as const).map((mode) => {
-            const isSelected = theme === mode;
+            const isSelected = !activeSkin && theme === mode;
             return (
               <button
                 key={mode}
                 type="button"
-                onClick={() => {
-                  setTheme(mode);
-                  themeService.setTheme(mode);
-                  setThemeId(themeService.getThemeId());
-                }}
-                className="flex flex-col items-center rounded-xl border-2 p-3 transition-colors cursor-pointer"
+                onClick={() => void handleThemeModeSelection(mode)}
+                disabled={isAppearanceChanging}
+                className="flex flex-col items-center rounded-xl border-2 p-3 transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
                 style={{
                   borderColor: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-border)',
                   backgroundColor: isSelected ? 'var(--lobster-primary-muted)' : undefined,
@@ -4574,18 +4606,15 @@ const Settings: React.FC<SettingsProps> = ({
           const classicThemes = allThemes.filter(t => t.meta.id === 'classic-light' || t.meta.id === 'classic-dark');
           const otherThemes = allThemes.filter(t => t.meta.id !== 'classic-light' && t.meta.id !== 'classic-dark');
           const renderTile = (t: import('../theme').ThemeDefinition) => {
-            const isSelected = themeId === t.meta.id;
+            const isSelected = !activeSkin && themeId === t.meta.id;
             const [bg, c1, c2, c3] = t.meta.preview;
             return (
               <button
                 key={t.meta.id}
                 type="button"
-                onClick={() => {
-                  themeService.setThemeById(t.meta.id);
-                  setThemeId(t.meta.id);
-                  setTheme(t.meta.appearance as 'light' | 'dark');
-                }}
-                className="flex flex-col items-center rounded-xl border-2 p-2 transition-colors cursor-pointer"
+                onClick={() => void handleThemeIdSelection(t.meta.id)}
+                disabled={isAppearanceChanging}
+                className="flex flex-col items-center rounded-xl border-2 p-2 transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
                 style={{
                   borderColor: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-border)',
                   backgroundColor: isSelected ? 'var(--lobster-primary-muted)' : undefined,
@@ -4616,7 +4645,7 @@ const Settings: React.FC<SettingsProps> = ({
           );
         })()}
 
-        <SkinSettingsSection />
+        <SkinSettingsSection onStartAiSkin={onStartAiSkin} />
 
         <div className="mt-5 divide-y divide-border rounded-xl border border-border bg-surface">
           <div className="px-4 py-3">
@@ -5766,7 +5795,9 @@ const Settings: React.FC<SettingsProps> = ({
       overlayClassName="fixed inset-0 z-50 modal-backdrop flex items-center justify-center p-3 sm:p-4"
       className="w-[calc(100vw-1.5rem)] max-w-[900px] min-w-0 sm:w-[calc(100vw-2rem)]"
     >
-      <div
+      <SkinPresentationScope
+        enabled
+        data-skin-settings="true"
         className="relative flex h-[80vh] max-h-[calc(100vh-2rem)] w-full min-w-0 rounded-2xl border-border border shadow-modal overflow-hidden modal-content"
         onClick={handleSettingsClick}
       >
@@ -5852,7 +5883,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSaving}
+                  disabled={isSaving || isAppearanceChanging}
                   className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
                 >
                   {isSaving ? i18nService.t('saving') : i18nService.t('save')}
@@ -6192,7 +6223,7 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
-      </div>
+      </SkinPresentationScope>
     </Modal>
   );
 };

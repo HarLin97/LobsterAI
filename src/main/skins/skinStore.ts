@@ -35,6 +35,8 @@ export interface SkinRecord {
   name?: string;
   workflowKind: SkinWorkflowKind;
   baseThemeId?: string;
+  // Optional so registries written by the released v1 skin feature remain valid.
+  boundThemeId?: string;
   presentation?: SkinPresentation;
   status: SkinRecordStatus;
   assets: Partial<Record<SkinAssetSlot, SkinAssetRecord>>;
@@ -218,6 +220,7 @@ function parseSkinRecord(value: unknown, key: string): SkinRecord | null {
     !isOptionalBoundedString(value.name, 128) ||
     !isSkinWorkflowKind(value.workflowKind) ||
     !isOptionalBoundedString(value.baseThemeId, 256) ||
+    !isOptionalBoundedString(value.boundThemeId, 256) ||
     !isSkinRecordStatus(value.status) ||
     !isRecord(value.assets) ||
     typeof value.createdAt !== 'string' ||
@@ -241,6 +244,7 @@ function parseSkinRecord(value: unknown, key: string): SkinRecord | null {
     ...(value.name === undefined ? {} : { name: value.name }),
     workflowKind: value.workflowKind,
     ...(value.baseThemeId === undefined ? {} : { baseThemeId: value.baseThemeId }),
+    ...(value.boundThemeId === undefined ? {} : { boundThemeId: value.boundThemeId }),
     ...(presentation ? { presentation } : {}),
     status: value.status,
     assets,
@@ -431,9 +435,15 @@ export class SkinStore {
     });
   }
 
-  async apply(skinId: string): Promise<SkinRecord> {
+  async apply(skinId: string, boundThemeId?: string): Promise<SkinRecord> {
     if (!SKIN_ID_PATTERN.test(skinId)) {
       throw new SkinStoreError(SkinStoreErrorCode.InvalidSkinId, 'Skin id is invalid');
+    }
+    if (!isOptionalBoundedString(boundThemeId, 256)) {
+      throw new SkinStoreError(
+        SkinStoreErrorCode.InvalidThemeId,
+        'Bound theme id must be a non-empty string of at most 256 characters',
+      );
     }
     return this.enqueueMutation(async () => {
       const registry = await this.readRegistry();
@@ -453,8 +463,39 @@ export class SkinStore {
 
       const timestamp = this.now().toISOString();
       registry.activeSkinId = skinId;
+      if (skin.boundThemeId === undefined && boundThemeId !== undefined) {
+        skin.boundThemeId = boundThemeId;
+      }
       skin.appliedAt = timestamp;
       skin.updatedAt = timestamp;
+      await this.writeRegistry(registry);
+      return cloneSkinRecord(skin);
+    });
+  }
+
+  async bindTheme(skinId: string, themeId: string): Promise<SkinRecord> {
+    if (!SKIN_ID_PATTERN.test(skinId)) {
+      throw new SkinStoreError(SkinStoreErrorCode.InvalidSkinId, 'Skin id is invalid');
+    }
+    if (!isOptionalBoundedString(themeId, 256)) {
+      throw new SkinStoreError(
+        SkinStoreErrorCode.InvalidThemeId,
+        'Bound theme id must be a non-empty string of at most 256 characters',
+      );
+    }
+
+    return this.enqueueMutation(async () => {
+      const registry = await this.readRegistry();
+      const skin = registry.skins[skinId];
+      if (!skin) {
+        throw new SkinStoreError(SkinStoreErrorCode.SkinNotFound, 'Skin does not exist');
+      }
+      if (skin.boundThemeId !== undefined) {
+        return cloneSkinRecord(skin);
+      }
+
+      skin.boundThemeId = themeId;
+      skin.updatedAt = this.now().toISOString();
       await this.writeRegistry(registry);
       return cloneSkinRecord(skin);
     });
@@ -508,7 +549,7 @@ export class SkinStore {
     await this.mutationQueue;
     const registry = await this.readRegistry();
     return Object.values(registry.skins)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map(cloneSkinRecord);
   }
 

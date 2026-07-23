@@ -92,7 +92,6 @@ import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { parseUserMessageForDisplay } from '../../utils/userMessageDisplay';
 import {
   ArtifactPanel,
-  type BrowserAnnotationPayload,
   type LocalServiceDeploymentRequest,
   SubagentPanelContent,
 } from '../artifacts';
@@ -158,6 +157,7 @@ interface CoworkSessionDetailProps {
     imageAttachments?: CoworkImageAttachment[],
     mediaReferences?: MediaAttachmentRef[],
     selectedTextSnippets?: CoworkSelectedTextSnippet[],
+    browserAnnotations?: import('@shared/cowork/browserAnnotations').CoworkBrowserAnnotationMessageBatch[],
     collaborationMode?: CoworkCollaborationModeType,
   ) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
@@ -1639,6 +1639,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       undefined,
       undefined,
       undefined,
+      undefined,
       CoworkCollaborationMode.Default,
     );
     if (result === false) {
@@ -2058,8 +2059,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setPromptInputAreaHeight(promptInputAreaRef.current?.offsetHeight ?? 0);
   }, []);
 
+  // Keep the prompt and expanded preview overlay in the same pre-paint layout pass.
   useLayoutEffect(() => {
     updatePromptInputAreaHeight();
+  }, [
+    currentSession?.id,
+    isArtifactPanelExpanded,
+    isExpandedConversationPreviewOpen,
+    isExpandedPromptInputHidden,
+    updatePromptInputAreaHeight,
+  ]);
+
+  useLayoutEffect(() => {
     const element = promptInputAreaRef.current;
     window.addEventListener('resize', updatePromptInputAreaHeight);
 
@@ -2075,7 +2086,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       resizeObserver.disconnect();
       window.removeEventListener('resize', updatePromptInputAreaHeight);
     };
-  }, [currentSession?.id, isExpandedPromptInputHidden, updatePromptInputAreaHeight]);
+  }, [currentSession?.id, updatePromptInputAreaHeight]);
 
   useEffect(() => {
     if (isPanelOpen) return;
@@ -4057,9 +4068,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     })();
   }, [dispatch]);
 
-  const handleBrowserAnnotationCaptured = useCallback((payload: BrowserAnnotationPayload) => {
-    promptInputRef.current?.insertBrowserAnnotation(payload);
-  }, []);
 
   const messages = currentSession?.messages;
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
@@ -4686,7 +4694,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   {shouldPinArtifactAddTab ? (
                     <div className="h-full w-9 shrink-0" aria-hidden="true" />
                   ) : (
-                    <div className="z-20 flex h-full shrink-0 items-center bg-background pl-1 pr-1">
+                    <div
+                      data-skin-artifact-add-tab="true"
+                      className="z-20 flex h-full shrink-0 items-center bg-background pl-1 pr-1"
+                    >
                       <button
                         ref={artifactAddButtonRef}
                         type="button"
@@ -4704,7 +4715,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   </div>
                 </div>
                 {shouldPinArtifactAddTab && (
-                  <div className="absolute inset-y-0 right-0 z-20 flex items-center bg-background pl-1 pr-1">
+                  <div
+                    data-skin-artifact-add-tab="true"
+                    className="absolute inset-y-0 right-0 z-20 flex items-center bg-background pl-1 pr-1"
+                  >
                     <button
                       ref={artifactAddButtonRef}
                       type="button"
@@ -4806,7 +4820,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       )}
 
       {/* Export Options Modal */}
-      {showExportOptions && (
+      {showExportOptions && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
           onClick={() => setShowExportOptions(false)}
@@ -4870,7 +4884,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Content row: chat + artifact panel */}
@@ -5396,7 +5411,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               onOpenFileListTab={handleOpenArtifactFileListTab}
               onOpenBrowserTab={handleOpenArtifactBrowserTab}
               onOpenHtmlFileInBrowser={handleOpenHtmlFileInBrowser}
-              onBrowserAnnotationCaptured={handleBrowserAnnotationCaptured}
               subagentPanel={(
                 <SubagentPanelContent
                   subagents={subagents}

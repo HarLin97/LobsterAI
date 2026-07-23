@@ -44,15 +44,19 @@ vi.mock('child_process', async (importOriginal) => {
   };
 });
 
+import { APP_UPDATE_ELEVATION_DECLINED_ERROR } from '../../shared/appUpdate/constants';
 import {
   buildMacSwapInstallCommand,
   buildMacSwapPaths,
+  buildWindowsInstallerLaunchScript,
   findAttachedDevEntries,
   installUpdate,
   MAC_SWAP_BACKUP_INFIX,
   MAC_SWAP_ROLLED_BACK_EXIT_CODE,
   MAC_SWAP_STAGING_INFIX,
   parseHdiutilAttachOutput,
+  WINDOWS_NO_DEFENDER_EXCLUSION_ARG,
+  WINDOWS_UAC_DECLINED_EXIT_CODE,
 } from './appUpdateInstaller';
 
 const INSTALLER_PATH = 'C:\\Users\\test\\AppData\\Roaming\\LobsterAI\\updates\\lobsterai-update-manual-1.exe';
@@ -60,10 +64,25 @@ const INSTALLER_PATH = 'C:\\Users\\test\\AppData\\Roaming\\LobsterAI\\updates\\l
 describe('Windows update install', () => {
   const originalPlatform = process.platform;
 
+  const mockSilentLaunchResult = (error: Error | null, stderr = '') => {
+    cpMocks.execFile.mockImplementation(
+      (
+        _file: string,
+        _args: string[],
+        _opts: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        setImmediate(() => callback(error, '', stderr));
+        return {} as never;
+      },
+    );
+  };
+
   beforeEach(() => {
     mocks.openPath.mockReset();
     mocks.showItemInFolder.mockReset();
     mocks.quit.mockReset();
+    cpMocks.execFile.mockReset();
     Object.defineProperty(process, 'platform', { value: 'win32' });
     vi.spyOn(fs.promises, 'stat').mockResolvedValue({ size: 1024 } as fs.Stats);
   });
@@ -73,7 +92,48 @@ describe('Windows update install', () => {
     vi.restoreAllMocks();
   });
 
-  test('launches the installer in the foreground and quits on success', async () => {
+  test('launches the update-mode installer through PowerShell and quits on success', async () => {
+    mockSilentLaunchResult(null);
+
+    await installUpdate(INSTALLER_PATH);
+
+    expect(cpMocks.execFile).toHaveBeenCalledOnce();
+    const [file, args] = cpMocks.execFile.mock.calls[0] as [string, string[]];
+    expect(file).toBe('powershell.exe');
+    expect(args).toContain('-NoProfile');
+    expect(args).toContain('-NonInteractive');
+    const script = args[args.length - 1];
+    expect(script).toContain(`-FilePath '${INSTALLER_PATH}'`);
+    expect(script).toContain(`'--force-run','--updated'`);
+    expect(script).not.toContain(`'/S'`);
+    expect(mocks.quit).toHaveBeenCalledOnce();
+    // The wizard path must not run: silent launch succeeded.
+    expect(mocks.openPath).not.toHaveBeenCalled();
+    expect(mocks.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  test('maps a declined UAC prompt to the stable marker and stays running', async () => {
+    mockSilentLaunchResult(
+      Object.assign(new Error('powershell exited with 1223'), {
+        code: WINDOWS_UAC_DECLINED_EXIT_CODE,
+      }),
+      'Der Vorgang wurde durch den Benutzer abgebrochen.',
+    );
+
+    await expect(installUpdate(INSTALLER_PATH)).rejects.toThrow(
+      APP_UPDATE_ELEVATION_DECLINED_ERROR,
+    );
+
+    // No interactive fallback: it would raise a second elevation prompt.
+    expect(mocks.openPath).not.toHaveBeenCalled();
+    expect(mocks.showItemInFolder).not.toHaveBeenCalled();
+    expect(mocks.quit).not.toHaveBeenCalled();
+  });
+
+  test('falls back to the interactive installer when PowerShell is unavailable', async () => {
+    mockSilentLaunchResult(
+      Object.assign(new Error('spawn powershell.exe ENOENT'), { code: 'ENOENT' }),
+    );
     mocks.openPath.mockResolvedValue('');
 
     await installUpdate(INSTALLER_PATH);
@@ -83,12 +143,11 @@ describe('Windows update install', () => {
     expect(mocks.showItemInFolder).not.toHaveBeenCalled();
   });
 
-  test('reveals the installer in Explorer and throws when launch fails', async () => {
-    mocks.openPath.mockResolvedValue('The operation was canceled by the user.');
+  test('reveals the installer in Explorer when the fallback launch also fails', async () => {
+    mockSilentLaunchResult(Object.assign(new Error('blocked'), { code: 1 }));
+    mocks.openPath.mockResolvedValue('Access is denied.');
 
-    await expect(installUpdate(INSTALLER_PATH)).rejects.toThrow(
-      'The operation was canceled by the user.',
-    );
+    await expect(installUpdate(INSTALLER_PATH)).rejects.toThrow('Access is denied.');
 
     expect(mocks.showItemInFolder).toHaveBeenCalledWith(INSTALLER_PATH);
     expect(mocks.quit).not.toHaveBeenCalled();
@@ -100,8 +159,45 @@ describe('Windows update install', () => {
 
     await expect(installUpdate(INSTALLER_PATH)).rejects.toThrow('Update file not found');
 
+    expect(cpMocks.execFile).not.toHaveBeenCalled();
     expect(mocks.openPath).not.toHaveBeenCalled();
     expect(mocks.quit).not.toHaveBeenCalled();
+  });
+
+  test('forwards the enterprise no-exclusion switch to the installer', async () => {
+    mockSilentLaunchResult(null);
+
+    await installUpdate(INSTALLER_PATH, { noDefenderExclusion: true });
+
+    const [, args] = cpMocks.execFile.mock.calls[0] as [string, string[]];
+    const script = args[args.length - 1];
+    expect(script).toContain(`'--force-run','--updated','${WINDOWS_NO_DEFENDER_EXCLUSION_ARG}'`);
+  });
+
+  test('omits the no-exclusion switch by default', async () => {
+    mockSilentLaunchResult(null);
+
+    await installUpdate(INSTALLER_PATH);
+
+    const [, args] = cpMocks.execFile.mock.calls[0] as [string, string[]];
+    const script = args[args.length - 1];
+    expect(script).not.toContain(WINDOWS_NO_DEFENDER_EXCLUSION_ARG);
+  });
+});
+
+describe('buildWindowsInstallerLaunchScript', () => {
+  test('escapes single quotes in the installer path for PowerShell', () => {
+    const script = buildWindowsInstallerLaunchScript("C:\\Users\\o'brien\\updates\\setup.exe");
+
+    expect(script).toContain(`-FilePath 'C:\\Users\\o''brien\\updates\\setup.exe'`);
+  });
+
+  test('converts a declined elevation into the dedicated exit code', () => {
+    const script = buildWindowsInstallerLaunchScript(INSTALLER_PATH);
+
+    expect(script).toContain(`$native -eq ${WINDOWS_UAC_DECLINED_EXIT_CODE}`);
+    expect(script).toContain(`exit ${WINDOWS_UAC_DECLINED_EXIT_CODE}`);
+    expect(script).toContain("$ErrorActionPreference = 'Stop'");
   });
 });
 

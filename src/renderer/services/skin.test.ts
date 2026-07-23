@@ -13,12 +13,13 @@ import {
 } from './skin';
 
 describe('normalizeActiveSkin', () => {
-  test('keeps only the supported image slots and base theme identifier', () => {
+  test('keeps only the supported image slots and theme binding metadata', () => {
     const skin = normalizeActiveSkin({
       skin: {
         id: 'sunset-glass',
         name: 'Sunset Glass',
         baseThemeId: 'sakura',
+        boundThemeId: 'midnight',
         presentation: {
           mode: SkinPresentationMode.ImmersiveShell,
           palette: {
@@ -51,6 +52,7 @@ describe('normalizeActiveSkin', () => {
       id: 'sunset-glass',
       name: 'Sunset Glass',
       baseThemeId: 'sakura',
+      boundThemeId: 'midnight',
       presentation: {
         mode: SkinPresentationMode.ImmersiveShell,
         preferredAppearance: SkinPreferredAppearance.Dark,
@@ -85,6 +87,7 @@ describe('normalizeActiveSkin', () => {
       manifest: {
         id: 'paper-cut',
         baseThemeId: 'paper',
+        boundThemeId: 'dawn',
       },
       assetUrls: {
         [SkinAssetSlot.WorkspaceBackdrop]: 'lobster-skin://asset/paper-cut/workspace.backdrop',
@@ -94,6 +97,7 @@ describe('normalizeActiveSkin', () => {
 
     expect(skin?.id).toBe('paper-cut');
     expect(skin?.baseThemeId).toBe('paper');
+    expect(skin?.boundThemeId).toBe('dawn');
     expect(skin?.assets[SkinAssetSlot.HomeEmblem]?.url).toContain('home.emblem');
   });
 

@@ -1,4 +1,5 @@
 import type { KitReference, ResolvedKitCapabilities } from '../kit/constants';
+import type { CoworkBrowserAnnotationMessageBatch } from './browserAnnotations';
 import type { CoworkImageAttachmentPayload } from './imageAttachments';
 import type { CoworkSelectedTextSnippet } from './selectedText';
 
@@ -42,6 +43,7 @@ export interface CoworkPendingSteer {
   attachments?: CoworkSteerAttachment[];
   imageAttachments?: CoworkImageAttachmentPayload[];
   selectedTextSnippets?: CoworkSelectedTextSnippet[];
+  browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
   modelSupportsImage?: boolean;
   skillPrompt?: string;
   selectedSkillIds?: string[];

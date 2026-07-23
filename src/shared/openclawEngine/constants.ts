@@ -42,3 +42,17 @@ export const OpenClawEngineErrorCode = {
 
 export type OpenClawEngineErrorCode =
   typeof OpenClawEngineErrorCode[keyof typeof OpenClawEngineErrorCode];
+
+export const OpenClawGatewayFailureKind = {
+  HeapOutOfMemory: 'heap_out_of_memory',
+} as const;
+
+export type OpenClawGatewayFailureKind =
+  typeof OpenClawGatewayFailureKind[keyof typeof OpenClawGatewayFailureKind];
+
+export type OpenClawGatewayFailureSnapshot = {
+  generation: number;
+  kind: OpenClawGatewayFailureKind;
+  detectedAt: number;
+  exitCode?: number | null;
+};

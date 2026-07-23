@@ -1,77 +1,59 @@
-import type { SkinPreferredAppearance as SkinPreferredAppearanceValue } from '../../shared/skin/constants';
+import type { SkinPreferredAppearance } from '../../shared/skin/constants';
 import type { ActiveSkin } from './skin';
+import { skinService } from './skin';
 import { themeService } from './theme';
 
-const SKIN_APPEARANCE_MARKER_KEY = 'lobster-skin-applied-appearance';
+type SkinThemeMetadata = Pick<
+  ActiveSkin,
+  'boundThemeId' | 'id' | 'presentation'
+>;
 
-interface SkinAppearanceStorage {
-  getItem: (key: string) => string | null;
-  setItem: (key: string, value: string) => void;
-  removeItem: (key: string) => void;
+interface SkinThemeDependencies {
+  resolveThemeId: (
+    boundThemeId: string | undefined,
+    preferredAppearance: SkinPreferredAppearance | undefined,
+  ) => string;
+  bindTheme: (skinId: string, themeId: string) => Promise<SkinThemeMetadata | null>;
+  applySkinTheme: (themeId: string) => Promise<void>;
+  restoreDefaultTheme: () => Promise<unknown>;
 }
 
-interface SkinAppearanceDependencies {
-  storage: SkinAppearanceStorage | null;
-  applyThemeAppearance: (appearance: SkinPreferredAppearanceValue) => Promise<boolean>;
-}
-
-const getDefaultStorage = (): SkinAppearanceStorage | null => {
-  try {
-    return typeof localStorage === 'undefined' ? null : localStorage;
-  } catch {
-    return null;
-  }
-};
-
-const getDefaultDependencies = (): SkinAppearanceDependencies => ({
-  storage: getDefaultStorage(),
-  applyThemeAppearance: appearance => themeService.applyThemeAppearance(appearance),
+const getDefaultDependencies = (): SkinThemeDependencies => ({
+  resolveThemeId: (boundThemeId, preferredAppearance) => (
+    themeService.resolveSkinThemeId(boundThemeId, preferredAppearance)
+  ),
+  bindTheme: (skinId, themeId) => skinService.bindTheme(skinId, themeId),
+  applySkinTheme: themeId => themeService.applySkinTheme(themeId),
+  restoreDefaultTheme: () => themeService.restoreDefaultTheme(),
 });
 
-const buildAppearanceMarker = (
-  skinId: string,
-  appearance: SkinPreferredAppearanceValue,
-): string => `${skinId}:${appearance}`;
-
-const removeAppearanceMarker = (storage: SkinAppearanceStorage | null): void => {
-  try {
-    storage?.removeItem(SKIN_APPEARANCE_MARKER_KEY);
-  } catch {
-    // The marker is an optimization; theme application remains functional without storage.
-  }
-};
-
-export const clearSkinAppearanceMarker = (
-  storage: SkinAppearanceStorage | null = getDefaultStorage(),
-): void => {
-  removeAppearanceMarker(storage);
-};
-
-export const applySkinPreferredAppearanceOnce = async (
-  skin: Pick<ActiveSkin, 'id' | 'presentation'> | null,
-  dependencies: SkinAppearanceDependencies = getDefaultDependencies(),
-): Promise<boolean> => {
-  const appearance = skin?.presentation?.preferredAppearance;
-  if (!skin || !appearance) {
-    removeAppearanceMarker(dependencies.storage);
-    return false;
+export const synchronizeSkinTheme = async (
+  skin: SkinThemeMetadata | null,
+  dependencies: SkinThemeDependencies = getDefaultDependencies(),
+): Promise<string | null> => {
+  if (!skin) {
+    await dependencies.restoreDefaultTheme();
+    return null;
   }
 
-  const marker = buildAppearanceMarker(skin.id, appearance);
-  try {
-    if (dependencies.storage?.getItem(SKIN_APPEARANCE_MARKER_KEY) === marker) {
-      return false;
+  const preferredAppearance = skin.presentation?.preferredAppearance;
+  let themeId = dependencies.resolveThemeId(
+    skin.boundThemeId,
+    preferredAppearance,
+  );
+  await dependencies.applySkinTheme(themeId);
+
+  if (!skin.boundThemeId) {
+    const persistedSkin = await dependencies.bindTheme(skin.id, themeId);
+    const persistedThemeId = dependencies.resolveThemeId(
+      persistedSkin?.boundThemeId ?? themeId,
+      preferredAppearance,
+    );
+    if (persistedThemeId !== themeId) {
+      themeId = persistedThemeId;
+      await dependencies.applySkinTheme(themeId);
     }
-  } catch {
-    // Continue without marker-based de-duplication.
   }
 
-  await dependencies.applyThemeAppearance(appearance);
-  try {
-    dependencies.storage?.setItem(SKIN_APPEARANCE_MARKER_KEY, marker);
-  } catch {
-    // Applying the existing theme is authoritative; marker persistence is best effort.
-  }
-  return true;
+  return themeId;
 };
-

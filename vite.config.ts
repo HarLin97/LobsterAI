@@ -121,6 +121,18 @@ export default defineConfig({
         },
         onstart() {},
       },
+      {
+        // Sandboxed webview preload used only for browser annotations.
+        entry: 'src/main/browserAnnotationPreload.ts',
+        vite: {
+          build: {
+            sourcemap: true,
+            outDir: 'dist-electron',
+            minify: false,
+          },
+        },
+        onstart() {},
+      },
     ]),
     renderer(),
   ],

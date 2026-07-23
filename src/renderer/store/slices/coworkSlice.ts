@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+import type { CoworkBrowserAnnotationBatch } from '../../../shared/cowork/browserAnnotations';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import {
   COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
@@ -62,6 +63,8 @@ interface CoworkState {
   draftAttachments: Record<string, DraftAttachment[]>;
   /** Keyed by draftKey, stores selected assistant text excerpts for the next user turn. */
   draftSelectedTextSnippets: Record<string, CoworkSelectedTextSnippet[]>;
+  /** Keyed by draftKey; screenshots are referenced by assetId and live in main. */
+  draftBrowserAnnotationBatches: Record<string, CoworkBrowserAnnotationBatch[]>;
   /** Keyed by draftKey, stores active kit IDs per draft so they survive view switches */
   draftKitIds: Record<string, string[]>;
   /** Keyed by draftKey, stores active skill IDs per draft so they survive view switches */
@@ -104,6 +107,7 @@ const initialState: CoworkState = {
   draftPrompts: {},
   draftAttachments: {},
   draftSelectedTextSnippets: {},
+  draftBrowserAnnotationBatches: {},
   draftKitIds: {},
   draftSkillIds: {},
   draftCollaborationModes: {},
@@ -997,6 +1001,42 @@ const coworkSlice = createSlice({
       delete state.draftSelectedTextSnippets[action.payload];
     },
 
+    setDraftBrowserAnnotationBatches(
+      state,
+      action: PayloadAction<{ draftKey: string; batches: CoworkBrowserAnnotationBatch[] }>,
+    ) {
+      const { draftKey, batches } = action.payload;
+      if (batches.length === 0) delete state.draftBrowserAnnotationBatches[draftKey];
+      else state.draftBrowserAnnotationBatches[draftKey] = batches;
+    },
+
+    upsertDraftBrowserAnnotationBatch(
+      state,
+      action: PayloadAction<{ draftKey: string; batch: CoworkBrowserAnnotationBatch }>,
+    ) {
+      const { draftKey, batch } = action.payload;
+      const existing = state.draftBrowserAnnotationBatches[draftKey] || [];
+      const index = existing.findIndex(item => item.id === batch.id);
+      state.draftBrowserAnnotationBatches[draftKey] = index < 0
+        ? [...existing, batch]
+        : existing.map(item => item.id === batch.id ? batch : item);
+    },
+
+    removeDraftBrowserAnnotationBatch(
+      state,
+      action: PayloadAction<{ draftKey: string; batchId: string }>,
+    ) {
+      const { draftKey, batchId } = action.payload;
+      const batches = (state.draftBrowserAnnotationBatches[draftKey] || [])
+        .filter(batch => batch.id !== batchId);
+      if (batches.length === 0) delete state.draftBrowserAnnotationBatches[draftKey];
+      else state.draftBrowserAnnotationBatches[draftKey] = batches;
+    },
+
+    clearDraftBrowserAnnotationBatches(state, action: PayloadAction<string>) {
+      delete state.draftBrowserAnnotationBatches[action.payload];
+    },
+
     setDraftKitIds(state, action: PayloadAction<{ draftKey: string; kitIds: string[] }>) {
       const { draftKey, kitIds } = action.payload;
       if (kitIds.length === 0) {
@@ -1061,6 +1101,10 @@ export const {
   addDraftSelectedTextSnippet,
   removeDraftSelectedTextSnippet,
   clearDraftSelectedTextSnippets,
+  setDraftBrowserAnnotationBatches,
+  upsertDraftBrowserAnnotationBatch,
+  removeDraftBrowserAnnotationBatch,
+  clearDraftBrowserAnnotationBatches,
   addSession,
   updateSessionStatus,
   updateSessionGoal,

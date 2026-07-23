@@ -75,6 +75,7 @@ export class AppUpdateCoordinator {
   private state: AppUpdateRuntimeState = initialState();
   private readonly store: SqliteStore;
   private autoOpenReadyModal = false;
+  private completedUpdateVersion: string | null = null;
   private flowSequence = 0;
   private activeFlowId = 0;
   private activeFlowSource: AppUpdateSource | null = null;
@@ -94,6 +95,17 @@ export class AppUpdateCoordinator {
 
   consumeAutoOpenReadyModal(): void {
     this.autoOpenReadyModal = false;
+  }
+
+  /**
+   * Version of an update that finished installing right before this launch
+   * (the app is now running that version), or null. Consumed once so the
+   * renderer shows its "updated" notice a single time.
+   */
+  consumeCompletedUpdateVersion(): string | null {
+    const version = this.completedUpdateVersion;
+    this.completedUpdateVersion = null;
+    return version;
   }
 
   async checkNow(options?: { manual?: boolean; userId?: string | null }): Promise<AppUpdateCheckResult> {
@@ -332,7 +344,9 @@ export class AppUpdateCoordinator {
     }
 
     try {
-      await installUpdate(filePath);
+      await installUpdate(filePath, {
+        noDefenderExclusion: this.isDefenderExclusionDisabled(),
+      });
       return { success: true, state: this.getState() };
     } catch (error) {
       console.error('[AppUpdate] install failed:', error);
@@ -571,6 +585,11 @@ export class AppUpdateCoordinator {
   private isUpdateDisabled(): boolean {
     const enterprise = this.store.get<{ disableUpdate?: boolean }>('enterprise_config');
     return enterprise?.disableUpdate === true;
+  }
+
+  private isDefenderExclusionDisabled(): boolean {
+    const enterprise = this.store.get<{ disableDefenderExclusion?: boolean }>('enterprise_config');
+    return enterprise?.disableDefenderExclusion === true;
   }
 
   private resolveCurrentVersion(): string {
@@ -863,6 +882,17 @@ export class AppUpdateCoordinator {
         console.log(
           `[AppUpdate] persisted ready file is not newer than current version, clearing it: source=${source}, storedVersion=${storedReadyFile.version}, currentVersion=${this.resolveCurrentVersion()}`,
         );
+        // An attempted install whose version the app is now running means the
+        // installer completed and relaunched us — surface it once in the UI.
+        if (
+          storedReadyFile.installAttempted === true &&
+          this.compareVersions(storedReadyFile.version, this.resolveCurrentVersion()) === 0
+        ) {
+          console.log(
+            `[AppUpdate] detected completed update to version ${storedReadyFile.version}`,
+          );
+          this.completedUpdateVersion = storedReadyFile.version;
+        }
         this.clearStoredReadyFile(source);
         void this.pruneCachedInstallerFiles(source);
         continue;
