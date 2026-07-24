@@ -61,6 +61,8 @@ import type {
   KitReference,
   ResolvedKitCapabilities,
 } from '../../../shared/kit/constants';
+import { OpenClawGatewayFailureKind } from '../../../shared/openclawEngine/constants';
+import { OpenClawTranscriptSafetyStatus } from '../../../shared/openclawTranscript/constants';
 import type { Agent, CoworkExecutionMode, CoworkMessage, CoworkMessageMetadata, CoworkSession, CoworkSessionStatus, CoworkStore } from '../../coworkStore';
 import { t } from '../../i18n';
 import { MediaGenerationTool } from '../../mediaGenerationPolicy';
@@ -136,6 +138,10 @@ import {
   hasCronRunHistoryForSession,
   shouldReplaceLocalConversationWithCronHistory,
 } from './openclawCronRunHistorySync';
+import {
+  buildOpenClawTranscriptOversizedError,
+  inspectOpenClawTranscriptSafety,
+} from './openclawTranscriptSafety';
 import { OpenClawTurnHistorySync } from './openclawTurnHistorySync';
 import {
   buildSubagentChildHistorySyncPlan,
@@ -2315,6 +2321,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private gatewayClient: GatewayClientLike | null = null;
   private gatewayClientVersion: string | null = null;
   private gatewayClientEntryPath: string | null = null;
+  private gatewayClientGeneration = 0;
   /** Holds the client between start() and onHelloOk so stopGatewayClient can clean it up. */
   private pendingGatewayClient: GatewayClientLike | null = null;
   private gatewayReadyPromise: Promise<void> | null = null;
@@ -4678,6 +4685,56 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
   }
 
+  private async assertTranscriptSafeForRun(options: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }): Promise<void> {
+    if (typeof this.engineManager.getStateDir !== 'function') {
+      console.debug(
+        '[OpenClawRuntime] skipped transcript safety inspection because the engine state directory is unavailable.',
+        `Session ${options.sessionId}.`,
+      );
+      return;
+    }
+
+    const inspection = await inspectOpenClawTranscriptSafety({
+      stateDir: this.engineManager.getStateDir(),
+      agentId: options.agentId,
+      sessionKey: options.sessionKey,
+    });
+
+    if (inspection.status === OpenClawTranscriptSafetyStatus.Unknown) {
+      console.debug(
+        '[OpenClawRuntime] transcript safety inspection was inconclusive.',
+        `Session ${options.sessionId}.`,
+        `OpenClaw key ${options.sessionKey}.`,
+        `Reason ${inspection.reason ?? 'unknown'}.`,
+      );
+      return;
+    }
+
+    if (inspection.status === OpenClawTranscriptSafetyStatus.CompactionRequired) {
+      console.log(
+        '[OpenClawRuntime] active transcript reached the managed compaction threshold.',
+        `Session ${options.sessionId}.`,
+        `OpenClaw key ${options.sessionKey}.`,
+        `Transcript bytes ${inspection.transcriptBytes ?? 'unknown'}.`,
+      );
+      return;
+    }
+
+    if (inspection.status === OpenClawTranscriptSafetyStatus.Blocked) {
+      console.warn(
+        '[OpenClawRuntime] blocked a run before gateway transcript loading because the active transcript is oversized.',
+        `Session ${options.sessionId}.`,
+        `OpenClaw key ${options.sessionKey}.`,
+        `Transcript bytes ${inspection.transcriptBytes ?? 'unknown'}.`,
+      );
+      throw buildOpenClawTranscriptOversizedError(inspection);
+    }
+  }
+
   private async runTurn(
     sessionId: string,
     prompt: string,
@@ -4785,6 +4842,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       ? parsedGoalBootstrapCommand
       : null;
     let effectivePrompt = prompt;
+
+    try {
+      await this.assertTranscriptSafeForRun({ sessionId, sessionKey, agentId });
+    } catch (error) {
+      this.store.updateSession(sessionId, { status: 'error' });
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit('error', sessionId, message);
+      throw error;
+    }
 
     this.store.updateSession(sessionId, { status: 'running' });
     this.emitSessionStatus(sessionId, 'running');
@@ -5314,6 +5380,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private async createGatewayClient(connection: OpenClawGatewayConnectionInfo): Promise<void> {
     const GatewayClient = await this.loadGatewayClientCtor(connection.clientEntryPath);
+    const clientGeneration = ++this.gatewayClientGeneration;
 
     let resolveReady: (() => void) | null = null;
     let rejectReady: ((error: Error) => void) | null = null;
@@ -5348,6 +5415,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       role: 'operator',
       scopes: ['operator.admin'],
       onHelloOk: () => {
+        if (clientGeneration !== this.gatewayClientGeneration) {
+          console.debug('[ChannelSync] ignored hello from a stale gateway client generation');
+          return;
+        }
         console.log('[ChannelSync] GatewayClient: onHelloOk — handshake succeeded');
         // Expose the client only after the connect handshake completes.
         // Setting gatewayClient earlier would let concurrent code send
@@ -5355,6 +5426,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.gatewayClient = client;
         this.gatewayClientVersion = connection.version;
         this.gatewayClientEntryPath = connection.clientEntryPath;
+        this.gatewayReconnectSuppressed = false;
+        this.gatewayReconnectAttempt = 0;
         this.resetGatewayRpcHealth();
         this.subscribeToGatewaySessionEvents(client);
         settleResolve();
@@ -5383,6 +5456,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       },
       onClose: (_code: number, reason: string) => {
         console.log('[ChannelSync] GatewayClient: onClose — code:', _code, 'reason:', reason, 'settled:', settled);
+        if (clientGeneration !== this.gatewayClientGeneration) {
+          console.debug('[ChannelSync] ignored close from a stale gateway client generation');
+          return;
+        }
         if (!settled) {
           // v2026.4.5+: The initial handshake may fail due to the gateway
           // being busy with plugin loading (connect.challenge timeout on the
@@ -5402,9 +5479,18 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         }
 
         console.warn('[OpenClawRuntime] gateway WS disconnected — code:', _code, 'reason:', reason);
-        const disconnectedMessage = _code === WebSocketCloseCode.MessageTooBig
-          ? (reason || 'gateway closed (1009):')
-          : (reason || 'OpenClaw gateway client disconnected');
+        const gatewayFailure = typeof this.engineManager.getLastGatewayFailure === 'function'
+          ? this.engineManager.getLastGatewayFailure()
+          : null;
+        const failureMatchesConnectionGeneration = gatewayFailure
+          && (connection.generation === undefined || gatewayFailure.generation === connection.generation);
+        const disconnectedMessage = failureMatchesConnectionGeneration
+          && gatewayFailure.kind === OpenClawGatewayFailureKind.HeapOutOfMemory
+          ? `OpenClaw gateway failed: gatewayFailureKind=${gatewayFailure.kind}; `
+            + `generation=${gatewayFailure.generation}; code=${gatewayFailure.exitCode ?? _code}`
+          : _code === WebSocketCloseCode.MessageTooBig
+            ? (reason || 'gateway closed (1009):')
+            : (reason || 'OpenClaw gateway client disconnected');
         const disconnectedError = new Error(disconnectedMessage);
         const activeSessionIds = Array.from(this.activeTurns.keys());
         activeSessionIds.forEach((sessionId) => {
@@ -5454,6 +5540,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private stopGatewayClient(): void {
     this.gatewayStoppingIntentionally = true;
+    this.gatewayClientGeneration += 1;
     this.stopChannelPolling();
     this.cancelGatewayReconnect();
     this.stopTickWatchdog();

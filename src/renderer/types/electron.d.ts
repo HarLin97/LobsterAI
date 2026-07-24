@@ -74,6 +74,7 @@ import type {
 } from '../../shared/shell/constants';
 import type {
   SkinApplyResponse,
+  SkinBindThemeResponse,
   SkinDeactivateResponse,
   SkinDeleteResponse,
   SkinGetActiveResponse,
@@ -664,7 +665,8 @@ interface IElectronAPI {
   skin: {
     getActive: () => Promise<SkinGetActiveResponse>;
     list: () => Promise<SkinListResponse>;
-    apply: (skinId: string) => Promise<SkinApplyResponse>;
+    apply: (skinId: string, boundThemeId?: string) => Promise<SkinApplyResponse>;
+    bindTheme: (skinId: string, themeId: string) => Promise<SkinBindThemeResponse>;
     deactivate: () => Promise<SkinDeactivateResponse>;
     delete: (skinId: string) => Promise<SkinDeleteResponse>;
     onChanged: (callback: () => void) => () => void;

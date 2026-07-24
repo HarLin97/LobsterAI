@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { expect, test, vi } from 'vitest';
@@ -6,6 +8,7 @@ vi.mock('electron', () => ({
   app: {
     getAppPath: () => process.cwd(),
     getPath: () => process.cwd(),
+    getVersion: () => 'test-version',
   },
   BrowserWindow: {
     getAllWindows: () => [],
@@ -21,6 +24,7 @@ import {
   BrowserAnnotationScreenshotStatus,
 } from '../../../shared/cowork/browserAnnotations';
 import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
+import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
@@ -1425,6 +1429,89 @@ test('disconnectGatewayClient suppresses automatic gateway reconnect until manua
   expect(adapter.gatewayReconnectSuppressed).toBe(false);
 });
 
+test('a successful gateway hello clears reconnect suppression on the normal ensure path', async () => {
+  let callbacks: Record<string, unknown> = {};
+  class TestGatewayClient {
+    constructor(options: Record<string, unknown>) {
+      callbacks = options;
+    }
+
+    start() {
+      (callbacks.onHelloOk as () => void)();
+    }
+
+    stop() {}
+
+    async request() {
+      return { subscribed: true };
+    }
+  }
+
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  adapter.gatewayReconnectSuppressed = true;
+  adapter.loadGatewayClientCtor = async () => TestGatewayClient as never;
+
+  await adapter.createGatewayClient({
+    url: 'ws://127.0.0.1:9999',
+    token: 'token',
+    version: 'test-version',
+    clientEntryPath: '/tmp/openclaw-gateway-client.js',
+    port: 9999,
+    generation: 4,
+  });
+  await adapter.gatewayReadyPromise;
+
+  expect(adapter.gatewayReconnectSuppressed).toBe(false);
+  expect(adapter.gatewayReconnectAttempt).toBe(0);
+  adapter.disconnectGatewayClient();
+});
+
+test('gateway close reports a recent process heap OOM instead of a generic disconnect', async () => {
+  let callbacks: Record<string, unknown> = {};
+  class TestGatewayClient {
+    constructor(options: Record<string, unknown>) {
+      callbacks = options;
+    }
+
+    start() {
+      (callbacks.onHelloOk as () => void)();
+    }
+
+    stop() {}
+
+    async request() {
+      return { subscribed: true };
+    }
+  }
+
+  const adapter = new OpenClawRuntimeAdapter({} as never, {
+    getLastGatewayFailure: () => ({
+      generation: 4,
+      kind: 'heap_out_of_memory',
+      detectedAt: Date.now(),
+      exitCode: 134,
+    }),
+  } as never);
+  adapter.loadGatewayClientCtor = async () => TestGatewayClient as never;
+
+  await adapter.createGatewayClient({
+    url: 'ws://127.0.0.1:9999',
+    token: 'token',
+    version: 'test-version',
+    clientEntryPath: '/tmp/openclaw-gateway-client.js',
+    port: 9999,
+    generation: 4,
+  });
+  await adapter.gatewayReadyPromise;
+
+  (callbacks.onClose as (code: number, reason: string) => void)(1006, '');
+
+  await expect(adapter.gatewayReadyPromise).rejects.toThrow(
+    'gatewayFailureKind=heap_out_of_memory',
+  );
+  adapter.disconnectGatewayClient();
+});
+
 test('patchSession uses the persisted IM channel session key after runtime cache is empty', async () => {
   const { adapter, requests } = createPatchAdapter({
     isChannelSession: true,
@@ -1965,6 +2052,7 @@ function createRunTurnAdapter(options: {
   holdFirstModelPatch?: boolean;
   sessionCwd?: string;
   chatSendError?: Error;
+  stateDir?: string;
 } = {}) {
   const session = {
     id: 'session-1',
@@ -2033,6 +2121,7 @@ function createRunTurnAdapter(options: {
   };
   const engineManager = {
     startGateway: async () => ({ phase: 'running', message: '' }),
+    ...(options.stateDir ? { getStateDir: () => options.stateDir } : {}),
     getGatewayConnectionInfo: () => ({
       url: 'ws://127.0.0.1:9999',
       token: 'token',
@@ -2211,6 +2300,12 @@ test('annotation-only turn persists structured metadata and builds a trust-separ
   expect(userMessage?.content).toBe('');
   expect(userMessage?.metadata).toMatchObject({
     browserAnnotations: [{ id: 'batch-1' }],
+    imageAttachmentPreviews: [{
+      name: 'annotation-1.png',
+      mimeType: 'image/png',
+      base64Data: 'aGVsbG8=',
+      isPreview: true,
+    }],
   });
 });
 
@@ -2229,6 +2324,41 @@ test('continueSession strips NUL characters from the persisted message and chat.
   const userMessages = session.messages.filter((message) => message.type === 'user');
   expect(userMessages).toHaveLength(1);
   expect(userMessages[0].content).toBe('请分析这段文本');
+});
+
+test('continueSession blocks an oversized active transcript before gateway requests', async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobster-runtime-transcript-'));
+  try {
+    const sessionsDir = path.join(stateDir, 'agents', 'main', 'sessions');
+    const transcriptPath = path.join(sessionsDir, 'openclaw-session-1.jsonl');
+    await fs.promises.mkdir(sessionsDir, { recursive: true });
+    await fs.promises.writeFile(transcriptPath, '');
+    await fs.promises.truncate(transcriptPath, OpenClawTranscriptSafetyLimit.HardBytes);
+    await fs.promises.writeFile(path.join(sessionsDir, 'sessions.json'), JSON.stringify({
+      'agent:main:lobsterai:session-1': {
+        sessionId: 'openclaw-session-1',
+        sessionFile: transcriptPath,
+      },
+    }));
+
+    const { adapter, requests, session } = createRunTurnAdapter({ stateDir });
+    const errors: string[] = [];
+    adapter.on('error', (_sessionId, error) => errors.push(error));
+
+    await expect(adapter.continueSession('session-1', 'continue this task'))
+      .rejects.toThrow('OPENCLAW_ACTIVE_TRANSCRIPT_OVERSIZED');
+
+    expect(requests).toEqual([]);
+    expect(session.status).toBe('error');
+    expect(session.messages).toEqual([
+      expect.objectContaining({ type: 'user', content: 'continue this task' }),
+    ]);
+    expect(errors).toEqual([
+      expect.stringContaining('OPENCLAW_ACTIVE_TRANSCRIPT_OVERSIZED'),
+    ]);
+  } finally {
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
+  }
 });
 
 test('continueSession patches a session override before chat.send even when the model cache matches', async () => {

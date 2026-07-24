@@ -97,6 +97,15 @@ import {
 } from './artifactFileSharePolicy';
 import { ArtifactPreviewGlobeIcon } from './ArtifactPreviewIdentity';
 import ArtifactRenderer from './ArtifactRenderer';
+import {
+  ArtifactSubscriptionBlockReason,
+  ArtifactSubscriptionFeature,
+  type ArtifactSubscriptionFeature as ArtifactSubscriptionFeatureValue,
+  type ArtifactSubscriptionPromptState,
+  resolveArtifactSubscriptionDecision,
+} from './artifactSubscriptionGate';
+import ArtifactSubscriptionPromptDialog from './ArtifactSubscriptionPromptDialog';
+import { resolveRemovedActiveBrowserAnnotationBatch } from './browserAnnotationSession';
 import FileDirectoryView from './FileDirectoryView';
 import {
   buildLocalServiceDeploymentPermissionPlan,
@@ -159,7 +168,6 @@ type HtmlSharePhase = (typeof HtmlSharePhase)[keyof typeof HtmlSharePhase];
 
 const HtmlShareDialogKind = {
   Create: 'create',
-  Subscription: 'subscription',
   Existing: 'existing',
   Result: 'result',
 } as const;
@@ -719,6 +727,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const [localBrowserUrl, setLocalBrowserUrl] = useState('');
   const [htmlSharePhase, setHtmlSharePhase] = useState<HtmlSharePhase>(HtmlSharePhase.Idle);
   const [htmlShareDialog, setHtmlShareDialog] = useState<HtmlShareDialogState | null>(null);
+  const [subscriptionPrompt, setSubscriptionPrompt] =
+    useState<ArtifactSubscriptionPromptState | null>(null);
   const [htmlSharePendingRequest, setHtmlSharePendingRequest] =
     useState<HtmlSharePendingRequest | null>(null);
   const [, setHtmlShareLookup] = useState<HtmlShareLookupState | null>(null);
@@ -1585,16 +1595,28 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     }
   }, [onOpenHtmlFileInBrowser, reportSelectedArtifactAction, selectedArtifact]);
 
-  const openSubscriptionPage = useCallback(() => {
-    window.electron?.shell?.openExternal(getPortalPricingUrl(PortalPricingKeyfrom.HtmlShare));
-    setHtmlShareDialog(null);
-    if (localServiceDeploymentRequest?.requestId) {
+  const closeSubscriptionPrompt = useCallback(() => {
+    const feature = subscriptionPrompt?.feature;
+    setSubscriptionPrompt(null);
+    setHtmlSharePendingRequest(null);
+    if (
+      feature === ArtifactSubscriptionFeature.Deployment &&
+      localServiceDeploymentRequest?.requestId
+    ) {
       onLocalServiceDeploymentRequestConsumed?.(localServiceDeploymentRequest.requestId);
     }
   }, [
     localServiceDeploymentRequest?.requestId,
     onLocalServiceDeploymentRequestConsumed,
+    subscriptionPrompt?.feature,
   ]);
+
+  const openSubscriptionPage = useCallback(() => {
+    void window.electron?.shell?.openExternal(
+      getPortalPricingUrl(PortalPricingKeyfrom.HtmlShare),
+    );
+    closeSubscriptionPrompt();
+  }, [closeSubscriptionPrompt]);
 
   const formatShareClipboardText = useCallback((url: string, shareCode?: string): string => {
     if (!shareCode) return url;
@@ -1613,34 +1635,27 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     }, 2200);
   }, []);
 
-  const ensureHtmlShareAllowed = useCallback(async (): Promise<boolean> => {
-    let latestIsLoggedIn = authState.isLoggedIn;
-    let latestQuota = authState.quota;
-
-    if (!latestIsLoggedIn || latestQuota?.subscriptionStatus !== 'active') {
+  const ensureArtifactSubscriptionAllowed = useCallback(async (
+    feature: ArtifactSubscriptionFeatureValue,
+  ): Promise<boolean> => {
+    const decision = await resolveArtifactSubscriptionDecision({
+      isLoggedIn: authState.isLoggedIn,
+      subscriptionStatus: authState.quota?.subscriptionStatus,
+    }, async () => {
       const refreshed = await authService.refreshAuthState();
-      latestIsLoggedIn = refreshed.isLoggedIn;
-      latestQuota = refreshed.quota;
-    }
-
-    if (!latestIsLoggedIn) {
-      setHtmlShareDialog({
-        kind: HtmlShareDialogKind.Subscription,
-        title: t('htmlShareLoginRequiredTitle'),
-        message: t('htmlShareLoginRequiredMessage'),
-      });
-      return false;
-    }
-    if (latestQuota?.subscriptionStatus !== 'active') {
-      setHtmlShareDialog({
-        kind: HtmlShareDialogKind.Subscription,
-        title: t('htmlShareSubscriptionRequiredTitle'),
-        message: t('htmlShareSubscriptionRequiredMessage'),
-      });
+      return {
+        isLoggedIn: refreshed.isLoggedIn,
+        subscriptionStatus: refreshed.quota?.subscriptionStatus,
+      };
+    });
+    if (!decision.allowed) {
+      setHtmlShareDialog(null);
+      setHtmlSharePendingRequest(null);
+      setSubscriptionPrompt({ feature, reason: decision.reason });
       return false;
     }
     return true;
-  }, [authState.isLoggedIn, authState.quota]);
+  }, [authState.isLoggedIn, authState.quota?.subscriptionStatus]);
 
   const handleCopyShareLink = useCallback(
     async (url?: string, shareCode?: string) => {
@@ -1696,10 +1711,11 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     ) => {
       if (!result?.success || !result.url) {
         if (result?.code === HtmlShareErrorCode.SubscriptionRequired) {
-          setHtmlShareDialog({
-            kind: HtmlShareDialogKind.Subscription,
-            title: t('htmlShareSubscriptionRequiredTitle'),
-            message: t('htmlShareSubscriptionRequiredMessage'),
+          setHtmlShareDialog(null);
+          setHtmlSharePendingRequest(null);
+          setSubscriptionPrompt({
+            feature: ArtifactSubscriptionFeature.Share,
+            reason: ArtifactSubscriptionBlockReason.SubscriptionRequired,
           });
           setHtmlSharePhase(HtmlSharePhase.Failed);
           return;
@@ -1953,7 +1969,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     setIsNodeDeploymentLookupPending(true);
 
     try {
-      if (!(await ensureHtmlShareAllowed())) {
+      if (!(await ensureArtifactSubscriptionAllowed(ArtifactSubscriptionFeature.Deployment))) {
         setIsNodeDeploymentDialogOpen(false);
         setNodeDeploymentDialog(null);
         return;
@@ -2039,7 +2055,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     }
   }, [
     clearNodeDeploymentLookupDialogTimer,
-    ensureHtmlShareAllowed,
+    ensureArtifactSubscriptionAllowed,
     isHtmlSharing,
     isNodeDeploymentBusy,
     isNodeDeploymentLookupPending,
@@ -4529,31 +4545,25 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                     onClick={() => {
                       setHtmlShareDialog(null);
                       setHtmlSharePendingRequest(null);
-                      if (localServiceDeploymentRequest?.requestId) {
-                        onLocalServiceDeploymentRequestConsumed?.(
-                          localServiceDeploymentRequest.requestId,
-                        );
-                      }
                     }}
                     className="rounded-md border border-border px-3 py-1.5 text-sm text-secondary transition-colors hover:bg-surface hover:text-foreground"
                   >
                     {htmlShareDialog.kind === HtmlShareDialogKind.Result ? t('close') : t('cancel')}
                   </button>
-                  {htmlShareDialog.kind === HtmlShareDialogKind.Subscription && (
-                    <button
-                      type="button"
-                      onClick={openSubscriptionPage}
-                      className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {t('htmlShareOpenSubscription')}
-                    </button>
-                  )}
                 </div>
               </div>
             )}
           </div>,
           document.body,
         )}
+      {subscriptionPrompt && (
+        <ArtifactSubscriptionPromptDialog
+          feature={subscriptionPrompt.feature}
+          reason={subscriptionPrompt.reason}
+          onCancel={closeSubscriptionPrompt}
+          onSubscribe={openSubscriptionPage}
+        />
+      )}
       {nodeDeploymentDialog && isNodeDeploymentDialogOpen &&
         createPortal(
           <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/35 px-4">
@@ -5771,10 +5781,6 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
     isDeviceToolbarVisible,
   ]);
 
-  useEffect(() => {
-    annotationBatchRef.current = annotationBatch;
-  }, [annotationBatch]);
-
   const sendAnnotationCommand = useCallback((
     type: string,
     batch: CoworkBrowserAnnotationBatch,
@@ -5792,6 +5798,20 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
       ...payload,
     } satisfies BrowserAnnotationGuestEnvelope);
   }, []);
+
+  useEffect(() => {
+    const removedBatch = resolveRemovedActiveBrowserAnnotationBatch(
+      annotationBatchRef.current,
+      annotationBatch,
+      isAnnotating,
+    );
+    annotationBatchRef.current = annotationBatch;
+    if (!removedBatch) return;
+
+    sendAnnotationCommand(BrowserAnnotationGuestCommandType.Clear, removedBatch);
+    sendAnnotationCommand(BrowserAnnotationGuestCommandType.Stop, removedBatch);
+    setIsAnnotating(false);
+  }, [annotationBatch, isAnnotating, sendAnnotationCommand]);
 
   const commitAnnotationBatch = useCallback((batch: CoworkBrowserAnnotationBatch) => {
     annotationBatchRef.current = batch;
@@ -6704,7 +6724,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
 
   const hoveredToolbarLabel =
     hoveredToolbarAction === BrowserToolbarAction.Annotate
-      ? t('artifactBrowserAnnotate')
+      ? t(isAnnotating ? 'artifactBrowserAnnotating' : 'artifactBrowserAnnotate')
       : hoveredToolbarAction === BrowserToolbarAction.OpenExternal
         ? t('artifactBrowserOpenExternal')
         : '';
@@ -6796,7 +6816,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         </div>
         <div
           ref={annotateButtonRef}
-          className="flex h-7 w-7 shrink-0 items-center justify-center"
+          className="flex h-7 shrink-0 items-center justify-center"
           onMouseEnter={() => setHoveredToolbarAction(BrowserToolbarAction.Annotate)}
           onMouseLeave={() => setHoveredToolbarAction(null)}
         >
@@ -6804,28 +6824,23 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
             type="button"
             onClick={handleToggleAnnotation}
             disabled={!currentUrl}
-            className={`inline-flex h-7 w-7 items-center justify-center rounded text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+            className={`inline-flex h-7 items-center justify-center rounded text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
               isAnnotating
-                ? 'bg-primary/10 text-primary'
-                : 'text-secondary hover:bg-surface hover:text-foreground'
+                ? 'gap-1.5 bg-primary/10 px-2 text-primary hover:bg-primary/15'
+                : 'w-7 text-secondary hover:bg-surface hover:text-foreground'
             }`}
-            aria-label={t('artifactBrowserAnnotate')}
+            aria-label={t(isAnnotating ? 'artifactBrowserAnnotating' : 'artifactBrowserAnnotate')}
             title={isAnnotating ? t('artifactBrowserAnnotating') : t('artifactBrowserAnnotate')}
           >
             <AnnotateIcon />
+            {isAnnotating ? (
+              <span className="whitespace-nowrap">
+                {t('artifactBrowserAnnotating')}
+                {annotationBatch?.annotations.length ? ` · ${annotationBatch.annotations.length}` : ''}
+              </span>
+            ) : null}
           </button>
         </div>
-        {isAnnotating && (
-          <button
-            type="button"
-            onClick={handleToggleAnnotation}
-            className="shrink-0 rounded-md bg-primary/10 px-2 py-1 text-xs text-primary transition-colors hover:bg-primary/15"
-            title={t('artifactBrowserAnnotating')}
-          >
-            {t('artifactBrowserAnnotating')}
-            {annotationBatch?.annotations.length ? ` · ${annotationBatch.annotations.length}` : ''}
-          </button>
-        )}
         <button
           ref={browserMenuButtonRef}
           type="button"

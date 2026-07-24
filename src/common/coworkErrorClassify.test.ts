@@ -181,6 +181,18 @@ test('gateway: client disconnected', () => {
   expect(classifyError('client disconnected')).toBe('coworkErrorGatewayDisconnected');
 });
 
+test('gateway: oversized active transcript has a dedicated recovery message', () => {
+  expect(classifyError(
+    'OPENCLAW_ACTIVE_TRANSCRIPT_OVERSIZED: active OpenClaw transcript is 70000000 bytes',
+  )).toBe('coworkErrorTranscriptOversized');
+});
+
+test('gateway: heap OOM is not classified as a generic disconnect', () => {
+  expect(classifyError(
+    'OpenClaw gateway failed: gatewayFailureKind=heap_out_of_memory; code=134',
+  )).toBe('coworkErrorGatewayHeapOutOfMemory');
+});
+
 test('gateway: session patch timeout before send', () => {
   expect(classifyError('gateway request timeout for sessions.patch')).toBe('coworkGatewaySessionSyncTimeout');
 });

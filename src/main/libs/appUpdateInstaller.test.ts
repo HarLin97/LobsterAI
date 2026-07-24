@@ -48,13 +48,14 @@ import { APP_UPDATE_ELEVATION_DECLINED_ERROR } from '../../shared/appUpdate/cons
 import {
   buildMacSwapInstallCommand,
   buildMacSwapPaths,
-  buildWindowsSilentInstallScript,
+  buildWindowsInstallerLaunchScript,
   findAttachedDevEntries,
   installUpdate,
   MAC_SWAP_BACKUP_INFIX,
   MAC_SWAP_ROLLED_BACK_EXIT_CODE,
   MAC_SWAP_STAGING_INFIX,
   parseHdiutilAttachOutput,
+  WINDOWS_NO_DEFENDER_EXCLUSION_ARG,
   WINDOWS_UAC_DECLINED_EXIT_CODE,
 } from './appUpdateInstaller';
 
@@ -91,7 +92,7 @@ describe('Windows update install', () => {
     vi.restoreAllMocks();
   });
 
-  test('launches the silent installer through PowerShell and quits on success', async () => {
+  test('launches the update-mode installer through PowerShell and quits on success', async () => {
     mockSilentLaunchResult(null);
 
     await installUpdate(INSTALLER_PATH);
@@ -103,7 +104,8 @@ describe('Windows update install', () => {
     expect(args).toContain('-NonInteractive');
     const script = args[args.length - 1];
     expect(script).toContain(`-FilePath '${INSTALLER_PATH}'`);
-    expect(script).toContain(`'/S','--force-run','--updated'`);
+    expect(script).toContain(`'--force-run','--updated'`);
+    expect(script).not.toContain(`'/S'`);
     expect(mocks.quit).toHaveBeenCalledOnce();
     // The wizard path must not run: silent launch succeeded.
     expect(mocks.openPath).not.toHaveBeenCalled();
@@ -161,17 +163,37 @@ describe('Windows update install', () => {
     expect(mocks.openPath).not.toHaveBeenCalled();
     expect(mocks.quit).not.toHaveBeenCalled();
   });
+
+  test('forwards the enterprise no-exclusion switch to the installer', async () => {
+    mockSilentLaunchResult(null);
+
+    await installUpdate(INSTALLER_PATH, { noDefenderExclusion: true });
+
+    const [, args] = cpMocks.execFile.mock.calls[0] as [string, string[]];
+    const script = args[args.length - 1];
+    expect(script).toContain(`'--force-run','--updated','${WINDOWS_NO_DEFENDER_EXCLUSION_ARG}'`);
+  });
+
+  test('omits the no-exclusion switch by default', async () => {
+    mockSilentLaunchResult(null);
+
+    await installUpdate(INSTALLER_PATH);
+
+    const [, args] = cpMocks.execFile.mock.calls[0] as [string, string[]];
+    const script = args[args.length - 1];
+    expect(script).not.toContain(WINDOWS_NO_DEFENDER_EXCLUSION_ARG);
+  });
 });
 
-describe('buildWindowsSilentInstallScript', () => {
+describe('buildWindowsInstallerLaunchScript', () => {
   test('escapes single quotes in the installer path for PowerShell', () => {
-    const script = buildWindowsSilentInstallScript("C:\\Users\\o'brien\\updates\\setup.exe");
+    const script = buildWindowsInstallerLaunchScript("C:\\Users\\o'brien\\updates\\setup.exe");
 
     expect(script).toContain(`-FilePath 'C:\\Users\\o''brien\\updates\\setup.exe'`);
   });
 
   test('converts a declined elevation into the dedicated exit code', () => {
-    const script = buildWindowsSilentInstallScript(INSTALLER_PATH);
+    const script = buildWindowsInstallerLaunchScript(INSTALLER_PATH);
 
     expect(script).toContain(`$native -eq ${WINDOWS_UAC_DECLINED_EXIT_CODE}`);
     expect(script).toContain(`exit ${WINDOWS_UAC_DECLINED_EXIT_CODE}`);

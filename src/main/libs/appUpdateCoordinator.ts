@@ -344,7 +344,9 @@ export class AppUpdateCoordinator {
     }
 
     try {
-      await installUpdate(filePath);
+      await installUpdate(filePath, {
+        noDefenderExclusion: this.isDefenderExclusionDisabled(),
+      });
       return { success: true, state: this.getState() };
     } catch (error) {
       console.error('[AppUpdate] install failed:', error);
@@ -583,6 +585,11 @@ export class AppUpdateCoordinator {
   private isUpdateDisabled(): boolean {
     const enterprise = this.store.get<{ disableUpdate?: boolean }>('enterprise_config');
     return enterprise?.disableUpdate === true;
+  }
+
+  private isDefenderExclusionDisabled(): boolean {
+    const enterprise = this.store.get<{ disableDefenderExclusion?: boolean }>('enterprise_config');
+    return enterprise?.disableDefenderExclusion === true;
   }
 
   private resolveCurrentVersion(): string {

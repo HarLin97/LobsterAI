@@ -17,6 +17,7 @@ export interface ActiveSkin {
   id: string;
   name?: string;
   baseThemeId?: string;
+  boundThemeId?: string;
   presentation?: SkinPresentation;
   assets: Partial<Record<SkinAssetSlotValue, SkinAssetReference>>;
 }
@@ -120,6 +121,8 @@ export const normalizeActiveSkin = (value: unknown): ActiveSkin | null => {
     id,
     name: readString(candidate, ['name', 'title']) ?? readString(manifest, ['name', 'title']),
     baseThemeId: readString(candidate, ['baseThemeId']) ?? readString(manifest, ['baseThemeId']),
+    boundThemeId: readString(candidate, ['boundThemeId'])
+      ?? readString(manifest, ['boundThemeId']),
     ...(presentation ? { presentation } : {}),
     assets: {
       ...(workspaceBackdrop ? { [SkinAssetSlot.WorkspaceBackdrop]: workspaceBackdrop } : {}),
@@ -185,13 +188,24 @@ class SkinService {
     return normalizeSkinList(result);
   }
 
-  async apply(skinId: string): Promise<void> {
+  async apply(skinId: string, boundThemeId?: string): Promise<ActiveSkin | null> {
     const api = getRendererSkinApi();
-    if (!api) return;
-    const result = await api.apply(skinId);
+    if (!api) return null;
+    const result = await api.apply(skinId, boundThemeId);
     if (isRecord(result) && result.success === false) {
       throw new Error(readString(result, ['error', 'message']) ?? 'Failed to apply skin');
     }
+    return normalizeActiveSkin(result);
+  }
+
+  async bindTheme(skinId: string, themeId: string): Promise<ActiveSkin | null> {
+    const api = getRendererSkinApi();
+    if (!api) return null;
+    const result = await api.bindTheme(skinId, themeId);
+    if (isRecord(result) && result.success === false) {
+      throw new Error(readString(result, ['error', 'message']) ?? 'Failed to bind skin theme');
+    }
+    return normalizeActiveSkin(result);
   }
 
   async deactivate(): Promise<void> {

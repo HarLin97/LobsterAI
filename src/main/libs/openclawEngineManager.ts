@@ -7,7 +7,12 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 
-import { OpenClawEngineErrorCode, type OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+import {
+  OpenClawEngineErrorCode,
+  type OpenClawEnginePhase,
+  OpenClawGatewayFailureKind,
+  type OpenClawGatewayFailureSnapshot,
+} from '../../shared/openclawEngine/constants';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
 import {
   formatGatewayLogDateKey,
@@ -55,6 +60,11 @@ const OPENCLAW_CONFIG_STARTUP_FAILURE_PATTERNS = [
   /openclaw\.json[\s\S]{0,240}(?:syntaxerror|unexpected token|invalid)/i,
   /(?:syntaxerror|unexpected token|invalid)[\s\S]{0,240}openclaw\.json/i,
 ];
+const OPENCLAW_GATEWAY_HEAP_OOM_PATTERNS = [
+  /JavaScript heap out of memory/i,
+  /Ineffective mark-compacts near heap limit/i,
+  /Allocation failed - process out of memory/i,
+];
 
 export type { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 
@@ -75,11 +85,19 @@ export interface OpenClawGatewayConnectionInfo {
   token: string | null;
   url: string | null;
   clientEntryPath: string | null;
+  generation?: number;
 }
 
 export const isOpenClawConfigStartupFailure = (text: string | null | undefined): boolean => {
   if (!text) return false;
   return OPENCLAW_CONFIG_STARTUP_FAILURE_PATTERNS.some((pattern) => pattern.test(text));
+};
+
+export const isOpenClawGatewayHeapOutOfMemory = (
+  text: string | null | undefined,
+): boolean => {
+  if (!text) return false;
+  return OPENCLAW_GATEWAY_HEAP_OOM_PATTERNS.some((pattern) => pattern.test(text));
 };
 
 interface OpenClawEngineManagerEvents {
@@ -204,7 +222,11 @@ export class OpenClawEngineManager extends EventEmitter {
   private status: OpenClawEngineStatus;
   private gatewayProcess: GatewayProcess | null = null;
   private readonly gatewayRecentOutput = new WeakMap<GatewayProcess, string[]>();
+  private readonly gatewayGenerationByProcess = new WeakMap<GatewayProcess, number>();
+  private readonly gatewayFailureByProcess = new WeakMap<GatewayProcess, OpenClawGatewayFailureSnapshot>();
   private readonly expectedGatewayExits = new WeakSet<object>();
+  private gatewayGeneration = 0;
+  private lastGatewayFailure: OpenClawGatewayFailureSnapshot | null = null;
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
   private gatewayRestartAttempt = 0;
   private shutdownRequested = false;
@@ -315,6 +337,14 @@ export class OpenClawEngineManager extends EventEmitter {
     return getRecentGatewayLogEntries(this.logsDir);
   }
 
+  getLastGatewayFailure(maxAgeMs = 60_000): OpenClawGatewayFailureSnapshot | null {
+    const failure = this.lastGatewayFailure;
+    if (!failure || Date.now() - failure.detectedAt > maxAgeMs) {
+      return null;
+    }
+    return { ...failure };
+  }
+
   private pruneGatewayLogsIfNeeded(now = new Date()): void {
     const dateKey = formatGatewayLogDateKey(now);
     if (this.gatewayLogPrunedDateKey === dateKey) return;
@@ -362,6 +392,7 @@ export class OpenClawEngineManager extends EventEmitter {
       token,
       url: port ? `ws://127.0.0.1:${port}` : null,
       clientEntryPath,
+      generation: this.gatewayGeneration,
     };
   }
 
@@ -663,6 +694,8 @@ export class OpenClawEngineManager extends EventEmitter {
     console.log(`[OpenClaw] startGateway: gateway process created (${elapsed()}), platform=${process.platform}, launcher=${process.platform === 'win32' ? 'spawn' : 'utilityProcess'}`);
 
     this.gatewayProcess = child;
+    this.gatewayGeneration += 1;
+    this.gatewayGenerationByProcess.set(child, this.gatewayGeneration);
     this.gatewaySpawnedAt = Date.now();
     this.attachGatewayProcessLogs(child);
     this.attachGatewayExitHandlers(child);
@@ -1599,9 +1632,29 @@ export class OpenClawEngineManager extends EventEmitter {
     child.stderr?.on('data', (chunk) => {
       appendLog(chunk, 'stderr');
       const text = typeof chunk === 'string' ? chunk : chunk.toString();
+      const recentOutput = (this.gatewayRecentOutput.get(child) ?? []).join('\n');
+      this.recordGatewayFatalFailure(child, recentOutput);
       logStartupMilestone(text);
       console.error(`[OpenClaw stderr] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
     });
+  }
+
+  private recordGatewayFatalFailure(child: GatewayProcess, output: string): void {
+    if (!isOpenClawGatewayHeapOutOfMemory(output)) return;
+    const existing = this.gatewayFailureByProcess.get(child);
+    if (existing?.kind === OpenClawGatewayFailureKind.HeapOutOfMemory) return;
+
+    const failure: OpenClawGatewayFailureSnapshot = {
+      generation: this.gatewayGenerationByProcess.get(child) ?? this.gatewayGeneration,
+      kind: OpenClawGatewayFailureKind.HeapOutOfMemory,
+      detectedAt: Date.now(),
+    };
+    this.gatewayFailureByProcess.set(child, failure);
+    this.lastGatewayFailure = failure;
+    console.error(
+      `${gwDiagTs()} gateway fatal failure detected: `
+      + `generation=${failure.generation}, kind=${failure.kind}`,
+    );
   }
 
   private attachGatewayExitHandlers(child: GatewayProcess): void {
@@ -1642,6 +1695,16 @@ export class OpenClawEngineManager extends EventEmitter {
         console.error(`${gwDiagTs()} gateway log tail (last 30 lines before crash):\n${tail}`);
       } catch { /* log file may not exist */ }
 
+      this.recordGatewayFatalFailure(child, tail);
+      const detectedFailure = this.gatewayFailureByProcess.get(child);
+      const processFailure = detectedFailure
+        ? { ...detectedFailure, exitCode: code }
+        : null;
+      if (processFailure) {
+        this.gatewayFailureByProcess.set(child, processFailure);
+        this.lastGatewayFailure = processFailure;
+      }
+
       if (isOpenClawConfigStartupFailure(tail)) {
         console.error(`${gwDiagTs()} gateway exited during startup because OpenClaw config is invalid; auto-restart suppressed`);
         this.gatewayRestartAttempt = 0;
@@ -1651,6 +1714,17 @@ export class OpenClawEngineManager extends EventEmitter {
           message: 'OpenClaw gateway startup stopped because openclaw.json is invalid. Repair the config or use Quick Repair before restarting.',
           canRetry: true,
         });
+        return;
+      }
+
+      if (processFailure?.kind === OpenClawGatewayFailureKind.HeapOutOfMemory) {
+        this.setStatus({
+          phase: 'error',
+          version: this.status.version,
+          message: `OpenClaw gateway ran out of JavaScript heap memory (code=${code ?? 'null'}).`,
+          canRetry: true,
+        });
+        this.scheduleGatewayRestart();
         return;
       }
 

@@ -77,6 +77,7 @@ export const SkinIpc = {
   GetActive: 'skin:getActive',
   List: 'skin:list',
   Apply: 'skin:apply',
+  BindTheme: 'skin:bindTheme',
   Deactivate: 'skin:deactivate',
   Delete: 'skin:delete',
   Changed: 'skin:changed',
@@ -117,6 +118,7 @@ export const SkinStoreErrorCode = {
   SlotOutOfOrder: 'slot_out_of_order',
   SlotAlreadyRegistered: 'slot_already_registered',
   ActiveSkinImmutable: 'active_skin_immutable',
+  InvalidThemeId: 'invalid_theme_id',
   UnsafeAssetPath: 'unsafe_asset_path',
 } as const;
 

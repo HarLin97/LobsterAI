@@ -5,21 +5,9 @@ import {
   SkinPresentationMode,
 } from '../../shared/skin/constants';
 import type { ActiveSkin } from './skin';
-import {
-  applySkinPreferredAppearanceOnce,
-  clearSkinAppearanceMarker,
-} from './skinThemeAppearance';
+import { synchronizeSkinTheme } from './skinThemeAppearance';
 
-const createStorage = () => {
-  const values = new Map<string, string>();
-  return {
-    getItem: vi.fn((key: string) => values.get(key) ?? null),
-    setItem: vi.fn((key: string, value: string) => values.set(key, value)),
-    removeItem: vi.fn((key: string) => values.delete(key)),
-  };
-};
-
-const darkSkin: Pick<ActiveSkin, 'id' | 'presentation'> = {
+const darkSkin: Pick<ActiveSkin, 'boundThemeId' | 'id' | 'presentation'> = {
   id: 'dark-red',
   presentation: {
     mode: SkinPresentationMode.ImmersiveShell,
@@ -38,42 +26,80 @@ const darkSkin: Pick<ActiveSkin, 'id' | 'presentation'> = {
   },
 };
 
-describe('skin preferred appearance application', () => {
-  test('applies one skin appearance once and remembers the completed activation', async () => {
-    const storage = createStorage();
-    const applyThemeAppearance = vi.fn(async () => true);
-    const dependencies = { storage, applyThemeAppearance };
-
-    await expect(applySkinPreferredAppearanceOnce(darkSkin, dependencies)).resolves.toBe(true);
-    await expect(applySkinPreferredAppearanceOnce(darkSkin, dependencies)).resolves.toBe(false);
-
-    expect(applyThemeAppearance).toHaveBeenCalledOnce();
-    expect(applyThemeAppearance).toHaveBeenCalledWith(SkinPreferredAppearance.Dark);
-  });
-
-  test('clears the activation marker after the skin is disabled', async () => {
-    const storage = createStorage();
-    const applyThemeAppearance = vi.fn(async () => true);
-    const dependencies = { storage, applyThemeAppearance };
-
-    await applySkinPreferredAppearanceOnce(darkSkin, dependencies);
-    clearSkinAppearanceMarker(storage);
-    await applySkinPreferredAppearanceOnce(darkSkin, dependencies);
-
-    expect(applyThemeAppearance).toHaveBeenCalledTimes(2);
-  });
-
-  test('does not change the theme for a legacy skin without presentation metadata', async () => {
-    const storage = createStorage();
-    const applyThemeAppearance = vi.fn(async () => true);
-
-    await expect(applySkinPreferredAppearanceOnce(
-      { id: 'legacy-skin' },
-      { storage, applyThemeAppearance },
-    )).resolves.toBe(false);
-
-    expect(applyThemeAppearance).not.toHaveBeenCalled();
-    expect(storage.removeItem).toHaveBeenCalledOnce();
-  });
+const createDependencies = () => ({
+  resolveThemeId: vi.fn((
+    boundThemeId: string | undefined,
+    preferredAppearance: SkinPreferredAppearance | undefined,
+  ) => boundThemeId ?? (preferredAppearance === SkinPreferredAppearance.Dark
+    ? 'classic-dark'
+    : 'classic-light')),
+  bindTheme: vi.fn(async (skinId: string, themeId: string) => ({
+    id: skinId,
+    boundThemeId: themeId,
+  })),
+  applySkinTheme: vi.fn(async () => undefined),
+  restoreDefaultTheme: vi.fn(async () => undefined),
 });
 
+describe('skin theme synchronization', () => {
+  test('binds an upgraded skin on first activation and applies the resolved theme', async () => {
+    const dependencies = createDependencies();
+
+    await expect(synchronizeSkinTheme(darkSkin, dependencies))
+      .resolves.toBe('classic-dark');
+
+    expect(dependencies.bindTheme).toHaveBeenCalledWith('dark-red', 'classic-dark');
+    expect(dependencies.applySkinTheme).toHaveBeenCalledWith('classic-dark');
+    expect(dependencies.restoreDefaultTheme).not.toHaveBeenCalled();
+  });
+
+  test('reapplies an existing immutable binding on every synchronization', async () => {
+    const dependencies = createDependencies();
+    const boundSkin = {
+      ...darkSkin,
+      boundThemeId: 'midnight',
+    };
+
+    await synchronizeSkinTheme(boundSkin, dependencies);
+    await synchronizeSkinTheme(boundSkin, dependencies);
+
+    expect(dependencies.bindTheme).not.toHaveBeenCalled();
+    expect(dependencies.applySkinTheme).toHaveBeenCalledTimes(2);
+    expect(dependencies.applySkinTheme).toHaveBeenNthCalledWith(1, 'midnight');
+    expect(dependencies.applySkinTheme).toHaveBeenNthCalledWith(2, 'midnight');
+  });
+
+  test('uses the default theme when upgrading a legacy skin without presentation metadata', async () => {
+    const dependencies = createDependencies();
+    const legacySkin = { id: 'legacy-skin' };
+
+    await expect(synchronizeSkinTheme(legacySkin, dependencies))
+      .resolves.toBe('classic-light');
+
+    expect(dependencies.resolveThemeId).toHaveBeenCalledWith(undefined, undefined);
+    expect(dependencies.bindTheme).toHaveBeenCalledWith('legacy-skin', 'classic-light');
+  });
+
+  test('restores the saved default theme when no AI skin is active', async () => {
+    const dependencies = createDependencies();
+
+    await expect(synchronizeSkinTheme(null, dependencies)).resolves.toBeNull();
+
+    expect(dependencies.restoreDefaultTheme).toHaveBeenCalledOnce();
+    expect(dependencies.applySkinTheme).not.toHaveBeenCalled();
+    expect(dependencies.bindTheme).not.toHaveBeenCalled();
+  });
+
+  test('honors a binding won by another window during the compatibility write', async () => {
+    const dependencies = createDependencies();
+    dependencies.bindTheme.mockResolvedValue({
+      id: 'dark-red',
+      boundThemeId: 'ocean',
+    });
+
+    await expect(synchronizeSkinTheme(darkSkin, dependencies)).resolves.toBe('ocean');
+
+    expect(dependencies.applySkinTheme).toHaveBeenNthCalledWith(1, 'classic-dark');
+    expect(dependencies.applySkinTheme).toHaveBeenNthCalledWith(2, 'ocean');
+  });
+});

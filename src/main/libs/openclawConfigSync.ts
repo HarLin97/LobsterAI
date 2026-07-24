@@ -15,6 +15,7 @@ import {
 import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
+import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
 import {
   AuthType,
   OpenClawApi as OpenClawApiConst,
@@ -1939,6 +1940,10 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
           },
           workspace: path.resolve(mainWorkspacePath),
           mediaMaxMb: 30,
+          compaction: {
+            truncateAfterCompaction: true,
+            maxActiveTranscriptBytes: OpenClawTranscriptSafetyLimit.SoftConfigValue,
+          },
           ...(taskWorkingDirectory ? { cwd: path.resolve(taskWorkingDirectory) } : {}),
           memorySearch: {
             enabled: true,

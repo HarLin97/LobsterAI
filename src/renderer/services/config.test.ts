@@ -165,6 +165,29 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
 });
 
+describe('configService theme persistence', () => {
+  test('preserves an exact default theme id across partial updates', async () => {
+    const storedConfig: AppConfig = {
+      ...defaultConfig,
+      theme: 'dark',
+      themeId: 'ocean',
+    };
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+
+    await configService.init();
+    await configService.updateConfig({ useSystemProxy: true });
+
+    expect(configService.getConfig()).toMatchObject({
+      theme: 'dark',
+      themeId: 'ocean',
+    });
+    expect(storeData[CONFIG_KEYS.APP_CONFIG]).toMatchObject({
+      theme: 'dark',
+      themeId: 'ocean',
+    });
+  });
+});
+
 describe('configService shortcut migrations', () => {
   test('normalizes prior agent default shortcuts to unset', async () => {
     const storedConfig: AppConfig = {

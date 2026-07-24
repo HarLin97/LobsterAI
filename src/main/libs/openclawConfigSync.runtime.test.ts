@@ -280,6 +280,19 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.agents.defaults.mediaMaxMb).toBe(30);
   });
 
+  test('enables physical transcript rotation with a managed size threshold', async () => {
+    const sync = await createSync();
+
+    const result = sync.sync('transcript-rotation');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.agents.defaults.compaction).toEqual({
+      truncateAfterCompaction: true,
+      maxActiveTranscriptBytes: '32mb',
+    });
+  });
+
   test('enables optimized OpenClaw heartbeat by default', async () => {
     const sync = await createSync();
 

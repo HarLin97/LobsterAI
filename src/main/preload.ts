@@ -58,6 +58,7 @@ import { type ShellGetBrowserAppsInput, ShellIpc } from '../shared/shell/constan
 import { SkinIpc } from '../shared/skin/constants';
 import type {
   SkinApplyResponse,
+  SkinBindThemeResponse,
   SkinDeactivateResponse,
   SkinDeleteResponse,
   SkinGetActiveResponse,
@@ -147,7 +148,10 @@ contextBridge.exposeInMainWorld('electron', {
   skin: {
     getActive: (): Promise<SkinGetActiveResponse> => ipcRenderer.invoke(SkinIpc.GetActive),
     list: (): Promise<SkinListResponse> => ipcRenderer.invoke(SkinIpc.List),
-    apply: (skinId: string): Promise<SkinApplyResponse> => ipcRenderer.invoke(SkinIpc.Apply, skinId),
+    apply: (skinId: string, boundThemeId?: string): Promise<SkinApplyResponse> =>
+      ipcRenderer.invoke(SkinIpc.Apply, skinId, boundThemeId),
+    bindTheme: (skinId: string, themeId: string): Promise<SkinBindThemeResponse> =>
+      ipcRenderer.invoke(SkinIpc.BindTheme, skinId, themeId),
     deactivate: (): Promise<SkinDeactivateResponse> => ipcRenderer.invoke(SkinIpc.Deactivate),
     delete: (skinId: string): Promise<SkinDeleteResponse> => ipcRenderer.invoke(SkinIpc.Delete, skinId),
     onChanged: (callback: () => void) => {
