@@ -133,6 +133,18 @@ export default defineConfig({
         },
         onstart() {},
       },
+      {
+        // Sandboxed WebContentsView preload for remote Activity Bridge V1 pages.
+        entry: 'src/main/activityPreload.ts',
+        vite: {
+          build: {
+            sourcemap: true,
+            outDir: 'dist-electron',
+            minify: false,
+          },
+        },
+        onstart() {},
+      },
     ]),
     renderer(),
   ],

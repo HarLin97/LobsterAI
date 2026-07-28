@@ -1,4 +1,11 @@
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
+import type {
+  ActivityBounds,
+  ActivityHostGetSlotInput,
+  ActivityHostOpenInput,
+  ActivityResult,
+  ActivitySlotResponse,
+} from '../../shared/activity/constants';
 import type { AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
 import type {
   AsrRealtimeSessionRequest,
@@ -1729,6 +1736,18 @@ interface IElectronAPI {
       status?: string;
       error?: string;
     }>;
+  };
+  activity: {
+    getSlot: (
+      input?: ActivityHostGetSlotInput,
+    ) => Promise<ActivityResult<ActivitySlotResponse>>;
+    open: (
+      input: ActivityHostOpenInput,
+    ) => Promise<ActivityResult<{ opened: boolean }>>;
+    setBounds: (
+      bounds: ActivityBounds,
+    ) => Promise<ActivityResult<{ updated: boolean }>>;
+    close: () => Promise<ActivityResult<{ closed: boolean }>>;
   };
   auth: {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;

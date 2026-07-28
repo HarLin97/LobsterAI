@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
+import {
+  type ActivityBounds,
+  type ActivityHostGetSlotInput,
+  type ActivityHostOpenInput,
+  ActivityIpc,
+} from '../shared/activity/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
 import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
@@ -858,6 +864,15 @@ contextBridge.exposeInMainWorld('electron', {
     relaunch: () => ipcRenderer.invoke('app:relaunch'),
     openSystemNotificationSettings: () =>
       ipcRenderer.invoke(AppIpcChannel.OpenSystemNotificationSettings),
+  },
+  activity: {
+    getSlot: (input?: ActivityHostGetSlotInput) =>
+      ipcRenderer.invoke(ActivityIpc.HostGetSlot, input),
+    open: (input: ActivityHostOpenInput) =>
+      ipcRenderer.invoke(ActivityIpc.HostOpen, input),
+    setBounds: (bounds: ActivityBounds) =>
+      ipcRenderer.invoke(ActivityIpc.HostSetBounds, bounds),
+    close: () => ipcRenderer.invoke(ActivityIpc.HostClose),
   },
   appUpdate: {
     getState: () => ipcRenderer.invoke(AppUpdateIpc.GetState),

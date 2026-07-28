@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';"
+  >
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Activity Bridge V1 Test</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      color: #172033;
+      background: #f7f8fb;
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    h1 { margin-top: 0; font-size: 20px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 13px;
+      color: white;
+      background: #2563eb;
+      cursor: pointer;
+    }
+    pre {
+      min-height: 240px;
+      overflow: auto;
+      border: 1px solid #dbe1ea;
+      border-radius: 10px;
+      padding: 12px;
+      background: white;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Activity Bridge V1 Test</h1>
+  <div class="actions">
+    <button id="runtime">Runtime context</button>
+    <button id="context">Activity context</button>
+    <button id="action">Execute check-in</button>
+    <button id="login">Request login</button>
+    <button id="close">Close</button>
+  </div>
+  <pre id="output">Ready.</pre>
+  <script src="/test.js"></script>
+</body>
+</html>
