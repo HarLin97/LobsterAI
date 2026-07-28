@@ -11,6 +11,14 @@ export const ActivityPlacement = {
 
 export type ActivityPlacement = typeof ActivityPlacement[keyof typeof ActivityPlacement];
 
+export const ActivityEntrySurface = {
+  DesktopSidebar: 'desktop_sidebar',
+  ProfileMenu: 'profile_menu',
+} as const;
+
+export type ActivityEntrySurface =
+  typeof ActivityEntrySurface[keyof typeof ActivityEntrySurface];
+
 export const ActivitySlotState = {
   Empty: 'empty',
   Available: 'available',

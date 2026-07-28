@@ -24,6 +24,7 @@ import {
   getActivityContext,
   getActivitySlot,
 } from '../../libs/activity/activityClient';
+import { resolveActivityServerBaseUrl } from '../../libs/activity/activityDevelopmentConfig';
 import {
   resolveActivityWebAppLocation,
 } from '../../libs/activity/activitySecurity';
@@ -50,6 +51,7 @@ export interface ActivityIpcHandlerDeps {
   fetchPublic: (url: string, init?: RequestInit) => Promise<Response>;
   fetchWithAuth: (url: string, init?: RequestInit) => Promise<Response>;
   requestLogin: () => Promise<{ success: boolean; error?: string }>;
+  developmentServerBaseUrl?: string;
   developmentWebAppUrl?: string;
 }
 
@@ -80,6 +82,13 @@ export function registerActivityIpcHandlers(
   );
   let actionInFlight = false;
 
+  const getActivityServerBaseUrl = () => resolveActivityServerBaseUrl({
+    defaultBaseUrl: deps.getServerBaseUrl(),
+    developmentOverride: deps.developmentServerBaseUrl,
+    isDev: deps.isDev,
+    isPackaged: deps.isPackaged,
+  });
+
   const activityFetch: ActivityFetch = async (url, init, authMode) => {
     if (authMode === ActivityAuthMode.Required) {
       return deps.fetchWithAuth(url, init);
@@ -100,7 +109,7 @@ export function registerActivityIpcHandlers(
   };
 
   const loadSlot = (input: ActivityHostGetSlotInput = {}) => getActivitySlot(
-    deps.getServerBaseUrl(),
+    getActivityServerBaseUrl(),
     activityFetch,
     {
       placement: input.placement ?? ActivityPlacement.DesktopSidebar,
@@ -223,7 +232,7 @@ export function registerActivityIpcHandlers(
     try {
       const binding = viewController.requireBindingForEvent(event);
       return await getActivityContext(
-        deps.getServerBaseUrl(),
+        getActivityServerBaseUrl(),
         activityFetch,
         binding.activityCode,
         binding.configRevision,
@@ -245,7 +254,7 @@ export function registerActivityIpcHandlers(
         actionInFlight = true;
         try {
           return await executeActivityAction(
-            deps.getServerBaseUrl(),
+            getActivityServerBaseUrl(),
             activityFetch,
             {
               activityCode: binding.activityCode,

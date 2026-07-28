@@ -5683,6 +5683,7 @@ if (!gotTheLock) {
     fetchPublic: (url, options) => net.fetch(url, options),
     fetchWithAuth,
     requestLogin: () => startAuthLogin(),
+    developmentServerBaseUrl: process.env.LOBSTER_ACTIVITY_SERVER_BASE_URL,
     developmentWebAppUrl: process.env.LOBSTER_ACTIVITY_WEB_APP_URL,
   });
 

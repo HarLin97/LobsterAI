@@ -2,10 +2,13 @@ import { describe, expect, test } from 'vitest';
 
 import {
   type ActivityDescriptor,
+  ActivityEntrySurface,
   ActivityWebAppKey,
 } from '../../shared/activity/constants';
 import {
+  hasActivityEntrySurface,
   resolveActivityEntryModel,
+  resolveActivityEntrySurfaces,
   resolveActivityModalDimensions,
   resolveActivityModalTitle,
 } from './activityExperienceState';
@@ -81,5 +84,35 @@ describe('activityExperienceState', () => {
       width: 560,
       height: 620,
     });
+  });
+
+  test('keeps legacy activities in the sidebar when entry surfaces are absent', () => {
+    const value = descriptor();
+
+    expect(resolveActivityEntrySurfaces(value)).toEqual([
+      ActivityEntrySurface.DesktopSidebar,
+    ]);
+    expect(hasActivityEntrySurface(
+      value,
+      ActivityEntrySurface.ProfileMenu,
+    )).toBe(false);
+  });
+
+  test('resolves configured entry surfaces and drops unsupported values', () => {
+    const value = descriptor({
+      entryConfig: {
+        title: 'Activity',
+        entrySurfaces: [
+          ActivityEntrySurface.DesktopSidebar,
+          ActivityEntrySurface.ProfileMenu,
+          'system_browser',
+        ],
+      },
+    });
+
+    expect(resolveActivityEntrySurfaces(value)).toEqual([
+      ActivityEntrySurface.DesktopSidebar,
+      ActivityEntrySurface.ProfileMenu,
+    ]);
   });
 });

@@ -1,4 +1,7 @@
-import type { ActivityDescriptor } from '../../shared/activity/constants';
+import {
+  type ActivityDescriptor,
+  ActivityEntrySurface,
+} from '../../shared/activity/constants';
 
 export interface ActivityEntryModel {
   title: string;
@@ -60,6 +63,30 @@ const readAccentColor = (value: unknown): string => {
     ? text
     : DEFAULT_ACCENT_COLOR;
 };
+
+const isActivityEntrySurface = (
+  value: unknown,
+): value is ActivityEntrySurface => (
+  Object.values(ActivityEntrySurface).some(surface => surface === value)
+);
+
+export const resolveActivityEntrySurfaces = (
+  descriptor: ActivityDescriptor,
+): ActivityEntrySurface[] => {
+  const configured = descriptor.entryConfig?.entrySurfaces;
+  if (configured === undefined) {
+    return [ActivityEntrySurface.DesktopSidebar];
+  }
+  if (!Array.isArray(configured)) {
+    return [];
+  }
+  return [...new Set(configured.filter(isActivityEntrySurface))];
+};
+
+export const hasActivityEntrySurface = (
+  descriptor: ActivityDescriptor,
+  surface: ActivityEntrySurface,
+): boolean => resolveActivityEntrySurfaces(descriptor).includes(surface);
 
 export const resolveActivityEntryModel = (
   descriptor: ActivityDescriptor,

@@ -4,6 +4,7 @@ import type {
   ActivityDescriptor,
 } from '@shared/activity/constants';
 import {
+  ActivityEntrySurface,
   ActivityPlacement,
   ActivitySlotState,
 } from '@shared/activity/constants';
@@ -21,6 +22,7 @@ import { useSelector } from 'react-redux';
 import { i18nService } from '../services/i18n';
 import type { RootState } from '../store';
 import {
+  hasActivityEntrySurface,
   resolveActivityEntryModel,
   resolveActivityModalDimensions,
   resolveActivityModalTitle,
@@ -47,7 +49,13 @@ const toActivityBounds = (element: HTMLElement): ActivityBounds => {
   };
 };
 
-const ActivityModal: React.FC<ActivityModalProps> = ({
+const SIDEBAR_DISMISS_KEY_PREFIX = 'activity_sidebar_session_dismissed';
+
+const getSidebarDismissKey = (descriptor: ActivityDescriptor): string => (
+  `${SIDEBAR_DISMISS_KEY_PREFIX}.${descriptor.activityCode}.${descriptor.configRevision}`
+);
+
+export const ActivityModal: React.FC<ActivityModalProps> = ({
   descriptor,
   onRequestClose,
 }) => {
@@ -205,6 +213,7 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
   );
   const [descriptor, setDescriptor] = useState<ActivityDescriptor | null>(null);
   const [openedDescriptor, setOpenedDescriptor] = useState<ActivityDescriptor | null>(null);
+  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
     let current = true;
@@ -235,12 +244,22 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
     if (hidden) setOpenedDescriptor(null);
   }, [hidden]);
 
+  useLayoutEffect(() => {
+    setDismissed(descriptor
+      ? sessionStorage.getItem(getSidebarDismissKey(descriptor)) === '1'
+      : false);
+  }, [descriptor]);
+
   const entry = useMemo(
     () => descriptor ? resolveActivityEntryModel(descriptor) : null,
     [descriptor],
   );
-  const usesDynamicActivity = Boolean(descriptor && entry);
-  const displayed = usesDynamicActivity && !hidden;
+  const hasSidebarEntry = Boolean(descriptor && hasActivityEntrySurface(
+    descriptor,
+    ActivityEntrySurface.DesktopSidebar,
+  ));
+  const usesDynamicActivity = Boolean(descriptor && entry && hasSidebarEntry);
+  const displayed = usesDynamicActivity && !hidden && !dismissed;
 
   useLayoutEffect(() => {
     if (!usesDynamicActivity) return undefined;
@@ -249,8 +268,14 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
   }, [displayed, onVisibleChange, usesDynamicActivity]);
 
   const closeModal = useCallback(() => setOpenedDescriptor(null), []);
+  const dismissEntry = useCallback(() => {
+    if (!descriptor) return;
+    sessionStorage.setItem(getSidebarDismissKey(descriptor), '1');
+    setOpenedDescriptor(null);
+    setDismissed(true);
+  }, [descriptor]);
 
-  if (!descriptor || !entry) {
+  if (!descriptor || !entry || !hasSidebarEntry) {
     return (
       <SidebarAdBanner
         hidden={hidden}
@@ -258,6 +283,8 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
       />
     );
   }
+
+  if (dismissed) return null;
 
   return (
     <>
@@ -269,50 +296,63 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
             : 'translate-y-0 opacity-100 duration-200 ease-out'
         }`}
       >
-        <button
-          type="button"
-          tabIndex={hidden ? -1 : 0}
-          onClick={() => setOpenedDescriptor(descriptor)}
-          className={`${hidden ? 'pointer-events-none' : 'pointer-events-auto'} group relative flex min-h-[84px] w-full overflow-hidden rounded-xl border border-black/[0.05] px-3 py-2.5 text-left shadow-[0_5px_14px_rgba(44,35,28,0.12)] transition-transform hover:-translate-y-0.5 dark:border-white/10`}
+        <div
+          className={`${hidden ? 'pointer-events-none' : 'pointer-events-auto'} group relative min-h-[84px] w-full overflow-hidden rounded-xl border border-black/[0.05] shadow-[0_5px_14px_rgba(44,35,28,0.12)] transition-transform hover:-translate-y-0.5 dark:border-white/10`}
           style={{
             background: `linear-gradient(115deg, color-mix(in srgb, ${entry.accentColor} 16%, white), color-mix(in srgb, ${entry.accentColor} 5%, white))`,
           }}
-          aria-label={entry.title}
         >
-          <span className="relative z-10 flex min-w-0 flex-1 flex-col justify-center pr-2">
-            {entry.badgeText && (
+          <button
+            type="button"
+            tabIndex={hidden ? -1 : 0}
+            onClick={() => setOpenedDescriptor(descriptor)}
+            className="flex min-h-[84px] w-full px-3 py-2.5 pr-8 text-left"
+            aria-label={entry.title}
+          >
+            <span className="relative z-10 flex min-w-0 flex-1 flex-col justify-center pr-2">
+              {entry.badgeText && (
+                <span
+                  className="mb-1 w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold text-white"
+                  style={{ backgroundColor: entry.accentColor }}
+                >
+                  {entry.badgeText}
+                </span>
+              )}
+              <span className="truncate text-sm font-semibold text-[#2C211B]">
+                {entry.title}
+              </span>
+              {entry.description && (
+                <span className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-[#745E52]">
+                  {entry.description}
+                </span>
+              )}
               <span
-                className="mb-1 w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold text-white"
-                style={{ backgroundColor: entry.accentColor }}
+                className="mt-1 text-[11px] font-medium"
+                style={{ color: entry.accentColor }}
               >
-                {entry.badgeText}
+                {entry.ctaText ?? i18nService.t('activityViewNow')}
+                <span aria-hidden="true"> →</span>
               </span>
-            )}
-            <span className="truncate text-sm font-semibold text-[#2C211B]">
-              {entry.title}
             </span>
-            {entry.description && (
-              <span className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-[#745E52]">
-                {entry.description}
-              </span>
+            {entry.imageUrl && (
+              <img
+                src={entry.imageUrl}
+                alt=""
+                aria-hidden="true"
+                className="h-16 w-16 shrink-0 self-center object-contain"
+              />
             )}
-            <span
-              className="mt-1 text-[11px] font-medium"
-              style={{ color: entry.accentColor }}
-            >
-              {entry.ctaText ?? i18nService.t('activityViewNow')}
-              <span aria-hidden="true"> →</span>
-            </span>
-          </span>
-          {entry.imageUrl && (
-            <img
-              src={entry.imageUrl}
-              alt=""
-              aria-hidden="true"
-              className="h-16 w-16 shrink-0 self-center object-contain"
-            />
-          )}
-        </button>
+          </button>
+          <button
+            type="button"
+            tabIndex={hidden ? -1 : 0}
+            onClick={dismissEntry}
+            className="absolute right-1.5 top-1.5 z-20 flex h-5 w-5 items-center justify-center rounded-full bg-white/65 text-[#745E52]/70 transition-colors hover:bg-white hover:text-[#2C211B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            aria-label={i18nService.t('close')}
+          >
+            <XMarkIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
       {openedDescriptor && (
         <ActivityModal

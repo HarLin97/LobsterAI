@@ -1,3 +1,9 @@
+import type { ActivityDescriptor } from '@shared/activity/constants';
+import {
+  ActivityEntrySurface,
+  ActivityPlacement,
+  ActivitySlotState,
+} from '@shared/activity/constants';
 import React, { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
@@ -22,8 +28,13 @@ import type {
   CreditsResetCampaignStatus,
   FreeCreditsReward,
 } from '../store/slices/authSlice';
+import {
+  hasActivityEntrySurface,
+  resolveActivityEntryModel,
+} from './activityExperienceState';
 import CreditsFinalRewardModal from './CreditsFinalRewardModal';
 import UserAvatarIcon from './icons/UserAvatarIcon';
+import { ActivityModal } from './SidebarExperienceSlot';
 
 const ACCOUNT_MENU_ANALYTICS_SOURCE = 'home_account_menu';
 
@@ -196,17 +207,57 @@ const PortalMenuIcon: React.FC<{ src: string; darkInvert?: boolean }> = ({
   />
 );
 
-const UserMenu: React.FC<{ onClose: () => void; onOpenFinalReward: () => void }> = ({
+interface UserMenuProps {
+  onClose: () => void;
+  onOpenFinalReward: () => void;
+  onOpenActivity: (descriptor: ActivityDescriptor) => void;
+}
+
+const UserMenu: React.FC<UserMenuProps> = ({
   onClose,
   onOpenFinalReward,
+  onOpenActivity,
 }) => {
   const user = useSelector((state: RootState) => state.auth.user);
   const profileSummary = useSelector((state: RootState) => state.auth.profileSummary);
   const [creditsExpanded, setCreditsExpanded] = useState(false);
+  const [profileActivity, setProfileActivity] = useState<ActivityDescriptor | null>(null);
   const isEn = i18nService.getLanguage() === 'en';
+  const profileActivityEntry = profileActivity
+    ? resolveActivityEntryModel(profileActivity)
+    : null;
 
   useEffect(() => {
     authService.fetchProfileSummary();
+  }, []);
+
+  useEffect(() => {
+    let current = true;
+    const loadActivity = async () => {
+      try {
+        const result = await window.electron.activity.getSlot({
+          placement: ActivityPlacement.DesktopSidebar,
+        });
+        if (!current) return;
+        const activity = result.success
+          && result.data.slotState === ActivitySlotState.Available
+          ? result.data.activity
+          : undefined;
+        setProfileActivity(activity && hasActivityEntrySurface(
+          activity,
+          ActivityEntrySurface.ProfileMenu,
+        )
+          ? activity
+          : null);
+      } catch (error) {
+        console.warn('[Activity] failed to load profile menu entry:', error);
+        if (current) setProfileActivity(null);
+      }
+    };
+    void loadActivity();
+    return () => {
+      current = false;
+    };
   }, []);
 
   const openPortalUrl = async (url: string) => {
@@ -315,6 +366,17 @@ const UserMenu: React.FC<{ onClose: () => void; onOpenFinalReward: () => void }>
     onOpenFinalReward();
   };
 
+  const handleProfileActivity = () => {
+    if (!profileActivity) return;
+    reportAccountMenuAction('open_dynamic_activity', {
+      creditItemCount: creditItems.length,
+      hasCredits,
+      result: 'success',
+    });
+    onClose();
+    onOpenActivity(profileActivity);
+  };
+
   const phoneSuffix = user?.phone ? user.phone.slice(-4) : '';
 
   const totalCredits = profileSummary?.totalCreditsRemaining ?? 0;
@@ -402,6 +464,18 @@ const UserMenu: React.FC<{ onClose: () => void; onOpenFinalReward: () => void }>
 
       {/* Actions */}
       <div className="py-1">
+        {profileActivity && profileActivityEntry && (
+          <AccountMenuAction
+            icon={(
+              <PortalMenuIcon
+                src={profileActivityEntry.imageUrl || inviteCreditsIconUrl}
+                darkInvert={!profileActivityEntry.imageUrl}
+              />
+            )}
+            label={profileActivityEntry.title}
+            onClick={handleProfileActivity}
+          />
+        )}
         {campaignActionLabel && (
           <AccountMenuAction
             icon={<PortalMenuIcon src={promoSubscriptionIconUrl} darkInvert />}
@@ -453,6 +527,7 @@ interface LoginButtonProps {
 const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
   const { isLoggedIn, isLoading, profileSummary, user } = useSelector((state: RootState) => state.auth);
   const [showMenu, setShowMenu] = useState(false);
+  const [activityDescriptor, setActivityDescriptor] = useState<ActivityDescriptor | null>(null);
   const [finalRewardOpen, setFinalRewardOpen] = useState(false);
   const [finalRewardLoading, setFinalRewardLoading] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -576,6 +651,13 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
         <UserMenu
           onClose={() => setShowMenu(false)}
           onOpenFinalReward={() => setFinalRewardOpen(true)}
+          onOpenActivity={setActivityDescriptor}
+        />
+      )}
+      {activityDescriptor && (
+        <ActivityModal
+          descriptor={activityDescriptor}
+          onRequestClose={() => setActivityDescriptor(null)}
         />
       )}
       <CreditsFinalRewardModal

@@ -20,8 +20,10 @@
   - 页面加载时读取一次 Slot；
   - 动态活动命中时显示原生入口；
   - 未命中或请求失败时回退现有 `SidebarAdBanner`；
+  - 右上角关闭按钮按 `activityCode + configRevision` 在当前应用会话内隐藏入口；
   - 点击后在应用内弹层嵌入 WebContentsView；
   - 支持加载、错误重试、关闭和窗口尺寸同步。
+- “我的”菜单在每次展开时读取一次 Slot，并为配置了 `profile_menu` 的活动显示常驻入口。
 - 本次独立签到 H5 位于 `activities/login-seven-day/`。
 
 ## URL 下发
@@ -38,6 +40,26 @@ Slot，并精确核对 `activityCode + configRevision`，Renderer 不能直接�
 历史 `generic_activity_v1` 固定测试/生产映射仍保留，避免阶段 1 已有修订失效；新活动不再依赖该固定页面。
 
 非打包版本可用 `LOBSTER_ACTIVITY_WEB_APP_URL` 覆盖活动页面，且仅接受 loopback HTTP(S)，用于本地 H5 调试。
+
+## 本地快速预览
+
+开发版可以只把 Activity Slot、Context 和 Action 三类请求切换到本地 Server，其余登录、模型列表、
+订阅信息等请求仍使用客户端原有环境：
+
+```powershell
+cd D:\github\LobsterAI
+$env:LOBSTER_ACTIVITY_SERVER_BASE_URL='http://127.0.0.1:18878'
+npm run electron:dev
+```
+
+`LOBSTER_ACTIVITY_SERVER_BASE_URL` 只在非打包开发版中生效，并且只接受无凭据、无路径、无查询参数的
+loopback HTTP(S) origin。打包版本会忽略该值。若还要调试未托管的本地 H5，可同时设置：
+
+```powershell
+$env:LOBSTER_ACTIVITY_WEB_APP_URL='http://127.0.0.1:4178'
+```
+
+测试库中已经配置远程 Share H5 时，不需要设置第二个变量。
 
 ## 认证
 
@@ -84,6 +106,27 @@ Bridge 不暴露用户身份详情和 token。
 - 下一次页面加载或 Slot 刷新时移除入口。
 
 这避免端侧时钟差异和长时间定时器，同时保证奖励发放不会越过服务端时间窗。
+
+## 入口展示位置
+
+活动修订的 `entryConfig` 支持受控字段 `entrySurfaces`：
+
+```json
+{
+  "title": "登录送7天积分",
+  "entrySurfaces": ["desktop_sidebar", "profile_menu"]
+}
+```
+
+- `desktop_sidebar`：显示 Sidebar 活动卡片；
+- `profile_menu`：登录后在“我的”菜单显示一行活动入口；
+- 字段缺失：按历史行为仅视为 `desktop_sidebar`，保证已发布修订兼容；
+- 空数组、重复项和未知值：Admin API 拒绝保存或发布；
+- Sidebar 入口被关闭后，“我的”入口仍保留；
+- 配置修订号变化后，旧的 Sidebar 会话关闭记录不再生效，新入口会重新出现。
+
+`entrySurfaces` 不改变现有 `placement=desktop_sidebar` 的单 Slot/优先级语义。当前同一时刻仍只会选中
+一个活动；如果未来需要在“我的”菜单同时列出多个活动，需要新增列表型 Slot 接口。
 
 ## 独立签到 H5
 
