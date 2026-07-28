@@ -34,7 +34,7 @@ import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import SkillIcon from './icons/SkillIcon';
 import TrashIcon from './icons/TrashIcon';
 import LoginButton from './LoginButton';
-import SidebarAdBanner from './SidebarAdBanner';
+import SidebarExperienceSlot from './SidebarExperienceSlot';
 
 interface SidebarProps {
   onShowSettings: () => void;
@@ -677,7 +677,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           />
         </div>
         {!isBatchMode && (
-          <SidebarAdBanner
+          <SidebarExperienceSlot
             hidden={hideAdBanner}
             onVisibleChange={setIsSidebarBannerVisible}
           />

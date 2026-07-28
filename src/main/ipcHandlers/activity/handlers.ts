@@ -151,6 +151,9 @@ export function registerActivityIpcHandlers(
         }
         const location = resolveActivityWebAppLocation({
           webAppKey: descriptor.webAppKey,
+          webAppUrl: descriptor.webAppUrl,
+          navigationBaseUrl: descriptor.navigationBaseUrl,
+          resourceBaseUrls: descriptor.resourceBaseUrls,
           activityCode: descriptor.activityCode,
           configRevision: descriptor.configRevision,
           locale: deps.getLocale(),
@@ -162,7 +165,8 @@ export function registerActivityIpcHandlers(
           parentWindow: mainWindow,
           descriptor,
           url: location.url,
-          allowedBaseUrl: location.allowedBaseUrl,
+          navigationBaseUrl: location.navigationBaseUrl,
+          resourceBaseUrls: location.resourceBaseUrls,
           bounds: input.bounds,
         });
         return { success: true, data: { opened: true } };

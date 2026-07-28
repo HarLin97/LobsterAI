@@ -9,28 +9,139 @@ const TEST_GENERIC_ACTIVITY_BASE_URL =
 const PROD_GENERIC_ACTIVITY_BASE_URL =
   'https://lobsterai.youdao.com/activities/generic-v1/';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const RESERVED_HOST_SUFFIXES = [
+  '.localhost',
+  '.local',
+  '.internal',
+  '.lan',
+  '.home',
+  '.test',
+  '.invalid',
+  '.example',
+  '.onion',
+];
+const MAX_RESOURCE_BASE_URLS = 16;
 const MIN_ACTIVITY_WIDTH = 320;
 const MIN_ACTIVITY_HEIGHT = 240;
 
 export interface ActivityWebAppLocation {
   url: string;
-  allowedBaseUrl: string;
+  navigationBaseUrl: string;
+  resourceBaseUrls: string[];
 }
 
-function normalizedBaseUrl(value: string): string {
-  const url = new URL(value);
-  if (url.username || url.password || url.hash) {
-    throw new Error('Activity web app URL must not contain credentials or a fragment');
+function validatePublicHttpsUrl(value: string, field: string): URL {
+  if (!value.trim() || value.length > 2048) {
+    throw new Error(`${field} is missing or too long`);
   }
-  url.search = '';
+  const url = new URL(value.trim());
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash) {
+    throw new Error(`${field} must be public HTTPS without credentials or a fragment`);
+  }
+
+  const host = url.hostname.toLowerCase();
+  const isIpLiteral = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(':');
+  if (!host.includes('.')
+      || isIpLiteral
+      || host === 'localhost'
+      || RESERVED_HOST_SUFFIXES.some(suffix => host.endsWith(suffix))) {
+    throw new Error(`${field} must use a public DNS hostname`);
+  }
+  return url;
+}
+
+function normalizedBaseUrl(value: string, field = 'Activity base URL'): string {
+  const url = validatePublicHttpsUrl(value, field);
+  if (url.search) {
+    throw new Error(`${field} must not contain a query`);
+  }
   if (!url.pathname.endsWith('/')) {
     url.pathname += '/';
   }
   return url.toString();
 }
 
+function deriveNavigationBaseUrl(webAppUrl: URL): string {
+  const base = new URL(webAppUrl.toString());
+  base.search = '';
+  if (!base.pathname.endsWith('/')) {
+    const slash = base.pathname.lastIndexOf('/');
+    base.pathname = slash >= 0 ? base.pathname.slice(0, slash + 1) : '/';
+  }
+  return normalizedBaseUrl(base.toString(), 'Derived navigationBaseUrl');
+}
+
+function resolveDevelopmentLocation(value: string): ActivityWebAppLocation {
+  const override = new URL(value.trim());
+  if (!['http:', 'https:'].includes(override.protocol)
+      || !LOOPBACK_HOSTS.has(override.hostname)
+      || override.username
+      || override.password
+      || override.hash) {
+    throw new Error('Development activity URL must use HTTP(S) on a loopback host');
+  }
+  override.search = '';
+  if (!override.pathname.endsWith('/')) {
+    override.pathname += '/';
+  }
+  return {
+    url: override.toString(),
+    navigationBaseUrl: override.toString(),
+    resourceBaseUrls: [override.toString()],
+  };
+}
+
+function withRuntimeQuery(
+  location: ActivityWebAppLocation,
+  input: {
+    activityCode: string;
+    configRevision: number;
+    locale: string;
+  },
+): ActivityWebAppLocation {
+  const url = new URL(location.url);
+  url.searchParams.set('activityCode', input.activityCode);
+  url.searchParams.set('configRevision', String(input.configRevision));
+  url.searchParams.set('locale', input.locale);
+  return { ...location, url: url.toString() };
+}
+
+function resolveRemoteH5Location(input: {
+  webAppUrl?: string;
+  navigationBaseUrl?: string;
+  resourceBaseUrls?: string[];
+}): ActivityWebAppLocation {
+  if (!input.webAppUrl) {
+    throw new Error('Remote activity is missing webAppUrl');
+  }
+  const webAppUrl = validatePublicHttpsUrl(input.webAppUrl, 'webAppUrl');
+  const navigationBaseUrl = input.navigationBaseUrl
+    ? normalizedBaseUrl(input.navigationBaseUrl, 'navigationBaseUrl')
+    : deriveNavigationBaseUrl(webAppUrl);
+  if (new URL(navigationBaseUrl).origin !== webAppUrl.origin) {
+    throw new Error('navigationBaseUrl must use the same origin as webAppUrl');
+  }
+
+  const configuredResources = input.resourceBaseUrls ?? [];
+  if (configuredResources.length > MAX_RESOURCE_BASE_URLS) {
+    throw new Error(`resourceBaseUrls supports at most ${MAX_RESOURCE_BASE_URLS} values`);
+  }
+  const resourceBaseUrls = Array.from(new Set([
+    navigationBaseUrl,
+    ...configuredResources.map(value => normalizedBaseUrl(value, 'resourceBaseUrls')),
+  ]));
+  return {
+    url: webAppUrl.toString(),
+    navigationBaseUrl,
+    resourceBaseUrls,
+  };
+}
+
 export function resolveActivityWebAppLocation(input: {
   webAppKey: ActivityWebAppKeyValue;
+  webAppUrl?: string;
+  navigationBaseUrl?: string;
+  resourceBaseUrls?: string[];
   activityCode: string;
   configRevision: number;
   locale: string;
@@ -38,33 +149,39 @@ export function resolveActivityWebAppLocation(input: {
   isTestMode: boolean;
   developmentOverride?: string;
 }): ActivityWebAppLocation {
+  if (!input.isPackaged && input.developmentOverride?.trim()) {
+    return withRuntimeQuery(
+      resolveDevelopmentLocation(input.developmentOverride),
+      input,
+    );
+  }
+
+  if (input.webAppKey === ActivityWebAppKey.RemoteH5V1) {
+    return withRuntimeQuery(resolveRemoteH5Location(input), input);
+  }
   if (input.webAppKey !== ActivityWebAppKey.GenericV1) {
     throw new Error(`Unsupported activity web app key: ${input.webAppKey}`);
   }
 
-  let baseUrl = input.isTestMode
-    ? TEST_GENERIC_ACTIVITY_BASE_URL
-    : PROD_GENERIC_ACTIVITY_BASE_URL;
-  if (!input.isPackaged && input.developmentOverride?.trim()) {
-    const override = new URL(input.developmentOverride.trim());
-    if (!['http:', 'https:'].includes(override.protocol)
-        || !LOOPBACK_HOSTS.has(override.hostname)) {
-      throw new Error('Development activity URL must use HTTP(S) on a loopback host');
-    }
-    baseUrl = override.toString();
-  }
-  const allowedBaseUrl = normalizedBaseUrl(baseUrl);
-  const url = new URL(allowedBaseUrl);
-  url.searchParams.set('activityCode', input.activityCode);
-  url.searchParams.set('configRevision', String(input.configRevision));
-  url.searchParams.set('locale', input.locale);
-  return { url: url.toString(), allowedBaseUrl };
+  const genericBaseUrl = normalizedBaseUrl(
+    input.isTestMode
+      ? TEST_GENERIC_ACTIVITY_BASE_URL
+      : PROD_GENERIC_ACTIVITY_BASE_URL,
+  );
+  return withRuntimeQuery({
+    url: genericBaseUrl,
+    navigationBaseUrl: genericBaseUrl,
+    resourceBaseUrls: [genericBaseUrl],
+  }, input);
 }
 
-export function isAllowedActivityNavigation(targetUrl: string, allowedBaseUrl: string): boolean {
+export function isAllowedActivityNavigation(
+  targetUrl: string,
+  navigationBaseUrl: string,
+): boolean {
   try {
     const target = new URL(targetUrl);
-    const allowed = new URL(normalizedBaseUrl(allowedBaseUrl));
+    const allowed = new URL(navigationBaseUrl);
     return !target.username
       && !target.password
       && target.origin === allowed.origin
@@ -74,14 +191,24 @@ export function isAllowedActivityNavigation(targetUrl: string, allowedBaseUrl: s
   }
 }
 
-export function isAllowedActivityResource(targetUrl: string, allowedBaseUrl: string): boolean {
+export function isAllowedActivityResource(
+  targetUrl: string,
+  resourceBaseUrls: string[],
+): boolean {
   if (targetUrl.startsWith('data:')) {
     return true;
   }
   if (targetUrl.startsWith('blob:')) {
-    return isAllowedActivityNavigation(targetUrl.slice('blob:'.length), allowedBaseUrl);
+    try {
+      const blobOrigin = new URL(targetUrl.slice('blob:'.length)).origin;
+      return resourceBaseUrls.some(base => new URL(base).origin === blobOrigin);
+    } catch {
+      return false;
+    }
   }
-  return isAllowedActivityNavigation(targetUrl, allowedBaseUrl);
+  return resourceBaseUrls.some(
+    baseUrl => isAllowedActivityNavigation(targetUrl, baseUrl),
+  );
 }
 
 export function validateActivityBounds(

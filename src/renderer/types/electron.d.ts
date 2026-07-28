@@ -1,6 +1,7 @@
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import type {
   ActivityBounds,
+  ActivityHostClosedEvent,
   ActivityHostGetSlotInput,
   ActivityHostOpenInput,
   ActivityResult,
@@ -1748,6 +1749,7 @@ interface IElectronAPI {
       bounds: ActivityBounds,
     ) => Promise<ActivityResult<{ updated: boolean }>>;
     close: () => Promise<ActivityResult<{ closed: boolean }>>;
+    onClosed: (callback: (event: ActivityHostClosedEvent) => void) => () => void;
   };
   auth: {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;

@@ -31,6 +31,7 @@ export type ActivityLifecycleState =
 
 export const ActivityWebAppKey = {
   GenericV1: 'generic_activity_v1',
+  RemoteH5V1: 'remote_h5_v1',
 } as const;
 
 export type ActivityWebAppKey = typeof ActivityWebAppKey[keyof typeof ActivityWebAppKey];
@@ -40,6 +41,7 @@ export const ActivityIpc = {
   HostOpen: 'activity:host:open',
   HostSetBounds: 'activity:host:set-bounds',
   HostClose: 'activity:host:close',
+  HostClosed: 'activity:host:closed',
   GuestGetRuntimeContext: 'activity:guest:get-runtime-context',
   GuestGetActivityContext: 'activity:guest:get-activity-context',
   GuestExecuteAction: 'activity:guest:execute-action',
@@ -62,6 +64,9 @@ export interface ActivityDescriptor {
   configRevision: number;
   activityType: string;
   webAppKey: ActivityWebAppKey;
+  webAppUrl?: string;
+  navigationBaseUrl?: string;
+  resourceBaseUrls?: string[];
   templateKey: string;
   sizePreset: string;
   loginRequired: boolean;
@@ -106,6 +111,11 @@ export interface ActivityHostOpenInput {
   configRevision: number;
   placement?: ActivityPlacement;
   bounds: ActivityBounds;
+}
+
+export interface ActivityHostClosedEvent {
+  activityCode: string;
+  configRevision: number;
 }
 
 export interface ActivityGuestActionInput {

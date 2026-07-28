@@ -19,7 +19,8 @@ import {
 
 interface ActivityViewBinding {
   descriptor: ActivityDescriptor;
-  allowedBaseUrl: string;
+  navigationBaseUrl: string;
+  resourceBaseUrls: string[];
 }
 
 interface OpenActivityViewInput extends ActivityViewBinding {
@@ -77,16 +78,21 @@ export class ActivityViewController {
       parentWindow: input.parentWindow,
       view,
       descriptor: input.descriptor,
-      allowedBaseUrl: input.allowedBaseUrl,
+      navigationBaseUrl: input.navigationBaseUrl,
+      resourceBaseUrls: input.resourceBaseUrls,
     };
-    this.applySecurityPolicy(view, input.allowedBaseUrl);
+    this.applySecurityPolicy(
+      view,
+      input.navigationBaseUrl,
+      input.resourceBaseUrls,
+    );
     input.parentWindow.contentView.addChildView(view);
 
     try {
       await view.webContents.loadURL(input.url);
     } catch (error) {
       if (this.active?.view === view) {
-        this.close();
+        this.close(false);
       }
       throw error;
     }
@@ -100,12 +106,18 @@ export class ActivityViewController {
     ));
   }
 
-  close(): void {
+  close(notifyHost = true): void {
     const active = this.active;
     this.active = null;
     if (!active) return;
     if (!active.parentWindow.isDestroyed()) {
       active.parentWindow.contentView.removeChildView(active.view);
+      if (notifyHost) {
+        active.parentWindow.webContents.send(ActivityIpc.HostClosed, {
+          activityCode: active.descriptor.activityCode,
+          configRevision: active.descriptor.configRevision,
+        });
+      }
     }
     if (!active.view.webContents.isDestroyed()) {
       active.view.webContents.close({ waitForBeforeUnload: false });
@@ -123,7 +135,10 @@ export class ActivityViewController {
     const active = this.requireActive();
     if (event.sender !== active.view.webContents
         || event.senderFrame !== active.view.webContents.mainFrame
-        || !isAllowedActivityNavigation(event.senderFrame.url, active.allowedBaseUrl)) {
+        || !isAllowedActivityNavigation(
+          event.senderFrame.url,
+          active.navigationBaseUrl,
+        )) {
       throw new Error('Untrusted activity bridge sender');
     }
     return active.descriptor;
@@ -136,17 +151,21 @@ export class ActivityViewController {
     return this.active;
   }
 
-  private applySecurityPolicy(view: WebContentsView, allowedBaseUrl: string): void {
+  private applySecurityPolicy(
+    view: WebContentsView,
+    navigationBaseUrl: string,
+    resourceBaseUrls: string[],
+  ): void {
     const webContents = view.webContents;
     webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     webContents.on('will-frame-navigate', details => {
       if (!details.isMainFrame
-          || !isAllowedActivityNavigation(details.url, allowedBaseUrl)) {
+          || !isAllowedActivityNavigation(details.url, navigationBaseUrl)) {
         details.preventDefault();
       }
     });
     webContents.on('will-redirect', details => {
-      if (!isAllowedActivityNavigation(details.url, allowedBaseUrl)) {
+      if (!isAllowedActivityNavigation(details.url, navigationBaseUrl)) {
         details.preventDefault();
       }
     });
@@ -164,7 +183,7 @@ export class ActivityViewController {
     });
     activitySession.webRequest.onBeforeRequest((details, callback) => {
       callback({
-        cancel: !isAllowedActivityResource(details.url, allowedBaseUrl),
+        cancel: !isAllowedActivityResource(details.url, resourceBaseUrls),
       });
     });
     activitySession.on('will-download', event => event.preventDefault());

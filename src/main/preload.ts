@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
 import {
   type ActivityBounds,
+  type ActivityHostClosedEvent,
   type ActivityHostGetSlotInput,
   type ActivityHostOpenInput,
   ActivityIpc,
@@ -873,6 +874,13 @@ contextBridge.exposeInMainWorld('electron', {
     setBounds: (bounds: ActivityBounds) =>
       ipcRenderer.invoke(ActivityIpc.HostSetBounds, bounds),
     close: () => ipcRenderer.invoke(ActivityIpc.HostClose),
+    onClosed: (callback: (event: ActivityHostClosedEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: ActivityHostClosedEvent) => {
+        callback(data);
+      };
+      ipcRenderer.on(ActivityIpc.HostClosed, handler);
+      return () => ipcRenderer.removeListener(ActivityIpc.HostClosed, handler);
+    },
   },
   appUpdate: {
     getState: () => ipcRenderer.invoke(AppUpdateIpc.GetState),

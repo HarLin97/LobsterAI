@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>登录送7天积分</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="app" class="activity-app" aria-live="polite">
+      <section class="hero">
+        <div class="hero-glow hero-glow-one"></div>
+        <div class="hero-glow hero-glow-two"></div>
+        <div class="brand-row">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 40 40" role="img">
+              <path d="M13.1 15.4c-2.8-3.8-6.2-4.5-8.4-2.1 2.7.3 4.5 1.6 5.7 4.1" />
+              <path d="M26.9 15.4c2.8-3.8 6.2-4.5 8.4-2.1-2.7.3-4.5 1.6-5.7 4.1" />
+              <path d="M11.2 20.8c0-5.4 3.9-9.4 8.8-9.4s8.8 4 8.8 9.4c0 5.9-3.8 10.5-8.8 10.5s-8.8-4.6-8.8-10.5Z" />
+              <circle cx="16.8" cy="19.4" r="1.1" />
+              <circle cx="23.2" cy="19.4" r="1.1" />
+              <path d="M16.2 24.1c2.3 1.8 5.3 1.8 7.6 0" />
+            </svg>
+          </span>
+          <span class="brand-name">Lobster AI</span>
+          <span id="preview-badge" class="preview-badge" hidden>预览模式</span>
+        </div>
+
+        <div class="hero-copy">
+          <span id="eyebrow" class="eyebrow">连续登录奖励</span>
+          <h1 id="title">登录送7天积分</h1>
+          <p id="subtitle">每天登录并签到，连续 7 天领取奖励</p>
+        </div>
+
+        <div class="reward-orbit" aria-hidden="true">
+          <span class="orbit orbit-one"></span>
+          <span class="orbit orbit-two"></span>
+          <span class="coin coin-one">✦</span>
+          <span class="coin coin-two">✦</span>
+          <div class="reward-medallion">
+            <span id="reward-number" class="reward-number">10</span>
+            <span class="reward-unit">积分/天</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="activity-content">
+        <div id="loading-view" class="state-view loading-view">
+          <span class="spinner" aria-hidden="true"></span>
+          <p>正在读取活动状态…</p>
+        </div>
+
+        <div id="main-view" class="state-view" hidden>
+          <div class="progress-heading">
+            <div>
+              <span class="section-kicker">签到进度</span>
+              <strong id="progress-copy">已完成 0 / 7 天</strong>
+            </div>
+            <span id="today-status" class="today-status">今日待签到</span>
+          </div>
+
+          <ol id="day-list" class="day-list" aria-label="七天签到进度"></ol>
+
+          <div id="message-card" class="message-card" hidden>
+            <span class="message-icon" aria-hidden="true">✓</span>
+            <div>
+              <strong id="message-title"></strong>
+              <p id="message-copy"></p>
+            </div>
+          </div>
+
+          <button id="primary-action" class="primary-action" type="button">
+            <span id="primary-label">立即签到</span>
+            <span class="button-shine" aria-hidden="true"></span>
+          </button>
+          <p id="action-hint" class="action-hint">奖励将直接发放到当前登录账号</p>
+
+          <details id="rules-panel" class="rules-panel">
+            <summary>活动规则</summary>
+            <ol id="rules-list"></ol>
+          </details>
+        </div>
+
+        <div id="terminal-view" class="state-view terminal-view" hidden>
+          <span id="terminal-icon" class="terminal-icon" aria-hidden="true">!</span>
+          <h2 id="terminal-title">活动暂不可用</h2>
+          <p id="terminal-copy">请稍后重新打开活动页面</p>
+          <button id="terminal-action" type="button" class="secondary-action">关闭</button>
+        </div>
+      </section>
+
+      <div id="success-toast" class="success-toast" role="status" hidden>
+        <div class="success-burst" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <span class="success-check" aria-hidden="true">✓</span>
+        <div>
+          <strong id="success-title">签到成功</strong>
+          <p id="success-copy">10 积分已到账</p>
+        </div>
+      </div>
+    </main>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>
