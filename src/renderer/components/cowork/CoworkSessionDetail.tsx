@@ -26,7 +26,10 @@ import {
 } from '../../../shared/cowork/selectedText';
 import { ShareDeploymentCandidateSource } from '../../../shared/shareDeployment/constants';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
-import { findCurrentEnterpriseQuotaSignal } from '../../features/enterpriseAccount/quotaPromptState';
+import {
+  findCurrentEnterpriseQuotaSignal,
+  resolveActiveEnterpriseQuotaSignal,
+} from '../../features/enterpriseAccount/quotaPromptState';
 import { selectEnterpriseAccountContext } from '../../features/enterpriseAccount/selectors';
 import { collectSessionArtifacts, loadDetectedFileArtifact } from '../../services/artifactDetection';
 import {
@@ -110,6 +113,7 @@ import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
+import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
 import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlock';
 import { type CoworkOpenShareOptionsEventDetail, CoworkUiEvent } from './constants';
 import ContextUsageIndicator from './ContextUsageIndicator';
@@ -1235,6 +1239,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const activeKitIds = useSelector((state: RootState) => state.kit.activeKitIds);
   const installedKits = useSelector((state: RootState) => state.kit.installedKits);
   const marketplaceKits = useSelector((state: RootState) => state.kit.marketplaceKits);
+  const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const agents = useSelector((state: RootState) => state.agent.agents);
+  const availableModels = useSelector((state: RootState) => state.model.availableModels);
+  const coworkAgentEngine = useSelector((state: RootState) => state.cowork.config.agentEngine);
+  const currentAgent = agents.find(agent => agent.id === currentAgentId);
+  const currentAgentSelectedModel = useAgentSelectedModel(
+    currentAgentId,
+    currentAgent?.model ?? '',
+  );
   const selectedDraftSnippets = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.draftSelectedTextSnippets[currentSession.id] ?? [] : []
   );
@@ -4080,6 +4093,34 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     () => findCurrentEnterpriseQuotaSignal(currentSession),
     [currentSession],
   );
+  const sessionModelSelection = useMemo(() => resolveAgentModelSelection({
+    sessionModel: currentSession?.modelOverride,
+    agentModel: currentAgent?.model ?? '',
+    availableModels,
+    fallbackModel: currentAgentSelectedModel,
+    engine: coworkAgentEngine,
+  }), [
+    availableModels,
+    coworkAgentEngine,
+    currentAgent?.model,
+    currentAgentSelectedModel,
+    currentSession?.modelOverride,
+  ]);
+  const activeEnterpriseQuotaSignal = useMemo(
+    () => resolveActiveEnterpriseQuotaSignal(
+      enterpriseQuotaSignal,
+      enterpriseAccountContext,
+      sessionModelSelection.hasInvalidExplicitModel
+        ? null
+        : sessionModelSelection.selectedModel,
+    ),
+    [
+      enterpriseAccountContext,
+      enterpriseQuotaSignal,
+      sessionModelSelection.hasInvalidExplicitModel,
+      sessionModelSelection.selectedModel,
+    ],
+  );
   const enterpriseQuotaPromptMessageId = enterpriseAccountContext
     ? enterpriseQuotaSignal?.messageId ?? null
     : null;
@@ -5292,7 +5333,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </div>
         )}
         <div className={COWORK_DETAIL_CONTENT_CLASS}>
-          <EnterpriseQuotaPrompt signal={enterpriseQuotaSignal} surface="task" />
+          <EnterpriseQuotaPrompt signal={activeEnterpriseQuotaSignal} surface="task" />
           {showExternalGoalStatusBar && (
             <div className={`relative z-10 ${showExternalSteerPreview ? 'mb-1.5' : '-mb-px'}`}>
               <div ref={setGoalStatusBarPortalTarget} />
@@ -5311,7 +5352,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             canSteer={isStreaming && !isContextBusy}
             placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
             disabled={remoteManaged}
-            submitDisabled={Boolean(enterpriseQuotaSignal)}
+            submitDisabled={Boolean(activeEnterpriseQuotaSignal)}
             size={isArtifactPanelExpanded ? 'compact' : 'large'}
             remoteManaged={remoteManaged}
             onManageSkills={remoteManaged ? undefined : onManageSkills}
