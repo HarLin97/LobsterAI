@@ -3,6 +3,7 @@ import {
   type ActivityContextResponse,
   type ActivityResult,
   type ActivitySlotResponse,
+  DailyCheckInAction,
 } from '../../../shared/activity/constants';
 
 export const ActivityAuthMode = {
@@ -85,7 +86,7 @@ export function getActivitySlot(
   );
 }
 
-export function getActivityContext(
+export function getDailyCheckInContext(
   serverBaseUrl: string,
   activityFetch: ActivityFetch,
   activityCode: string,
@@ -100,22 +101,20 @@ export function getActivityContext(
   );
 }
 
-export function executeActivityAction(
+export function executeDailyCheckIn(
   serverBaseUrl: string,
   activityFetch: ActivityFetch,
   input: {
     activityCode: string;
     configRevision: number;
-    actionId: string;
     idempotencyKey: string;
-    payload?: Record<string, unknown>;
   },
 ): Promise<ActivityResult<ActivityActionResponse>> {
   return request(
     serverBaseUrl,
     activityFetch,
     `/api/client-activities/${encodeURIComponent(input.activityCode)}/actions/`
-      + encodeURIComponent(input.actionId),
+      + DailyCheckInAction.CheckIn,
     ActivityAuthMode.Required,
     {
       method: 'POST',
@@ -123,7 +122,7 @@ export function executeActivityAction(
       body: JSON.stringify({
         configRevision: input.configRevision,
         idempotencyKey: input.idempotencyKey,
-        payload: input.payload ?? {},
+        payload: {},
       }),
     },
   );

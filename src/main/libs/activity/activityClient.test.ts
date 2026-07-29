@@ -3,9 +3,9 @@ import { describe, expect, test, vi } from 'vitest';
 import { ActivityPlacement } from '../../../shared/activity/constants';
 import {
   ActivityAuthMode,
-  executeActivityAction,
-  getActivityContext,
+  executeDailyCheckIn,
   getActivitySlot,
+  getDailyCheckInContext,
 } from './activityClient';
 
 const successResponse = (data: unknown): Response => new Response(
@@ -22,16 +22,16 @@ describe('activityClient', () => {
 
     const result = await getActivitySlot('https://server.example', activityFetch, {
       placement: ActivityPlacement.DesktopSidebar,
-      clientVersion: '2026.7.24',
-      containerApiVersion: 1,
+      clientVersion: '2026.7.30',
+      containerApiVersion: 2,
       platform: 'win32',
     });
 
     expect(result.success).toBe(true);
     expect(activityFetch).toHaveBeenCalledWith(
       'https://server.example/api/client-activities/slot'
-        + '?placement=desktop_sidebar&clientVersion=2026.7.24'
-        + '&containerApiVersion=1&platform=win32',
+        + '?placement=desktop_sidebar&clientVersion=2026.7.30'
+        + '&containerApiVersion=2&platform=win32',
       expect.objectContaining({
         headers: expect.any(Headers),
       }),
@@ -44,7 +44,7 @@ describe('activityClient', () => {
       activityCode: 'login-seven-days',
     }));
 
-    await getActivityContext(
+    await getDailyCheckInContext(
       'https://server.example',
       activityFetch,
       'login-seven-days',
@@ -65,10 +65,9 @@ describe('activityClient', () => {
       context: {},
     }));
 
-    await executeActivityAction('https://server.example', activityFetch, {
+    await executeDailyCheckIn('https://server.example', activityFetch, {
       activityCode: 'login-seven-days',
       configRevision: 3,
-      actionId: 'check_in',
       idempotencyKey: 'request-1',
     });
 

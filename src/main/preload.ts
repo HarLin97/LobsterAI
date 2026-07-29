@@ -2,10 +2,9 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
 import {
-  type ActivityBounds,
-  type ActivityHostClosedEvent,
+  type ActivityHostExecuteActionInput,
+  type ActivityHostGetContextInput,
   type ActivityHostGetSlotInput,
-  type ActivityHostOpenInput,
   ActivityIpc,
 } from '../shared/activity/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
@@ -869,18 +868,10 @@ contextBridge.exposeInMainWorld('electron', {
   activity: {
     getSlot: (input?: ActivityHostGetSlotInput) =>
       ipcRenderer.invoke(ActivityIpc.HostGetSlot, input),
-    open: (input: ActivityHostOpenInput) =>
-      ipcRenderer.invoke(ActivityIpc.HostOpen, input),
-    setBounds: (bounds: ActivityBounds) =>
-      ipcRenderer.invoke(ActivityIpc.HostSetBounds, bounds),
-    close: () => ipcRenderer.invoke(ActivityIpc.HostClose),
-    onClosed: (callback: (event: ActivityHostClosedEvent) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, data: ActivityHostClosedEvent) => {
-        callback(data);
-      };
-      ipcRenderer.on(ActivityIpc.HostClosed, handler);
-      return () => ipcRenderer.removeListener(ActivityIpc.HostClosed, handler);
-    },
+    getContext: (input: ActivityHostGetContextInput) =>
+      ipcRenderer.invoke(ActivityIpc.HostGetContext, input),
+    executeAction: (input: ActivityHostExecuteActionInput) =>
+      ipcRenderer.invoke(ActivityIpc.HostExecuteAction, input),
   },
   appUpdate: {
     getState: () => ipcRenderer.invoke(AppUpdateIpc.GetState),

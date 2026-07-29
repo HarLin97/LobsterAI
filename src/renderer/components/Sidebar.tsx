@@ -645,7 +645,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         <div
           ref={agentScrollContainerRef}
           className={`scrollbar-hidden h-full overflow-y-auto px-2.5 ${
-            isSidebarBannerVisible && !isBatchMode ? 'pb-[104px]' : 'pb-10'
+            isSidebarBannerVisible && !isBatchMode ? 'pb-[128px]' : 'pb-10'
           }`}
           onScroll={handleAgentScroll}
         >

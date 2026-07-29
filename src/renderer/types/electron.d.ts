@@ -1,9 +1,10 @@
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import type {
-  ActivityBounds,
-  ActivityHostClosedEvent,
+  ActivityActionResponse,
+  ActivityContextResponse,
+  ActivityHostExecuteActionInput,
+  ActivityHostGetContextInput,
   ActivityHostGetSlotInput,
-  ActivityHostOpenInput,
   ActivityResult,
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
@@ -1742,14 +1743,12 @@ interface IElectronAPI {
     getSlot: (
       input?: ActivityHostGetSlotInput,
     ) => Promise<ActivityResult<ActivitySlotResponse>>;
-    open: (
-      input: ActivityHostOpenInput,
-    ) => Promise<ActivityResult<{ opened: boolean }>>;
-    setBounds: (
-      bounds: ActivityBounds,
-    ) => Promise<ActivityResult<{ updated: boolean }>>;
-    close: () => Promise<ActivityResult<{ closed: boolean }>>;
-    onClosed: (callback: (event: ActivityHostClosedEvent) => void) => () => void;
+    getContext: (
+      input: ActivityHostGetContextInput,
+    ) => Promise<ActivityResult<ActivityContextResponse>>;
+    executeAction: (
+      input: ActivityHostExecuteActionInput,
+    ) => Promise<ActivityResult<ActivityActionResponse>>;
   };
   auth: {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;

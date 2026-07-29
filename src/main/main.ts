@@ -176,10 +176,7 @@ import type {
   TelegramInstanceConfig,
   WecomInstanceConfig,
 } from './im/types';
-import {
-  type ActivityHostController,
-  registerActivityIpcHandlers,
-} from './ipcHandlers/activity';
+import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
@@ -274,7 +271,6 @@ import {
   getPortalTasksUrl,
   getServerApiBaseUrl,
   getSkillStoreUrl,
-  isTestModeEnabled,
   refreshEndpointsTestMode,
 } from './libs/endpoints';
 import {
@@ -3349,10 +3345,6 @@ const BROWSER_ANNOTATION_PRELOAD_PATH = app.isPackaged
   ? path.join(__dirname, 'browserAnnotationPreload.js')
   : path.join(__dirname, '../dist-electron/browserAnnotationPreload.js');
 
-const ACTIVITY_PRELOAD_PATH = app.isPackaged
-  ? path.join(__dirname, 'activityPreload.js')
-  : path.join(__dirname, '../dist-electron/activityPreload.js');
-
 // 获取应用图标路径（Windows 使用 .ico，其他平台使用 .png）
 const getAppIconPath = (): string | undefined => {
   if (process.platform !== 'win32' && process.platform !== 'linux') return undefined;
@@ -3379,7 +3371,6 @@ const getNotificationIconPath = (): string | null => {
 
 // 保存对主窗口的引用
 let mainWindow: BrowserWindow | null = null;
-let activityHostController: ActivityHostController | null = null;
 let dataMigrationRestoreWindow: BrowserWindow | null = null;
 let desktopNotificationManager: DesktopNotificationManager | null = null;
 let ensureMainWindowForReason: ((reason: string) => BrowserWindow | null) | null = null;
@@ -4365,9 +4356,6 @@ if (!gotTheLock) {
         window.webContents.send(AuthIpcChannel.SessionChanged, event);
       }
     }
-    activityHostController?.notifyAuthChanged({
-      authenticated: event.status === AuthSessionStatus.Authenticated,
-    });
   };
 
   const authSessionManager = new AuthSessionManager({
@@ -5668,23 +5656,18 @@ if (!gotTheLock) {
     (_event, { loginUrl }: { loginUrl?: string } = {}) => startAuthLogin(loginUrl),
   );
 
-  activityHostController = registerActivityIpcHandlers({
+  registerActivityIpcHandlers({
     ipcMain,
-    activityPreloadPath: ACTIVITY_PRELOAD_PATH,
     isDev,
     isPackaged: app.isPackaged,
-    isTestMode: isTestModeEnabled,
     getMainWindow: () => mainWindow,
     getServerBaseUrl: getServerApiBaseUrl,
     getClientVersion: () => app.getVersion(),
-    getLocale: () => app.getLocale(),
     platform: process.platform,
     hasAuthTokens: () => getAuthTokens() !== null,
     fetchPublic: (url, options) => net.fetch(url, options),
     fetchWithAuth,
-    requestLogin: () => startAuthLogin(),
     developmentServerBaseUrl: process.env.LOBSTER_ACTIVITY_SERVER_BASE_URL,
-    developmentWebAppUrl: process.env.LOBSTER_ACTIVITY_WEB_APP_URL,
   });
 
   ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
@@ -5719,7 +5702,6 @@ if (!gotTheLock) {
       const previousQuotaGateState = getAuthQuotaGateState();
       const quota = normalizeQuota(body.data.quota);
       syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
-      activityHostController?.notifyAuthChanged({ authenticated: true });
       return { success: true, user: body.data.user, quota };
     } catch (error) {
       console.error('[Auth] exchange failed:', error);
@@ -11310,7 +11292,6 @@ if (!gotTheLock) {
     mainWindow.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
       if (isMainFrame && !isInPlace) {
         isOpenSessionFromNotificationReady = false;
-        activityHostController?.close();
       }
       authCallbackRouter.handleNavigationStarted({ isMainFrame, isInPlace });
     });
@@ -11318,7 +11299,6 @@ if (!gotTheLock) {
     // 当窗口关闭时，清除引用
     mainWindow.on('closed', () => {
       windowStatePersist.cleanup();
-      activityHostController?.close();
       authCallbackRouter.markRendererUnavailable();
       isOpenSessionFromNotificationReady = false;
       mainWindow = null;

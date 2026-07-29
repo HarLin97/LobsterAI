@@ -1,5 +1,5 @@
 export const ActivityContainerApiVersion = {
-  V1: 1,
+  NativeDailyCheckInV1: 2,
 } as const;
 
 export type ActivityContainerApiVersion =
@@ -10,14 +10,6 @@ export const ActivityPlacement = {
 } as const;
 
 export type ActivityPlacement = typeof ActivityPlacement[keyof typeof ActivityPlacement];
-
-export const ActivityEntrySurface = {
-  DesktopSidebar: 'desktop_sidebar',
-  ProfileMenu: 'profile_menu',
-} as const;
-
-export type ActivityEntrySurface =
-  typeof ActivityEntrySurface[keyof typeof ActivityEntrySurface];
 
 export const ActivitySlotState = {
   Empty: 'empty',
@@ -37,55 +29,63 @@ export const ActivityLifecycleState = {
 export type ActivityLifecycleState =
   typeof ActivityLifecycleState[keyof typeof ActivityLifecycleState];
 
-export const ActivityWebAppKey = {
-  GenericV1: 'generic_activity_v1',
-  RemoteH5V1: 'remote_h5_v1',
+export const DailyCheckInAction = {
+  CheckIn: 'check_in',
 } as const;
 
-export type ActivityWebAppKey = typeof ActivityWebAppKey[keyof typeof ActivityWebAppKey];
+export type DailyCheckInAction =
+  typeof DailyCheckInAction[keyof typeof DailyCheckInAction];
+
+export const ActivityServerErrorCode = {
+  NotFound: 41700,
+  NotActive: 41701,
+  LoginRequired: 41702,
+  ActionInvalid: 41703,
+  AlreadyClaimed: 41704,
+  ConfigInvalid: 41705,
+  RevisionMismatch: 41706,
+} as const;
+
+export type ActivityServerErrorCode =
+  typeof ActivityServerErrorCode[keyof typeof ActivityServerErrorCode];
 
 export const ActivityIpc = {
   HostGetSlot: 'activity:host:get-slot',
-  HostOpen: 'activity:host:open',
-  HostSetBounds: 'activity:host:set-bounds',
-  HostClose: 'activity:host:close',
-  HostClosed: 'activity:host:closed',
-  GuestGetRuntimeContext: 'activity:guest:get-runtime-context',
-  GuestGetActivityContext: 'activity:guest:get-activity-context',
-  GuestExecuteAction: 'activity:guest:execute-action',
-  GuestRequestLogin: 'activity:guest:request-login',
-  GuestClose: 'activity:guest:close',
-  GuestAuthChanged: 'activity:guest:auth-changed',
+  HostGetContext: 'activity:host:get-context',
+  HostExecuteAction: 'activity:host:execute-action',
 } as const;
 
 export type ActivityIpc = typeof ActivityIpc[keyof typeof ActivityIpc];
 
-export interface ActivityBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
 export interface ActivityDescriptor {
   activityCode: string;
   configRevision: number;
-  activityType: string;
-  webAppKey: ActivityWebAppKey;
-  webAppUrl?: string;
-  navigationBaseUrl?: string;
-  resourceBaseUrls?: string[];
-  templateKey: string;
-  sizePreset: string;
+  startAt: string;
+  endAt: string;
+  timezone: string;
   loginRequired: boolean;
-  entryConfig: Record<string, unknown>;
-  presentationConfig: Record<string, unknown>;
+  periodLabel: string;
+  cardTitle: string;
+  guestModalTitle: string;
+  guestModalDescription: string;
+  guestModalActionText: string;
 }
 
 export interface ActivitySlotResponse {
   slotState: ActivitySlotState;
   serverTime: string;
   activity?: ActivityDescriptor;
+}
+
+export interface DailyCheckInState {
+  totalDays: number;
+  claimedDays: number;
+  remainingDays: number;
+  claimedToday: boolean;
+  completed: boolean;
+  rewardCredits: number;
+  claimedCredits: number;
+  timezone: string;
 }
 
 export interface ActivityContextResponse {
@@ -95,14 +95,24 @@ export interface ActivityContextResponse {
   authenticated: boolean;
   loginRequired: boolean;
   serverTime: string;
-  presentationConfig: Record<string, unknown>;
-  state: Record<string, unknown>;
-  actions: string[];
+  state: DailyCheckInState;
+  actions: DailyCheckInAction[];
+}
+
+export interface DailyCheckInActionResult {
+  activityCode: string;
+  actionId: DailyCheckInAction;
+  periodKey: string;
+  creditsGranted: number;
+  claimedAt: string;
+  expiresAt: string;
+  claimedDays: number;
+  totalDays: number;
 }
 
 export interface ActivityActionResponse {
   replayed: boolean;
-  result: Record<string, unknown>;
+  result: DailyCheckInActionResult;
   context: ActivityContextResponse;
 }
 
@@ -114,34 +124,11 @@ export interface ActivityHostGetSlotInput {
   placement?: ActivityPlacement;
 }
 
-export interface ActivityHostOpenInput {
-  activityCode: string;
-  configRevision: number;
-  placement?: ActivityPlacement;
-  bounds: ActivityBounds;
-}
-
-export interface ActivityHostClosedEvent {
+export interface ActivityHostGetContextInput {
   activityCode: string;
   configRevision: number;
 }
 
-export interface ActivityGuestActionInput {
-  actionId: string;
+export interface ActivityHostExecuteActionInput extends ActivityHostGetContextInput {
   idempotencyKey: string;
-  payload?: Record<string, unknown>;
-}
-
-export interface ActivityRuntimeContext {
-  containerApiVersion: ActivityContainerApiVersion;
-  activityCode: string;
-  configRevision: number;
-  clientVersion: string;
-  platform: string;
-  locale: string;
-  authenticated: boolean;
-}
-
-export interface ActivityAuthChangedEvent {
-  authenticated: boolean;
 }

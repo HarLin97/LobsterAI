@@ -5,54 +5,37 @@ import {
 } from 'electron';
 
 import {
-  type ActivityAuthChangedEvent,
-  type ActivityBounds,
   ActivityContainerApiVersion,
-  type ActivityGuestActionInput,
+  type ActivityHostExecuteActionInput,
+  type ActivityHostGetContextInput,
   type ActivityHostGetSlotInput,
-  type ActivityHostOpenInput,
   ActivityIpc,
   ActivityPlacement,
   type ActivityResult,
-  ActivitySlotState,
 } from '../../../shared/activity/constants';
 import { AuthSessionStatus } from '../../../shared/auth/constants';
 import {
   ActivityAuthMode,
   type ActivityFetch,
-  executeActivityAction,
-  getActivityContext,
+  executeDailyCheckIn,
   getActivitySlot,
+  getDailyCheckInContext,
 } from '../../libs/activity/activityClient';
 import { resolveActivityServerBaseUrl } from '../../libs/activity/activityDevelopmentConfig';
-import {
-  resolveActivityWebAppLocation,
-} from '../../libs/activity/activitySecurity';
-import { ActivityViewController } from '../../libs/activity/activityViewController';
 import { resolveAuthSessionStatusFromError } from '../../libs/authSessionManager';
-
-export interface ActivityHostController {
-  close: () => void;
-  notifyAuthChanged: (event: ActivityAuthChangedEvent) => void;
-}
 
 export interface ActivityIpcHandlerDeps {
   ipcMain: IpcMain;
-  activityPreloadPath: string;
   isDev: boolean;
   isPackaged: boolean;
-  isTestMode: () => boolean;
   getMainWindow: () => BrowserWindow | null;
   getServerBaseUrl: () => string;
   getClientVersion: () => string;
-  getLocale: () => string;
   platform: string;
   hasAuthTokens: () => boolean;
   fetchPublic: (url: string, init?: RequestInit) => Promise<Response>;
   fetchWithAuth: (url: string, init?: RequestInit) => Promise<Response>;
-  requestLogin: () => Promise<{ success: boolean; error?: string }>;
   developmentServerBaseUrl?: string;
-  developmentWebAppUrl?: string;
 }
 
 const failure = (error: unknown): ActivityResult<never> => ({
@@ -60,26 +43,27 @@ const failure = (error: unknown): ActivityResult<never> => ({
   error: error instanceof Error ? error.message : 'Activity operation failed',
 });
 
-function validateGuestActionInput(
-  input: ActivityGuestActionInput | undefined,
-): asserts input is ActivityGuestActionInput {
+function validateActivityBinding(
+  input: ActivityHostGetContextInput | undefined,
+): asserts input is ActivityHostGetContextInput {
   if (!input
-      || !/^[A-Za-z0-9_-]{1,64}$/.test(input.actionId)
-      || !/^[A-Za-z0-9._:-]{1,64}$/.test(input.idempotencyKey)) {
-    throw new Error('Invalid activity action input');
-  }
-  if (Buffer.byteLength(JSON.stringify(input.payload ?? {}), 'utf8') > 16 * 1024) {
-    throw new Error('Activity action payload is too large');
+      || !/^[a-z0-9][a-z0-9_-]{2,63}$/.test(input.activityCode)
+      || !Number.isInteger(input.configRevision)
+      || input.configRevision < 1) {
+    throw new Error('Invalid activity binding');
   }
 }
 
-export function registerActivityIpcHandlers(
-  deps: ActivityIpcHandlerDeps,
-): ActivityHostController {
-  const viewController = new ActivityViewController(
-    deps.activityPreloadPath,
-    deps.isDev,
-  );
+function validateExecuteInput(
+  input: ActivityHostExecuteActionInput | undefined,
+): asserts input is ActivityHostExecuteActionInput {
+  validateActivityBinding(input);
+  if (!/^[A-Za-z0-9._:-]{1,64}$/.test(input.idempotencyKey)) {
+    throw new Error('Invalid activity idempotency key');
+  }
+}
+
+export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void {
   let actionInFlight = false;
 
   const getActivityServerBaseUrl = () => resolveActivityServerBaseUrl({
@@ -108,33 +92,30 @@ export function registerActivityIpcHandlers(
     }
   };
 
-  const loadSlot = (input: ActivityHostGetSlotInput = {}) => getActivitySlot(
-    getActivityServerBaseUrl(),
-    activityFetch,
-    {
-      placement: input.placement ?? ActivityPlacement.DesktopSidebar,
-      clientVersion: deps.getClientVersion(),
-      containerApiVersion: ActivityContainerApiVersion.V1,
-      platform: deps.platform,
-    },
-  );
-
-  const requireMainRenderer = (event: IpcMainInvokeEvent): BrowserWindow => {
+  const requireMainRenderer = (event: IpcMainInvokeEvent): void => {
     const mainWindow = deps.getMainWindow();
     if (!mainWindow || mainWindow.isDestroyed()
         || event.sender !== mainWindow.webContents
         || event.senderFrame !== mainWindow.webContents.mainFrame) {
       throw new Error('Untrusted activity host sender');
     }
-    return mainWindow;
   };
 
   deps.ipcMain.handle(
     ActivityIpc.HostGetSlot,
-    async (event, input?: ActivityHostGetSlotInput) => {
+    async (event, input: ActivityHostGetSlotInput = {}) => {
       try {
         requireMainRenderer(event);
-        return await loadSlot(input);
+        return await getActivitySlot(
+          getActivityServerBaseUrl(),
+          activityFetch,
+          {
+            placement: input.placement ?? ActivityPlacement.DesktopSidebar,
+            clientVersion: deps.getClientVersion(),
+            containerApiVersion: ActivityContainerApiVersion.NativeDailyCheckInV1,
+            platform: deps.platform,
+          },
+        );
       } catch (error) {
         return failure(error);
       }
@@ -142,127 +123,41 @@ export function registerActivityIpcHandlers(
   );
 
   deps.ipcMain.handle(
-    ActivityIpc.HostOpen,
-    async (event, input: ActivityHostOpenInput) => {
+    ActivityIpc.HostGetContext,
+    async (event, input?: ActivityHostGetContextInput) => {
       try {
-        const mainWindow = requireMainRenderer(event);
-        const slotResult = await loadSlot({ placement: input?.placement });
-        if (!slotResult.success) return slotResult;
-        const descriptor = slotResult.data.activity;
-        if (slotResult.data.slotState !== ActivitySlotState.Available
-            || !descriptor
-            || descriptor.activityCode !== input?.activityCode
-            || descriptor.configRevision !== input?.configRevision) {
+        requireMainRenderer(event);
+        validateActivityBinding(input);
+        return await getDailyCheckInContext(
+          getActivityServerBaseUrl(),
+          activityFetch,
+          input.activityCode,
+          input.configRevision,
+        );
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  deps.ipcMain.handle(
+    ActivityIpc.HostExecuteAction,
+    async (event, input?: ActivityHostExecuteActionInput) => {
+      try {
+        requireMainRenderer(event);
+        validateExecuteInput(input);
+        if (actionInFlight) {
           return {
             success: false,
-            error: 'Activity is no longer available',
+            error: 'A daily check-in request is already in progress',
           } satisfies ActivityResult<never>;
-        }
-        const location = resolveActivityWebAppLocation({
-          webAppKey: descriptor.webAppKey,
-          webAppUrl: descriptor.webAppUrl,
-          navigationBaseUrl: descriptor.navigationBaseUrl,
-          resourceBaseUrls: descriptor.resourceBaseUrls,
-          activityCode: descriptor.activityCode,
-          configRevision: descriptor.configRevision,
-          locale: deps.getLocale(),
-          isPackaged: deps.isPackaged,
-          isTestMode: deps.isTestMode(),
-          developmentOverride: deps.developmentWebAppUrl,
-        });
-        await viewController.open({
-          parentWindow: mainWindow,
-          descriptor,
-          url: location.url,
-          navigationBaseUrl: location.navigationBaseUrl,
-          resourceBaseUrls: location.resourceBaseUrls,
-          bounds: input.bounds,
-        });
-        return { success: true, data: { opened: true } };
-      } catch (error) {
-        return failure(error);
-      }
-    },
-  );
-
-  deps.ipcMain.handle(
-    ActivityIpc.HostSetBounds,
-    (event, bounds: ActivityBounds) => {
-      try {
-        requireMainRenderer(event);
-        viewController.setBounds(bounds);
-        return { success: true, data: { updated: true } };
-      } catch (error) {
-        return failure(error);
-      }
-    },
-  );
-
-  deps.ipcMain.handle(ActivityIpc.HostClose, event => {
-    try {
-      requireMainRenderer(event);
-      viewController.close();
-      return { success: true, data: { closed: true } };
-    } catch (error) {
-      return failure(error);
-    }
-  });
-
-  deps.ipcMain.handle(ActivityIpc.GuestGetRuntimeContext, event => {
-    try {
-      const binding = viewController.requireBindingForEvent(event);
-      return {
-        success: true,
-        data: {
-          containerApiVersion: ActivityContainerApiVersion.V1,
-          activityCode: binding.activityCode,
-          configRevision: binding.configRevision,
-          clientVersion: deps.getClientVersion(),
-          platform: deps.platform,
-          locale: deps.getLocale(),
-          authenticated: deps.hasAuthTokens(),
-        },
-      };
-    } catch (error) {
-      return failure(error);
-    }
-  });
-
-  deps.ipcMain.handle(ActivityIpc.GuestGetActivityContext, async event => {
-    try {
-      const binding = viewController.requireBindingForEvent(event);
-      return await getActivityContext(
-        getActivityServerBaseUrl(),
-        activityFetch,
-        binding.activityCode,
-        binding.configRevision,
-      );
-    } catch (error) {
-      return failure(error);
-    }
-  });
-
-  deps.ipcMain.handle(
-    ActivityIpc.GuestExecuteAction,
-    async (event, input: ActivityGuestActionInput) => {
-      try {
-        const binding = viewController.requireBindingForEvent(event);
-        validateGuestActionInput(input);
-        if (actionInFlight) {
-          return { success: false, error: 'An activity action is already in progress' };
         }
         actionInFlight = true;
         try {
-          return await executeActivityAction(
+          return await executeDailyCheckIn(
             getActivityServerBaseUrl(),
             activityFetch,
-            {
-              activityCode: binding.activityCode,
-              configRevision: binding.configRevision,
-              actionId: input.actionId,
-              idempotencyKey: input.idempotencyKey,
-              payload: input.payload,
-            },
+            input,
           );
         } finally {
           actionInFlight = false;
@@ -272,31 +167,4 @@ export function registerActivityIpcHandlers(
       }
     },
   );
-
-  deps.ipcMain.handle(ActivityIpc.GuestRequestLogin, async event => {
-    try {
-      viewController.requireBindingForEvent(event);
-      const result = await deps.requestLogin();
-      return result.success
-        ? { success: true, data: { started: true } }
-        : { success: false, error: result.error ?? 'Failed to start login' };
-    } catch (error) {
-      return failure(error);
-    }
-  });
-
-  deps.ipcMain.handle(ActivityIpc.GuestClose, event => {
-    try {
-      viewController.requireBindingForEvent(event);
-      viewController.close();
-      return { success: true, data: { closed: true } };
-    } catch (error) {
-      return failure(error);
-    }
-  });
-
-  return {
-    close: () => viewController.close(),
-    notifyAuthChanged: event => viewController.notifyAuthChanged(event),
-  };
 }
