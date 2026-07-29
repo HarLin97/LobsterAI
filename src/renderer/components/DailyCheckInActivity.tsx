@@ -6,6 +6,7 @@ import type { ActivityDescriptor } from '@shared/activity/constants';
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import dailyCheckInGiftUrl from '../assets/daily-check-in-gift.png';
 import { authService } from '../services/auth';
 import { i18nService } from '../services/i18n';
 import {
@@ -85,9 +86,12 @@ export const DailyCheckInLoginModal: React.FC<DailyCheckInLoginModalProps> = ({
         >
           <XMarkIcon className="h-4 w-4" />
         </button>
-        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#FFF2E9] text-[#ED6B2E]">
-          <GiftIcon className="h-8 w-8" />
-        </div>
+        <img
+          src={dailyCheckInGiftUrl}
+          alt=""
+          aria-hidden="true"
+          className="mx-auto -mt-1 mb-3 h-[78px] w-[92px] object-contain drop-shadow-lg"
+        />
         <h2 className="text-base font-semibold text-foreground">
           {descriptor.guestModalTitle}
         </h2>
@@ -140,7 +144,12 @@ export const DailyCheckInSidebarCard: React.FC<DailyCheckInSidebarCardProps> = (
       className={`${hidden ? 'pointer-events-none' : 'pointer-events-auto'} relative w-full overflow-hidden rounded-xl border border-[#F2DACC] bg-[linear-gradient(145deg,#FFF8F3,#FFFFFF)] p-2.5 text-[#35251D] shadow-[0_5px_14px_rgba(77,42,25,0.12)]`}
     >
       <div className="flex items-center gap-1.5 pr-5">
-        <GiftIcon className="h-3.5 w-3.5 shrink-0 text-[#E86A30]" />
+        <img
+          src={dailyCheckInGiftUrl}
+          alt=""
+          aria-hidden="true"
+          className="h-5 w-5 shrink-0 object-contain"
+        />
         <span className="truncate text-[11px] font-semibold">
           {descriptor.cardTitle}
         </span>
