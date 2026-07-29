@@ -145,25 +145,13 @@ export async function downloadUpdate(
   try {
     const response = await session.defaultSession.fetch(url, {
       signal: controller.signal,
+      // Electron documents Response.url as unreliable for session.fetch().
+      // Reject Windows redirects so the validated input remains the download
+      // source without relying on that field for final-URL provenance.
+      ...(process.platform === 'win32' ? { redirect: 'error' as const } : {}),
     });
 
     console.log(`[AppUpdate] HTTP response: ${response.status} ${response.statusText}`);
-
-    let validatedWindowsFinalUrl: URL | null = null;
-    if (process.platform === 'win32') {
-      const finalResponseUrl = response.url?.trim() ?? '';
-      try {
-        validatedWindowsFinalUrl = assertTrustedWindowsInstallerUrl(finalResponseUrl);
-      } catch (error) {
-        const reason = error instanceof AppUpdateUrlUntrustedError
-          ? error.reason
-          : 'unknown';
-        console.error(
-          `[AppUpdate] Rejected unsafe final Windows installer URL, reason=${reason}`,
-        );
-        throw error;
-      }
-    }
 
     if (!response.ok) {
       throw new Error(`Download failed (HTTP ${response.status})`);
@@ -254,12 +242,12 @@ export async function downloadUpdate(
 
     return {
       filePath: finalPath,
-      ...(validatedWindowsInputUrl && validatedWindowsFinalUrl
+      ...(validatedWindowsInputUrl
         ? {
             windowsInstallerUrlPolicyReceipt: {
               policyVersion: WINDOWS_INSTALLER_URL_POLICY_VERSION,
               inputOrigin: validatedWindowsInputUrl.origin,
-              finalOrigin: validatedWindowsFinalUrl.origin,
+              finalOrigin: validatedWindowsInputUrl.origin,
             },
           }
         : {}),

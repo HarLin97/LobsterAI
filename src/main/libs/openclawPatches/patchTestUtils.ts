@@ -24,34 +24,6 @@ export function readCurrentOpenClawPatch(patchFile: string): string {
   return patchContent;
 }
 
-export function readPatchFileDiff(patchContent: string, file: string): string {
-  const marker = `diff --git a/${file} b/${file}`;
-  const start = patchContent.indexOf(marker);
-  expect(start).toBeGreaterThanOrEqual(0);
-  const next = patchContent.indexOf('\ndiff --git ', start + marker.length);
-  return patchContent.slice(start, next < 0 ? undefined : next);
-}
-
-export function readCurrentOpenClawPatchFileDiff(patchFile: string, file: string): string {
-  return readPatchFileDiff(readCurrentOpenClawPatch(patchFile), file);
-}
-
-export function readAddedPatchLines(fileDiff: string): string {
-  return fileDiff
-    .split('\n')
-    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
-    .map((line) => line.slice(1))
-    .join('\n');
-}
-
-export function readRemovedPatchLines(fileDiff: string): string {
-  return fileDiff
-    .split('\n')
-    .filter((line) => line.startsWith('-') && !line.startsWith('---'))
-    .map((line) => line.slice(1))
-    .join('\n');
-}
-
 export function expectPatchContains(patchFile: string, snippets: string[]): void {
   const patchContent = readCurrentOpenClawPatch(patchFile);
   for (const snippet of snippets) {

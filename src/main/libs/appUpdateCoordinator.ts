@@ -1208,6 +1208,7 @@ export class AppUpdateCoordinator {
     const receiptTrusted =
       receipt?.policyVersion === WINDOWS_INSTALLER_URL_POLICY_VERSION
       && receipt.inputOrigin === result.url.origin
+      && receipt.finalOrigin === result.url.origin
       && isSecureWindowsInstallerOrigin(receipt.inputOrigin)
       && isSecureWindowsInstallerOrigin(receipt.finalOrigin);
     if (!receiptTrusted) {

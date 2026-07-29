@@ -1500,16 +1500,17 @@ P0-hotfix 必须在客户端建立唯一的 Windows 安装包 URL policy，并�
    URL 和非 Windows installer 扩展名；
 3. P0 不固定 production/test CDN origin。任意 origin 只有满足同一
    transport policy 才可继续；该结果不等价于官方来源鉴真；
-4. 下载前校验输入 URL；自动重定向完成且写入缓存前再次校验最终
-   `response.url`。任一不满足 transport policy 的最终 URL 都必须中止并
-   删除本次未完成临时下载；
-5. transport receipt 可记录动态 input/final origin 并绑定缓存记录，但
-   不得把动态 origin 当作签名或固定 allowlist；
+4. 下载前校验输入 URL；Windows 下载必须使用 `redirect: 'error'` 禁止
+   HTTP 重定向，避免依赖 Electron `session.fetch()` 明确不可靠的
+   `response.url`。发生重定向时必须中止并删除本次未完成临时下载；
+5. transport receipt 绑定当前 policy version，并记录相同的 input/final
+   origin，表示本次下载未接受 HTTP 重定向；该 origin 不得被当作签名或
+   固定 allowlist；
 6. 拒绝后返回稳定 `update-url-untrusted`，不得下载、提权执行，也不得把
    接口返回的原始不可信 URL 交给系统浏览器；
 7. 支持侧如需降级，只能打开产品内置、由代码固定的官方下载页；
-8. 发布前通过真实 production/test 下载验证输入和最终 URL 均满足
-   transport policy，并记录实际动态 origin 供排障。
+8. 发布前通过真实 production/test 下载验证输入 URL 满足 transport
+   policy、下载无需 HTTP 重定向，并记录实际 origin 供排障。
 
 该门禁只是 P0 下限，不是完整安装包鉴真。可信服务端摘要或签名 manifest、
 每跳 redirect policy、WinVerifyTrust、证书链、预期 Publisher 和时间戳

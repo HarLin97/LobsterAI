@@ -1,7 +1,6 @@
 import { type ApiFormat,type ProviderConfig, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import {
   applyModelRuntimeProfileMetadata,
-  type ModelCompatibilityMode,
   ModelRuntimeProfile,
   type ModelRuntimeProfile as ModelRuntimeProfileType,
   normalizeModelIdForComparison,
@@ -47,7 +46,6 @@ type ProviderModelConfig = {
   supportsThinking?: boolean;
   contextWindow?: number;
   maxTokens?: number;
-  compatibilityMode?: ModelCompatibilityMode;
   customParams?: Record<string, unknown>;
 };
 
@@ -59,7 +57,6 @@ type ProviderModelInputConfig = {
   supportsThinking?: boolean;
   contextWindow?: number;
   maxTokens?: number;
-  compatibilityMode?: ModelCompatibilityMode;
   customParams?: Record<string, unknown>;
 };
 
@@ -136,7 +133,6 @@ export type ApiConfigResolution = {
     modelName?: string;
     contextWindow?: number;
     maxTokens?: number;
-    compatibilityMode?: ModelCompatibilityMode;
   };
 };
 
@@ -436,7 +432,6 @@ type MatchedProvider = {
   modelName?: string;
   contextWindow?: number;
   maxTokens?: number;
-  compatibilityMode?: ModelCompatibilityMode;
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
@@ -651,7 +646,6 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       modelId,
       apiFormat,
       baseURL,
-      compatibilityMode: matchedModel?.compatibilityMode,
       supportsImage: matchedModel?.supportsImage,
       supportsVideo: matchedModel?.supportsVideo,
       supportsThinking: matchedModel?.supportsThinking,
@@ -714,7 +708,6 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
         modelName: matched.modelName,
         contextWindow: matched.contextWindow,
         maxTokens: matched.maxTokens,
-        compatibilityMode: matched.compatibilityMode,
       },
     };
   }
@@ -759,7 +752,6 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
       modelName: matched.modelName,
       contextWindow: matched.contextWindow,
       maxTokens: matched.maxTokens,
-      compatibilityMode: matched.compatibilityMode,
     },
   };
 }
@@ -817,7 +809,6 @@ export function resolveRawApiConfig(): ApiConfigResolution {
     supportsThinking: matched.supportsThinking,
     contextWindow: matched.contextWindow,
     maxTokens: matched.maxTokens,
-    compatibilityMode: matched.compatibilityMode,
     codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
     authType: matched.providerConfig.authType,
   }));
@@ -845,7 +836,6 @@ export function resolveRawApiConfig(): ApiConfigResolution {
       modelName: matched.modelName,
       contextWindow: matched.contextWindow,
       maxTokens: matched.maxTokens,
-      compatibilityMode: matched.compatibilityMode,
     },
   };
 }

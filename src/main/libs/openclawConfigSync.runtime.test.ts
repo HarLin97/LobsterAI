@@ -49,7 +49,6 @@ const mockRuntimeState = vi.hoisted(() => ({
       supportsThinking?: boolean;
       contextWindow?: number;
       maxTokens?: number;
-      compatibilityMode?: 'auto' | 'standard' | 'moonshot-kimi-k3';
       customParams?: Record<string, unknown>;
     }>;
   }>,
@@ -90,7 +89,6 @@ const mockRuntimeState = vi.hoisted(() => ({
       modelName?: string;
       contextWindow?: number;
       maxTokens?: number;
-      compatibilityMode?: 'auto' | 'standard' | 'moonshot-kimi-k3';
     };
   },
 }));
@@ -1180,21 +1178,20 @@ describe('OpenClawConfigSync runtime config output', () => {
     ]));
   });
 
-  test('activates deterministic Kimi K3 compatibility ownership for custom and package models', async () => {
+  test('activates deterministic Kimi K3 ownership for exact custom and package models', async () => {
     mockRuntimeState.proxyPort = 56646;
     mockRuntimeState.rawApiConfig = {
       config: {
         baseURL: 'https://gateway.example.com/v1',
         apiKey: 'sk-custom',
-        model: 'my-kimi-prod',
+        model: 'kimi-k3',
         apiType: 'openai',
       },
       providerMetadata: {
         providerName: 'custom_0',
         codingPlanEnabled: false,
         supportsImage: false,
-        compatibilityMode: 'moonshot-kimi-k3',
-        modelName: 'Kimi K3 Alias',
+        modelName: 'Kimi K3',
       },
     };
     mockRuntimeState.enabledProviders = [{
@@ -1210,9 +1207,8 @@ describe('OpenClawConfigSync runtime config output', () => {
           customParams: { temperature: 0.4 },
         },
         {
-          id: 'my-kimi-prod',
-          name: 'Kimi K3 Alias',
-          compatibilityMode: 'moonshot-kimi-k3',
+          id: 'kimi-k3',
+          name: 'Kimi K3',
           customParams: {
             metadata: 'kept',
             temperature: 0.1,
@@ -1250,7 +1246,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     const customProvider = config.models.providers.custom_0;
     const serverProvider = config.models.providers['lobsterai-server'];
     const customK3 = customProvider.models.find((model: { id: string }) =>
-      model.id === 'my-kimi-prod');
+      model.id === 'kimi-k3');
     const serverK3 = serverProvider.models.find((model: { id: string }) =>
       model.id === 'kimi-k3-package');
 
@@ -1258,7 +1254,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(serverProvider.api).toBe('lobsterai-model-compat');
     expect(customProvider.models).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'plain-model', api: 'openai-completions' }),
-      expect.objectContaining({ id: 'my-kimi-prod', api: 'openai-completions' }),
+      expect.objectContaining({ id: 'kimi-k3', api: 'openai-completions' }),
     ]));
     expect(customK3).toMatchObject({
       reasoning: true,
@@ -1289,7 +1285,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       contextWindow: 1_048_576,
       maxTokens: 8192,
     });
-    expect(config.agents.defaults.models['custom_0/my-kimi-prod']).toEqual({
+    expect(config.agents.defaults.models['custom_0/kimi-k3']).toEqual({
       params: {
         extra_body: {
           metadata: 'kept',
@@ -1307,7 +1303,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       enabled: true,
       config: {
         modelProfiles: {
-          'custom_0/my-kimi-prod': 'moonshot-kimi-k3',
+          'custom_0/kimi-k3': 'moonshot-kimi-k3',
           'lobsterai-server/kimi-k3-package': 'moonshot-kimi-k3',
         },
       },
@@ -1490,7 +1486,6 @@ describe('OpenClawConfigSync runtime config output', () => {
       providerMetadata: {
         providerName: 'custom_0',
         codingPlanEnabled: false,
-        compatibilityMode: 'auto',
       },
     };
     mockRuntimeState.enabledProviders = [{
@@ -1499,7 +1494,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       apiKey: 'sk-custom',
       apiType: 'openai',
       codingPlanEnabled: false,
-      models: [{ id: 'kimi-k3', name: 'Kimi K3', compatibilityMode: 'auto' }],
+      models: [{ id: 'kimi-k3', name: 'Kimi K3' }],
     }];
 
     const sync = await createSync();
@@ -2650,19 +2645,13 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(agentsMd).toContain('For every `browser` tool call, set `target="host"` explicitly.');
   });
 
-  test('enables managed OpenClaw run safety and tool loop detection', async () => {
+  test('enables managed OpenClaw tool loop detection', async () => {
     const sync = await createSync();
 
     const result = sync.sync('tool-loop-detection');
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.agents.defaults.runSafety).toEqual({
-      maxToolCallReservationsPerBudgetScope: 64,
-      maxProviderDispatchesPerBudgetScope: 32,
-      maxCumulativeEstimatedPromptTokensPerBudgetScope: 2_000_000,
-      warningRatio: 0.75,
-    });
     expect(config.tools.loopDetection).toEqual({
       enabled: true,
       historySize: 40,
@@ -2670,13 +2659,10 @@ describe('OpenClawConfigSync runtime config output', () => {
       unknownToolThreshold: 6,
       criticalThreshold: 10,
       globalCircuitBreakerThreshold: 16,
-      variantWarningThreshold: 2,
-      variantCriticalThreshold: 3,
       detectors: {
         genericRepeat: true,
         knownPollNoProgress: true,
         pingPong: true,
-        variantNoProgress: true,
       },
     });
   });

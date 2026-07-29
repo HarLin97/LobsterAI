@@ -364,6 +364,91 @@ describe('Windows installer hardening contracts', () => {
     );
   });
 
+  test('drives Skills backup state from helper exit codes, never stdout text', () => {
+    const defines: Record<string, string> = {};
+    for (const match of installerInclude.matchAll(
+      /!define (LOBSTER_SKILL_BACKUP_EXIT_\w+) "(\d+)"/g,
+    )) {
+      defines[match[1]] = match[2];
+    }
+    expect(defines).toEqual({
+      LOBSTER_SKILL_BACKUP_EXIT_VERIFIED: '0',
+      LOBSTER_SKILL_BACKUP_EXIT_INSPECT_FAILED: '10',
+      LOBSTER_SKILL_BACKUP_EXIT_COPY_FAILED: '11',
+      LOBSTER_SKILL_BACKUP_EXIT_VERIFY_FAILED: '12',
+      LOBSTER_SKILL_BACKUP_EXIT_NO_USER_SKILLS: '13',
+    });
+    expect(new Set(Object.values(defines)).size).toBe(Object.keys(defines).length);
+
+    // The helper exits and the NSIS status mapping both use the named codes,
+    // so the protocol has a single source of truth.
+    for (const name of Object.keys(defines)) {
+      expect(installerInclude).toContain(`exit \${${name}}`);
+      expect(installerInclude).toContain(`StrCmp $R2 "\${${name}}"`);
+    }
+
+    // stdout must never drive control flow: ExecToStack returns the helper
+    // output with its trailing CRLF, so an exact text comparison silently
+    // fails (the 2026.7.23 spurious legacy-restore-backup-missing bug).
+    expect(installerInclude).not.toMatch(/StrCmp \$1 "legacy-/);
+  });
+
+  test('re-checks the attempt manifest after a verified backup before replacing the old install', () => {
+    const backupComplete = installerInclude.indexOf('phase=skill-backup-complete');
+    const postcheck = installerInclude.indexOf(
+      'IfFileExists "$APPDATA\\LobsterAI\\skills-backup\\$lobsterInstallerAttemptId\\backup-manifest.json" SkillBackupValidated',
+    );
+    const postcheckLog = installerInclude.indexOf(
+      'phase=skill-backup-manifest-postcheck-missing',
+    );
+    const failedAbort = installerInclude.indexOf('SkillBackupFailedAbort:');
+    const swapStart = installerInclude.indexOf('phase=old-install-rename-start');
+
+    expect(backupComplete).toBeGreaterThan(-1);
+    expect(postcheck).toBeGreaterThan(backupComplete);
+    expect(postcheck).toBeLessThan(swapStart);
+    expect(postcheckLog).toBeGreaterThan(postcheck);
+    expect(postcheckLog).toBeLessThan(failedAbort);
+    // A missing manifest downgrades to the existing fail-closed abort path
+    // while the old install is still intact.
+    expect(installerInclude.slice(postcheck, failedAbort)).toContain(
+      'StrCpy $lobsterLegacySkillsStatus "legacy-backup-verify-failed"',
+    );
+  });
+
+  test('isolates degraded restore outcomes from the name-conflict branch', () => {
+    const failurePreserved = installerInclude.indexOf('SkillRestoreFailurePreserved:');
+    const conflictLabel = installerInclude.indexOf(
+      'SkillRestoreConflictPreserved:',
+      failurePreserved,
+    );
+    expect(failurePreserved).toBeGreaterThan(-1);
+    expect(conflictLabel).toBeGreaterThan(failurePreserved);
+    const degraded = installerInclude.slice(failurePreserved, conflictLabel);
+
+    // Both degraded paths end at the shared terminal label instead of
+    // falling through into the conflict branch.
+    expect(degraded.match(/Goto SkillRestoreValidated/g)).toHaveLength(2);
+    const instructions = degraded
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith(';'));
+    expect(instructions[instructions.length - 1]).toBe('Goto SkillRestoreValidated');
+
+    // Only restore exit code 20 may enter the conflict branch.
+    expect(installerInclude).toContain('StrCmp $R2 "20" SkillRestoreConflictPreserved');
+    expect(installerInclude.match(/SkillRestoreConflictPreserved/g)).toHaveLength(2);
+
+    // The degraded dialog states exactly what survives: a missing backup is
+    // reported as missing, a preserved backup with its on-disk path.
+    expect(degraded).toContain('action=continue-with-attempt-backup-preserved');
+    expect(degraded).toContain('action=continue-no-backup-found');
+    expect(degraded).toContain(
+      'The recovery backup was preserved at $APPDATA\\LobsterAI\\skills-backup\\$lobsterInstallerAttemptId',
+    );
+    expect(degraded).not.toContain('was not deleted');
+  });
+
   test('appends attempt-correlated logs and records conservative provenance', () => {
     const initStart = installerInclude.indexOf('!macro customInit');
     const initEnd = installerInclude.indexOf('!macroend', initStart);

@@ -1,6 +1,6 @@
 # DeepSeek 长会话缓存稳定性修复设计文档
 
-> 2026-07-26 更新：实时无限聚合方案已被客户端 Run Safety 设计取代；最终实现恢复固定工具结果聚合上限，只保证同一 payload 在 retry / fallback 间的字节稳定。
+> 2026-07-29 更新：实时无限聚合方案最终未进入正式实现；当前恢复固定工具结果聚合上限，只保证同一 payload 在 retry / fallback 间的字节稳定。
 >
 > 诊断状态：根因定位已完成，`DeepSeekCacheProbe` 临时 patch 已从正式补丁集删除。
 
@@ -109,9 +109,9 @@ scripts/patches/v2026.6.1/openclaw-live-tool-result-cache-stability.patch
 - 继续对每条 tool result 应用 `toolResultMaxChars`，DeepSeek V4 当前仍为 64,000 字符；
 - projection 只修改 request-local clone，持久化 session history 不被改写；
 - 相同最终 payload 及其结构化副本在 retry / fallback 间保持字节一致；
-- 参数变化型重复历史由 Run Safety 的历史折叠处理，单任务累计 Prompt 暴露另受客户端硬上限约束。
+- 参数变化型重复调用继续由既有工具循环检测处理；本 patch 不承担会话级止损。
 
-固定 aggregate cap 与“历史任意增长时旧 projection 永远不变”无法同时保证：已有 projection 占满预算后再追加非空结果，必须改写旧 projection、突破上限或丢弃新结果。最终实现优先固定聚合上限和可证明的客户端止损，因此不再承诺跨历史增长的前缀恒等。
+固定 aggregate cap 与“历史任意增长时旧 projection 永远不变”无法同时保证：已有 projection 占满预算后再追加非空结果，必须改写旧 projection、突破上限或丢弃新结果。最终实现优先固定聚合上限和可预测的请求体大小，因此不再承诺跨历史增长的前缀恒等。
 
 ## 4. 历史复现与修复验证
 
@@ -141,7 +141,7 @@ Select-String -Path "$env:APPDATA\LobsterAI\openclaw\logs\gateway-*.log" -Patter
 - 单条 tool result 不超过 64,000 字符，全部 tool result projection 不超过固定聚合上限；
 - 相同最终 payload 的 retry / fallback 具有相同 message manifest 与 payload hash；
 - 追加新 tool result 后允许 request-local projection 重新分配，但原始 session history 不发生改写；
-- 参数变化型重复历史被 Run Safety 折叠或提前终止，不能再靠无界增长换取前缀缓存稳定。
+- 本补丁不依赖无界历史增长换取前缀缓存稳定；重复调用仍由既有工具循环检测处理。
 
 ## 5. 判读规则
 

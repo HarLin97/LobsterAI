@@ -18,14 +18,14 @@ export type WindowsInstallerUrlPolicyResult =
   | { trusted: true; url: URL }
   | { trusted: false; reason: WindowsInstallerUrlPolicyFailure };
 
-export const WINDOWS_INSTALLER_URL_POLICY_VERSION = 1 as const;
+export const WINDOWS_INSTALLER_URL_POLICY_VERSION = 2 as const;
 
 export interface WindowsInstallerUrlPolicyReceipt {
   policyVersion: typeof WINDOWS_INSTALLER_URL_POLICY_VERSION;
   /**
-   * Dynamic download provenance only. These origins are recorded after the
-   * transport policy passes; they are not compared with a fixed CDN allowlist
-   * and do not prove publisher authenticity.
+   * Transport provenance for a request that disallows HTTP redirects.
+   * `finalOrigin` is retained for persisted-record compatibility and must equal
+   * `inputOrigin`; neither value proves publisher authenticity.
    */
   inputOrigin: string;
   finalOrigin: string;

@@ -17,7 +17,6 @@ import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
 import type {
-  ModelCompatibilityMode as ModelCompatibilityModeType,
   ModelRuntimeProfile as ModelRuntimeProfileType,
 } from '../../shared/providers';
 import {
@@ -286,12 +285,6 @@ const MANAGED_OWNER_ALLOW_FROM = [
 ];
 
 const MANAGED_TOOL_DENY = ['web_search'] as const;
-const MANAGED_RUN_SAFETY = {
-  maxToolCallReservationsPerBudgetScope: 64,
-  maxProviderDispatchesPerBudgetScope: 32,
-  maxCumulativeEstimatedPromptTokensPerBudgetScope: 2_000_000,
-  warningRatio: 0.75,
-} as const;
 const MANAGED_TOOL_LOOP_DETECTION = {
   enabled: true,
   historySize: 40,
@@ -299,13 +292,10 @@ const MANAGED_TOOL_LOOP_DETECTION = {
   unknownToolThreshold: 6,
   criticalThreshold: 10,
   globalCircuitBreakerThreshold: 16,
-  variantWarningThreshold: 2,
-  variantCriticalThreshold: 3,
   detectors: {
     genericRepeat: true,
     knownPollNoProgress: true,
     pingPong: true,
-    variantNoProgress: true,
   },
 } as const;
 const EMAIL_PLUGIN_ID = 'email';
@@ -1066,7 +1056,6 @@ export const buildProviderSelection = (options: {
   modelName?: string;
   contextWindow?: number;
   maxTokens?: number;
-  compatibilityMode?: ModelCompatibilityModeType;
   runtimeProfile?: unknown;
 }): OpenClawProviderSelection => {
   const providerName = options.providerName ?? '';
@@ -1102,9 +1091,6 @@ export const buildProviderSelection = (options: {
     providerId: descriptor.providerId,
     modelId: options.modelId,
     api,
-    baseUrl,
-    codingPlanEnabled: !!options.codingPlanEnabled,
-    compatibilityMode: options.compatibilityMode,
     serverRuntimeProfile: options.runtimeProfile,
   });
   const runtimeProfileDefinition = runtimeProfile
@@ -1883,7 +1869,7 @@ export class OpenClawConfigSync {
       deny: [
         ...MANAGED_TOOL_DENY
       ],
-      loopDetection: MANAGED_TOOL_LOOP_DETECTION,
+loopDetection: MANAGED_TOOL_LOOP_DETECTION,
       web: {
         search: {
           enabled: false,
@@ -1968,7 +1954,6 @@ export class OpenClawConfigSync {
         modelName: apiResolution.providerMetadata?.modelName,
         contextWindow: apiResolution.providerMetadata?.contextWindow,
         maxTokens: apiResolution.providerMetadata?.maxTokens,
-        compatibilityMode: apiResolution.providerMetadata?.compatibilityMode,
         runtimeProfile: apiResolution.providerMetadata?.runtimeProfile,
       });
       collectCompatibilityOwnerProfile(candidateModelProfiles, providerSelection);
@@ -1995,7 +1980,6 @@ export class OpenClawConfigSync {
             modelName: m.name,
             contextWindow: m.contextWindow,
             maxTokens: m.maxTokens,
-            compatibilityMode: m.compatibilityMode,
           });
           collectCompatibilityOwnerProfile(candidateModelProfiles, sel);
           if (!allProvidersMap[sel.providerId]) {
@@ -2259,7 +2243,6 @@ export class OpenClawConfigSync {
       agents: {
         defaults: {
           timeoutSeconds: OPENCLAW_AGENT_TIMEOUT_SECONDS,
-          runSafety: MANAGED_RUN_SAFETY,
           model: {
             primary: primaryModel,
           },

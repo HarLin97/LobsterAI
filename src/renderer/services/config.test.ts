@@ -1,4 +1,4 @@
-import { ModelCompatibilityMode, ProviderName } from '@shared/providers';
+import { ProviderName } from '@shared/providers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { type AppConfig, CONFIG_KEYS, defaultConfig, FontPreferences, ShortcutAction } from '../config';
@@ -496,8 +496,8 @@ describe('configService provider migrations', () => {
     });
   });
 
-  test('preserves controlled custom compatibility mode and drops unknown values', async () => {
-    const storedConfig: AppConfig = {
+  test('drops legacy compatibility modes and resolves only the exact Kimi K3 ID', async () => {
+    const storedConfig = {
       ...defaultConfig,
       providers: {
         ...defaultConfig.providers,
@@ -515,25 +515,31 @@ describe('configService provider migrations', () => {
               supportsThinking: false,
               contextWindow: 128_000,
               maxTokens: 4_096,
-              compatibilityMode: ModelCompatibilityMode.MoonshotKimiK3,
+              compatibilityMode: 'moonshot-kimi-k3',
             },
             {
-              id: 'ordinary-model',
-              name: 'Ordinary',
+              id: 'kimi-k3',
+              name: 'Kimi K3',
               supportsImage: false,
-              compatibilityMode: 'unknown-mode' as ModelCompatibilityMode,
+              compatibilityMode: 'standard',
             },
           ],
         },
       },
-    };
+    } as unknown as AppConfig;
     const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
 
     await configService.init();
 
     const models = (storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig).providers?.custom_0.models ?? [];
     expect(models[0]).toMatchObject({
-      compatibilityMode: ModelCompatibilityMode.MoonshotKimiK3,
+      supportsImage: false,
+      supportsVideo: false,
+      contextWindow: 128_000,
+      maxTokens: 4_096,
+    });
+    expect(models[0]).not.toHaveProperty('compatibilityMode');
+    expect(models[1]).toMatchObject({
       supportsImage: true,
       supportsVideo: true,
       supportsThinking: true,

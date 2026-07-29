@@ -66,7 +66,7 @@ custom_N/<用户原始 modelId>
 ### 1.3 目标
 
 1. 内置 Moonshot Provider 默认提供 `kimi-k3`，并按 Kimi 官方 OpenClaw 配置运行。
-2. 用户在内置 Moonshot 或自定义 Provider 中配置 K3 时，可以获得完整的 K3 transport 与工具调用兼容。
+2. 用户在任一内置或自定义 Provider 中配置 K3 时，可以获得完整的 K3 transport 与工具调用兼容。
 3. LobsterAI 套餐 K3 保持 `lobsterai-server/<原始 modelId>`，同时应用与直连一致的 K3 协议规则。
 4. 自定义 API Key、套餐 Token、Provider Base URL 和模型 ID 始终保持各自路由，不发生隐式切换。
 5. 工具调用后的 `reasoning_content`、`tool_calls` 和 `tool_call_id` 能正确保存并回放。
@@ -98,8 +98,8 @@ custom_N/<用户原始 modelId>
 
 | 模型来源 | OpenClaw 模型引用 | 兼容档案 |
 |---|---|---|
-| 内置 Moonshot | `moonshot/kimi-k3` | 自动解析为 `moonshot-kimi-k3` |
-| 用户自定义 Provider | `custom_N/<原始 modelId>` | 自动识别精确 ID，或由用户显式选择 |
+| 内置 Provider（含 Moonshot） | `<原 providerId>/<原始 modelId>` | 规范化后精确 `kimi-k3` 自动解析 |
+| 用户自定义 Provider | `custom_N/<原始 modelId>` | 仅规范化后精确 `kimi-k3` 自动解析 |
 | LobsterAI 套餐 | `lobsterai-server/<服务端原始 modelId>` | 仅接受服务端下发的受控枚举 |
 
 禁止：
@@ -110,7 +110,7 @@ custom_N/<用户原始 modelId>
 - 在用户 API Key 与套餐 Token 之间隐式切路；
 - 跨 Provider 去重同名 K3。
 
-### 2.2 使用受控兼容档案，不接受原始 `compat`
+### 2.2 使用受控运行档案，不提供用户兼容模式
 
 共享层新增稳定常量：
 
@@ -123,19 +123,10 @@ export type ModelRuntimeProfile =
   typeof ModelRuntimeProfile[keyof typeof ModelRuntimeProfile];
 ```
 
-用户配置另使用受控模式：
-
-```ts
-export const ModelCompatibilityMode = {
-  Auto: 'auto',
-  Standard: 'standard',
-  MoonshotKimiK3: ModelRuntimeProfile.MoonshotKimiK3,
-} as const;
-```
-
-- `Auto`：同时按受信 Provider、规范化模型 ID 和已解析 transport 路由判断。
-- `Standard`：显式关闭自动 K3 识别，按普通兼容模型运行。
-- `MoonshotKimiK3`：显式启用 K3 兼容。
+用户配置不保存 `compatibilityMode`，模型编辑表单也不暴露兼容模式。对于内置
+和自定义模型，仅当最终 transport 为 `openai-completions`，且规范化后的模型
+ID 精确等于 `kimik3` 时应用 `moonshot-kimi-k3`。`my-kimi-prod` 等任意别名
+不会命中，也不能由用户手动强制启用。
 
 服务端只能下发 `ModelRuntimeProfile` 白名单中的值。未知值必须忽略并记录 warning，不能写入 `openclaw.json`。
 
@@ -244,7 +235,7 @@ lobsterai-model-compat
 
 - **Given** 用户创建 `custom_0`，Base URL 指向真实 Kimi K3 OpenAI-compatible 接口
 - **And** 模型 ID 精确等价于 `kimi-k3`
-- **When** 兼容模式为“自动”
+- **When** 保存模型配置
 - **Then** 模型引用保持 `custom_0/<原始 modelId>`
 - **And** 自动应用 K3 profile
 - **And** API Key 只发往用户配置的 Base URL
@@ -252,9 +243,9 @@ lobsterai-model-compat
 ### 场景 4：自定义 Provider 使用别名
 
 - **Given** 用户代理把 K3 命名为 `my-kimi-prod`
-- **When** 用户显式选择“Kimi K3”兼容模式
-- **Then** LobsterAI 对该精确模型应用 K3 profile
-- **And** 不修改用户原始 model ID
+- **When** 保存并使用该模型
+- **Then** LobsterAI 按普通 OpenAI-compatible 模型处理
+- **And** 不提供手动强制启用 K3 profile 的入口
 - **And** 同 Provider 下其他模型保持原行为
 
 ### 场景 5：套餐 K3 灰度开放
@@ -312,29 +303,12 @@ lobsterai-model-compat
    `api=openai-completions`；不满足时 fail closed。
 2. 套餐模型：只使用服务端返回且通过白名单校验的 `runtimeProfile`，并要求
    `apiFormat=openai`。
-3. 内置 Moonshot + 规范化后精确 `kimi-k3` + 未启用 Coding Plan +
-   官方 Moonshot Chat Completions Base URL：自动启用。
-4. 自定义 Provider，或使用非官方 Base URL 的内置 Moonshot +
-   显式 `MoonshotKimiK3`：启用。
-5. 自定义 Provider + `Auto` + 规范化后精确 `kimi-k3`：启用。
-6. 自定义 Provider，或使用非官方 Base URL 的内置 Moonshot +
-   `Standard`：不启用。
-7. 其他情况：不猜测。
+3. 内置或自定义模型：规范化后的模型 ID 精确等于 `kimik3` 时自动启用。
+4. `my-kimi-prod` 等别名不启用，也不提供显式覆盖。
+5. 其他情况：不猜测。
 
-官方 Moonshot Chat Completions Base URL 白名单至少包含：
-
-```text
-https://api.moonshot.cn/v1
-https://api.moonshot.ai/v1
-```
-
-比较时使用 URL parser，并要求 `https`、hostname 精确匹配、默认端口、
-pathname 为 `/v1` 或 `/v1/`，且无 username/password、query 或 hash；不接受
-通过前缀、userinfo 或相似域名绕过。内置 Moonshot 使用非官方 Base URL 时
-视为自定义路由，必须由用户显式选择 K3 兼容模式。
-
-resolver 输入必须包含最终 `providerId`、`modelId`、`api`、标准化 Base URL、
-`codingPlanEnabled` 和模型来源，不能只接收模型名称。
+resolver 输入必须包含最终 `providerId`、`modelId`、`api` 和模型来源，不能只
+接收模型名称。
 
 规范化只用于判断等价身份：
 
@@ -348,7 +322,6 @@ trim -> lowercase -> 删除非字母数字字符
 
 用户模型配置增加：
 
-- `compatibilityMode?: ModelCompatibilityMode`
 - `supportsVideo?: boolean`
 - `maxTokens?: number`
 
@@ -376,25 +349,17 @@ trim -> lowercase -> 删除非字母数字字符
 6. 不把 `custom_N` 中的 K3 迁移到内置 Moonshot。
 7. 不修改历史 agent、session 或 scheduled task 的 Provider/model 引用。
 
-### FR-5：自定义模型提供受控兼容模式
-
-模型编辑表单增加“兼容模式 / Compatibility Mode”：
-
-- 自动；
-- 标准 OpenAI-compatible；
-- Kimi K3。
+### FR-5：用户模型按 ID 自动识别
 
 规则：
 
-1. 内置 Moonshot 的 `kimi-k3` 在官方 OpenAI Chat Completions 路由下固定使用
-   K3 profile，不允许错误关闭。
-2. `custom_N` 精确 K3 ID 在“自动”模式下启用。
-3. 自定义别名必须显式选择 Kimi K3。
-4. Moonshot Coding Plan、Anthropic API 格式和非官方 Base URL 不得自动命中。
-5. 内置 Moonshot 使用非官方 Base URL 时显示“自定义路由”，由用户显式选择
-   K3 或标准兼容模式。
-6. 非 K3 模型默认不改变。
-7. 用户不能在 UI 中编辑原始 `compat` 或 `thinkingLevelMap`。
+1. 所有内置和自定义 Provider 都使用同一条识别规则。
+2. 最终 API 为 OpenAI-compatible，且模型 ID 规范化后精确等于 `kimik3` 时
+   自动启用 K3 profile。
+3. Anthropic API 格式不得命中。
+4. 自定义别名不识别，也不提供兼容模式下拉框。
+5. 非 K3 模型默认不改变。
+6. 用户不能在 UI 中编辑原始 `compat` 或 `thinkingLevelMap`。
 
 ### FR-6：套餐 API 使用受控元数据契约
 
@@ -609,13 +574,11 @@ src/shared/providers/modelRuntimeProfiles.ts
 该模块包含：
 
 1. `ModelRuntimeProfile`
-2. `ModelCompatibilityMode`
-3. K3 官方 profile 常量
-4. K3 保留请求字段常量
-5. 模型 ID 规范化函数
-6. 官方 Moonshot Chat Completions URL 安全匹配函数
-7. `resolveModelRuntimeProfile()`，输入完整模型身份和最终 transport 上下文
-8. 服务端 profile 白名单解析函数
+2. K3 官方 profile 常量
+3. K3 保留请求字段常量
+4. 模型 ID 规范化函数
+5. `resolveModelRuntimeProfile()`，输入模型身份和最终 transport
+6. 服务端 profile 白名单解析函数
 
 `src/shared/providers/types.ts` 和 Provider registry 的模型结构补充新字段。main、renderer 和 tests 均从共享模块导入值对象与类型，不复制字符串。
 
@@ -624,21 +587,16 @@ src/shared/providers/modelRuntimeProfiles.ts
 ```text
 内置/用户 ProviderConfig.models[]
                 │
-                ├─ compatibilityMode
-                │
-                ▼
        resolveDescriptor / transport
                 │
                 ├─ final providerId / modelId
-                ├─ final api / normalized baseUrl
-                └─ codingPlanEnabled / source
+                └─ final api / source
                 │
                 ▼
       resolveModelRuntimeProfile()
                 │
-                ├─ 官方 Moonshot + kimi-k3 自动识别
-                ├─ custom_N 精确 ID 自动识别
-                ├─ custom_N 别名显式选择
+                ├─ 规范化后精确 kimi-k3 自动识别
+                ├─ 任意别名不识别
                 └─ 非 OpenAI Completions fail closed
                 │
                 ▼
@@ -694,18 +652,15 @@ lobsterai-server provider + modelProfiles
 
 ### 5.4 自定义模型 UI 与持久化
 
-`Settings.tsx` 和 `ModelSettingsSection.tsx` 增加兼容模式状态、编辑回填和保存校验。
+`Settings.tsx` 和 `ModelSettingsSection.tsx` 不增加兼容模式状态或选择器。
 
 UI 行为：
 
-1. 默认选择“自动”。
-2. 内置 Moonshot K3 使用官方 Base URL 时显示“由 Kimi K3 官方兼容配置管理”。
-3. 内置 Moonshot 使用非官方 Base URL 时显示“自定义路由”，允许显式选择
-   “标准”或“Kimi K3”。
-4. 自定义 Provider 可选择“标准”或“Kimi K3”。
-5. 选择 Kimi K3 后显示简短说明：固定思考档位、1M 上下文、8192 单次回复上限。
-6. 冲突 `customParams` 阻止保存。
-7. 所有新增字符串进入 renderer i18n 的中英文词典。
+1. 模型 ID 和最终 API 格式满足 K3 规则时自动应用 profile。
+2. 模型编辑框不显示“兼容模式 / Compatibility Mode”。
+3. 历史 `compatibilityMode` 在配置归一化时移除，不能覆盖 ID 识别结果。
+4. K3 冲突 `customParams` 阻止保存。
+5. K3 自动参数提示进入 renderer i18n 的中英文词典。
 
 ### 5.5 套餐元数据传递
 
@@ -1005,14 +960,12 @@ capability header 由本地固定常量生成，不从 OpenClaw 请求或用户
 
 | 场景 | 处理方式 |
 |---|---|
-| Moonshot 官方 OpenAI 路由 + 精确 `kimi-k3` | 自动应用 K3 profile |
-| Moonshot Coding Plan / Anthropic 路由 | 不应用 K3 OpenAI profile |
-| Moonshot 非官方 Base URL | 视为自定义路由，要求显式选择 |
+| 任意内置或自定义 Provider + OpenAI 路由 + 等价 `kimi-k3` | 自动应用 K3 profile |
+| Anthropic 路由 | 不应用 K3 OpenAI profile |
 | Moonshot 已有等价 K3 | 不重复添加，保留用户配置 |
-| `custom_N/kimi-k3` + Auto | 自动应用 K3 profile |
-| `custom_N/kimi-k3` + Standard | 按普通模型运行 |
-| `custom_N/<alias>` + Kimi K3 | 精确别名应用 profile |
-| `custom_N/<alias>` + Auto | 不猜测 |
+| `custom_N/kimi-k3` | 自动应用 K3 profile |
+| `custom_N/<alias>` | 不猜测，按普通模型运行 |
+| 历史 `compatibilityMode` | 配置归一化时移除，不影响 profile |
 | 套餐 profile 未知 | 忽略、warning、禁止 Agent Run |
 | 套餐 metadata 缺失 | 刷新一次，仍缺失则禁止 Run |
 | 旧客户端无 K3 capability | 服务端隐藏模型并拒绝推理 |
@@ -1130,16 +1083,12 @@ capability header 由本地固定常量生成，不从 OpenClaw 请求或用户
 ### 9.1 共享与配置单元测试
 
 1. profile 白名单接受 `moonshot-kimi-k3`，拒绝未知值。
-2. Moonshot 精确 K3 自动识别。
-3. Moonshot Coding Plan、Anthropic API 和非官方 Base URL 不自动识别。
-4. 官方域名相似字符串、userinfo 和前缀绕过被拒绝。
-5. `custom_N` 精确 K3 + Auto + OpenAI Completions 自动识别。
-6. `custom_N` 精确 K3 + Anthropic API fail closed。
-7. `custom_N` 别名 + Auto 不识别。
-8. `custom_N` 别名 + 显式 K3 正确识别。
-9. `Standard` 显式关闭自动识别。
-10. K3 profile 展开值与官方配置精确一致。
-11. K3 保留参数冲突被识别。
+2. 内置 Provider 等价 K3 ID + OpenAI Completions 自动识别。
+3. `custom_N` 等价 K3 ID + OpenAI Completions 自动识别。
+4. 等价 K3 ID + Anthropic API fail closed。
+5. `custom_N` 任意别名不识别。
+6. K3 profile 展开值与官方配置精确一致。
+7. K3 保留参数冲突被识别。
 
 ### 9.2 Renderer 迁移和 UI 测试
 
@@ -1148,9 +1097,10 @@ capability header 由本地固定常量生成，不从 OpenClaw 请求或用户
 3. 已有 `kimi-k3` 不重复。
 4. 已有 `Kimi_K3` / `kimi.k3` 不重复且不被覆盖。
 5. 自定义 Provider 模型不被迁移到 Moonshot。
-6. 兼容模式保存、编辑回填、取消和重开正常。
-7. 冲突 customParams 阻止保存。
-8. 中英文提示完整。
+6. 模型编辑框不显示兼容模式。
+7. 历史 compatibilityMode 被移除且不能覆盖 ID 识别。
+8. 冲突 customParams 阻止保存。
+9. 中英文提示完整。
 
 ### 9.3 套餐元数据测试
 
@@ -1173,7 +1123,7 @@ capability header 由本地固定常量生成，不从 OpenClaw 请求或用户
 
 1. `moonshot/kimi-k3` 完整配置。
 2. `custom_0/kimi-k3` 保持 Provider/model ID。
-3. `custom_0/<alias>` 显式 profile。
+3. `custom_0/<alias>` 不产生 profile 映射。
 4. `lobsterai-server/<套餐 ID>` 保持原始 ID 和 loopback Token Proxy。
 5. 套餐 K3 和普通套餐模型共存。
 6. 自定义 K3 与套餐 K3 同时存在且不串 Base URL/API Key。
@@ -1260,7 +1210,7 @@ OpenClaw patch 自带的 targeted tests 也必须通过。
 2. 已有等价 K3 升级后不重复、不被覆盖。
 3. `moonshot/kimi-k3` 使用用户 Moonshot Key 完成真实文件创建、修改和回读。
 4. `custom_N/kimi-k3` 使用用户自定义 Key/Base URL 完成相同任务。
-5. 自定义别名显式选择 K3 后完成相同任务。
+5. 自定义别名不应用 K3 profile，模型编辑框不存在手动兼容模式。
 6. 套餐 K3 使用 `lobsterai-server/<原始 modelId>` 完成相同任务。
 7. 自定义和套餐路径并存时不串 API Key、Token、Base URL 或模型引用。
 8. 三条路径均正确回放 `reasoning_content + tool_calls + tool_call_id`。
@@ -1275,8 +1225,7 @@ OpenClaw patch 自带的 targeted tests 也必须通过。
 17. metadata 缺失或未知 profile 时套餐 K3 fail closed。
 18. `agenticReady=false` 可以立即阻止新的套餐 K3 Run。
 19. 未携带 K3 capability 的旧客户端既看不到套餐 K3，也无法用缓存 ID 调用。
-20. Moonshot Coding Plan、Anthropic 路由和非官方 Base URL 不被自动套用 K3
-    OpenAI profile。
+20. Anthropic 路由不被自动套用 K3 OpenAI profile。
 21. 完整配置通过打包 OpenClaw 的严格 Schema，Gateway 成功达到 ready。
 22. 混合 K3/非 K3 Provider 的模型排序不改变 owner 或最终 transport。
 23. 配置更新不产生 Gateway 重启循环。

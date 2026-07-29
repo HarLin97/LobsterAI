@@ -4,7 +4,6 @@ import {
   ModelRuntimeProfileSource,
   normalizeModelIdForComparison as getProviderModelIdentity,
   OpenClawApi,
-  parseModelCompatibilityMode,
   type ProviderConfig,
   ProviderName,
   ProviderRegistry,
@@ -92,12 +91,12 @@ const normalizeProviderApiFormat = (providerKey: string, apiFormat: unknown): 'a
 const normalizeProviderModels = (
   providerKey: string,
   models: ProviderConfig['models'],
-  providerContext: Pick<ProviderConfig, 'apiFormat' | 'baseUrl' | 'codingPlanEnabled'>,
+  providerContext: Pick<ProviderConfig, 'apiFormat'>,
 ): ProviderConfig['models'] => models?.map(model => {
   const {
-    compatibilityMode: rawCompatibilityMode,
+    compatibilityMode: _legacyCompatibilityMode,
     ...modelWithoutCompatibilityMode
-  } = model;
+  } = model as typeof model & { compatibilityMode?: unknown };
   const canonicalModelId = getCanonicalProviderModelId(providerKey, model.id);
   const contextWindow = ProviderRegistry.resolveModelContextWindow(
     providerKey,
@@ -119,7 +118,6 @@ const normalizeProviderModels = (
     canonicalModelId,
     model.maxTokens,
   );
-  const compatibilityMode = parseModelCompatibilityMode(rawCompatibilityMode);
   const runtimeProfile = resolveModelRuntimeProfile({
     source: isCustomProvider(providerKey)
       ? ModelRuntimeProfileSource.Custom
@@ -129,9 +127,6 @@ const normalizeProviderModels = (
     api: providerContext.apiFormat === ApiFormat.OpenAI
       ? OpenClawApi.OpenAICompletions
       : OpenClawApi.AnthropicMessages,
-    baseUrl: providerContext.baseUrl,
-    codingPlanEnabled: providerContext.codingPlanEnabled,
-    compatibilityMode,
   });
   const runtimeMetadata = applyModelRuntimeProfileMetadata({
     supportsImage: ProviderRegistry.resolveModelSupportsImage(
@@ -159,7 +154,6 @@ const normalizeProviderModels = (
     ...(runtimeMetadata.maxTokens !== undefined
       ? { maxTokens: runtimeMetadata.maxTokens }
       : {}),
-    ...(compatibilityMode ? { compatibilityMode } : {}),
   };
 });
 
@@ -179,9 +173,7 @@ const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig[
           baseUrl,
           apiFormat,
           models: normalizeProviderModels(providerKey, providerConfig.models, {
-            baseUrl,
             apiFormat,
-            codingPlanEnabled: providerConfig.codingPlanEnabled,
           }),
         },
       ];
@@ -644,9 +636,7 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
                 providerKey,
                 migratedProvider.models as ProviderConfig['models'],
                 {
-                  baseUrl,
                   apiFormat,
-                  codingPlanEnabled: migratedProvider.codingPlanEnabled === true,
                 },
               ),
             };

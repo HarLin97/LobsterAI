@@ -6,14 +6,6 @@ export const ModelRuntimeProfile = {
 export type ModelRuntimeProfile =
   typeof ModelRuntimeProfile[keyof typeof ModelRuntimeProfile];
 
-export const ModelCompatibilityMode = {
-  Auto: 'auto',
-  Standard: 'standard',
-  MoonshotKimiK3: ModelRuntimeProfile.MoonshotKimiK3,
-} as const;
-export type ModelCompatibilityMode =
-  typeof ModelCompatibilityMode[keyof typeof ModelCompatibilityMode];
-
 export const ModelRuntimeProfileSource = {
   BuiltIn: 'built-in',
   Custom: 'custom',
@@ -99,9 +91,6 @@ export const applyModelRuntimeProfileMetadata = (
 const MODEL_RUNTIME_PROFILE_VALUES = new Set<string>(
   Object.values(ModelRuntimeProfile),
 );
-const MODEL_COMPATIBILITY_MODE_VALUES = new Set<string>(
-  Object.values(ModelCompatibilityMode),
-);
 
 export const parseModelRuntimeProfile = (
   value: unknown,
@@ -111,65 +100,25 @@ export const parseModelRuntimeProfile = (
     : undefined
 );
 
-export const parseModelCompatibilityMode = (
-  value: unknown,
-): ModelCompatibilityMode | undefined => (
-  typeof value === 'string' && MODEL_COMPATIBILITY_MODE_VALUES.has(value)
-    ? value as ModelCompatibilityMode
-    : undefined
-);
-
 export const normalizeModelIdForComparison = (modelId: string): string =>
   modelId.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-
-const OFFICIAL_MOONSHOT_HOSTNAMES = new Set([
-  'api.moonshot.cn',
-  'api.moonshot.ai',
-]);
-
-export const isOfficialMoonshotChatCompletionsUrl = (
-  value: string,
-): boolean => {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:'
-      && OFFICIAL_MOONSHOT_HOSTNAMES.has(url.hostname)
-      && url.port === ''
-      && url.username === ''
-      && url.password === ''
-      && (url.pathname === '/v1' || url.pathname === '/v1/')
-      && url.search === ''
-      && url.hash === '';
-  } catch {
-    return false;
-  }
-};
 
 export interface ResolveModelRuntimeProfileInput {
   source: ModelRuntimeProfileSource;
   providerId: string;
   modelId: string;
   api: string;
-  baseUrl: string;
-  codingPlanEnabled?: boolean;
-  compatibilityMode?: ModelCompatibilityMode;
   serverRuntimeProfile?: unknown;
 }
 
 const isKimiK3ModelId = (modelId: string): boolean =>
   normalizeModelIdForComparison(modelId) === 'kimik3';
 
-const isCustomProviderId = (providerId: string): boolean =>
-  /^custom_\d+$/.test(providerId);
-
 export const resolveModelRuntimeProfile = ({
   source,
   providerId,
   modelId,
   api,
-  baseUrl,
-  codingPlanEnabled = false,
-  compatibilityMode,
   serverRuntimeProfile,
 }: ResolveModelRuntimeProfileInput): ModelRuntimeProfile | undefined => {
   if (api !== OpenClawApi.OpenAICompletions) {
@@ -183,42 +132,11 @@ export const resolveModelRuntimeProfile = ({
     return parseModelRuntimeProfile(serverRuntimeProfile);
   }
 
-  const mode = compatibilityMode === undefined
-    ? ModelCompatibilityMode.Auto
-    : parseModelCompatibilityMode(compatibilityMode);
-  if (!mode) {
-    return undefined;
-  }
-
-  if (source === ModelRuntimeProfileSource.BuiltIn) {
-    if (
-      providerId !== OpenClawProviderId.Moonshot
-      || codingPlanEnabled
-    ) {
-      return undefined;
-    }
-
-    if (isOfficialMoonshotChatCompletionsUrl(baseUrl)) {
-      return isKimiK3ModelId(modelId)
-        ? ModelRuntimeProfile.MoonshotKimiK3
-        : undefined;
-    }
-
-    return mode === ModelCompatibilityMode.MoonshotKimiK3
-      ? ModelRuntimeProfile.MoonshotKimiK3
-      : undefined;
-  }
-
   if (
-    source !== ModelRuntimeProfileSource.Custom
-    || !isCustomProviderId(providerId)
-    || mode === ModelCompatibilityMode.Standard
+    source !== ModelRuntimeProfileSource.BuiltIn
+    && source !== ModelRuntimeProfileSource.Custom
   ) {
     return undefined;
-  }
-
-  if (mode === ModelCompatibilityMode.MoonshotKimiK3) {
-    return ModelRuntimeProfile.MoonshotKimiK3;
   }
 
   return isKimiK3ModelId(modelId)

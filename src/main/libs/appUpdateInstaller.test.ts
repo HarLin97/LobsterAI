@@ -64,6 +64,7 @@ import {
   WINDOWS_UAC_DECLINED_EXIT_CODE,
   WindowsInstallerLauncherFallback,
 } from './appUpdateInstaller';
+import { WINDOWS_INSTALLER_URL_POLICY_VERSION } from './appUpdateUrlPolicy';
 
 const INSTALLER_PATH = 'C:\\Users\\test\\AppData\\Roaming\\LobsterAI\\updates\\lobsterai-update-manual-1.exe';
 
@@ -345,44 +346,7 @@ describe('Windows update download URL enforcement', () => {
     expect(fs.existsSync(path.join(tmpDir, 'updates'))).toBe(false);
   });
 
-  test('rejects an insecure final redirect URL and leaves no cached file', async () => {
-    mocks.fetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      url: 'http://replacement-cdn.example/LobsterAI.exe',
-      headers: new Headers(),
-      body: null,
-    });
-
-    await expect(downloadUpdate(
-      'https://downloads.example.com/LobsterAI.exe',
-      'auto',
-      () => {},
-    )).rejects.toThrow('update-url-untrusted');
-
-    expect(mocks.fetch).toHaveBeenCalledOnce();
-    expect(fs.existsSync(path.join(tmpDir, 'updates'))).toBe(false);
-  });
-
-  test('fails closed when the final response URL is unavailable', async () => {
-    mocks.fetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      url: '',
-      headers: new Headers(),
-      body: null,
-    });
-
-    await expect(downloadUpdate(
-      'https://downloads.example.com/LobsterAI.exe',
-      'auto',
-      () => {},
-    )).rejects.toThrow('update-url-untrusted');
-  });
-
-  test('accepts a cross-origin HTTPS redirect and records dynamic provenance', async () => {
+  test('downloads directly without relying on Electron response.url', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const bytes = new TextEncoder().encode('signed-installer-placeholder');
     const body = new ReadableStream<Uint8Array>({
@@ -395,24 +359,49 @@ describe('Windows update download URL enforcement', () => {
       ok: true,
       status: 200,
       statusText: 'OK',
-      url: 'https://replacement-cdn.example.net/releases/LobsterAI.exe?finalToken=do-not-log',
+      url: '',
       headers: new Headers({ 'content-length': String(bytes.byteLength) }),
       body,
     });
 
+    const inputUrl =
+      'https://downloads.example.com/LobsterAI.exe?inputToken=do-not-log';
     const result = await downloadUpdate(
-      'https://downloads.example.com/LobsterAI.exe?inputToken=do-not-log',
+      inputUrl,
       'auto',
       () => {},
     );
 
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      inputUrl,
+      expect.objectContaining({
+        redirect: 'error',
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(fs.readFileSync(result.filePath)).toEqual(Buffer.from(bytes));
     expect(result.windowsInstallerUrlPolicyReceipt).toEqual({
-      policyVersion: 1,
+      policyVersion: WINDOWS_INSTALLER_URL_POLICY_VERSION,
       inputOrigin: 'https://downloads.example.com',
-      finalOrigin: 'https://replacement-cdn.example.net',
+      finalOrigin: 'https://downloads.example.com',
     });
     expect(logSpy.mock.calls.flat().join(' ')).not.toContain('do-not-log');
+  });
+
+  test('leaves no cached file when the Windows fetch rejects a redirect', async () => {
+    mocks.fetch.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await expect(downloadUpdate(
+      'https://downloads.example.com/LobsterAI.exe',
+      'auto',
+      () => {},
+    )).rejects.toThrow('Failed to fetch');
+
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      'https://downloads.example.com/LobsterAI.exe',
+      expect.objectContaining({ redirect: 'error' }),
+    );
+    expect(fs.existsSync(path.join(tmpDir, 'updates'))).toBe(false);
   });
 });
 

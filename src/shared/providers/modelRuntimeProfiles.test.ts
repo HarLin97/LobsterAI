@@ -5,13 +5,10 @@ import {
   applyModelRuntimeProfileMetadata,
   findKimiK3ReservedCustomParamKeys,
   getModelRuntimeProfileDefinition,
-  isOfficialMoonshotChatCompletionsUrl,
   KIMI_K3_RUNTIME_PROFILE,
-  ModelCompatibilityMode,
   ModelRuntimeProfile,
   ModelRuntimeProfileSource,
   normalizeModelIdForComparison,
-  parseModelCompatibilityMode,
   parseModelRuntimeProfile,
   resolveModelRuntimeProfile,
 } from './modelRuntimeProfiles';
@@ -23,7 +20,6 @@ const resolve = (
   providerId: OpenClawProviderId.Moonshot,
   modelId: 'kimi-k3',
   api: OpenClawApi.OpenAICompletions,
-  baseUrl: 'https://api.moonshot.cn/v1',
   ...overrides,
 });
 
@@ -65,104 +61,43 @@ describe('Kimi K3 runtime profile', () => {
     expect(parseModelRuntimeProfile('moonshot-kimi-k3')).toBe(ModelRuntimeProfile.MoonshotKimiK3);
     expect(parseModelRuntimeProfile('unknown')).toBeUndefined();
     expect(parseModelRuntimeProfile({ profile: 'moonshot-kimi-k3' })).toBeUndefined();
-    expect(parseModelCompatibilityMode('auto')).toBe(ModelCompatibilityMode.Auto);
-    expect(parseModelCompatibilityMode('unknown')).toBeUndefined();
   });
 });
 
-describe('model identity and Moonshot URL guards', () => {
+describe('model identity', () => {
   test('normalizes equivalent model IDs without fuzzy matching', () => {
     expect(normalizeModelIdForComparison(' Kimi_K3 ')).toBe('kimik3');
     expect(normalizeModelIdForComparison('kimi.k3')).toBe('kimik3');
     expect(normalizeModelIdForComparison('my-kimi-k3')).toBe('mykimik3');
   });
-
-  test.each([
-    'https://api.moonshot.cn/v1',
-    'https://api.moonshot.cn/v1/',
-    'https://api.moonshot.ai/v1',
-    'https://api.moonshot.ai:443/v1',
-  ])('accepts official Chat Completions URL %s', (url) => {
-    expect(isOfficialMoonshotChatCompletionsUrl(url)).toBe(true);
-  });
-
-  test.each([
-    'http://api.moonshot.cn/v1',
-    'https://api.moonshot.cn.evil.example/v1',
-    'https://api.moonshot.cn@evil.example/v1',
-    'https://user:pass@api.moonshot.cn/v1',
-    'https://api.moonshot.cn:8443/v1',
-    'https://api.moonshot.cn/v1/chat/completions',
-    'https://api.moonshot.cn/v1?route=proxy',
-    'not-a-url',
-  ])('rejects non-official or unsafe URL %s', (url) => {
-    expect(isOfficialMoonshotChatCompletionsUrl(url)).toBe(false);
-  });
 });
 
 describe('resolveModelRuntimeProfile', () => {
-  test('auto-resolves exact built-in Moonshot K3 on official routes', () => {
+  test('resolves exact Kimi K3 IDs for built-in and custom providers', () => {
     expect(resolve()).toBe(ModelRuntimeProfile.MoonshotKimiK3);
     expect(resolve({ modelId: 'Kimi_K3' })).toBe(ModelRuntimeProfile.MoonshotKimiK3);
+    expect(resolve({ modelId: 'kimi.k3' })).toBe(ModelRuntimeProfile.MoonshotKimiK3);
     expect(resolve({
-      compatibilityMode: ModelCompatibilityMode.Standard,
+      providerId: OpenClawProviderId.OpenAI,
+    })).toBe(ModelRuntimeProfile.MoonshotKimiK3);
+    expect(resolve({
+      source: ModelRuntimeProfileSource.Custom,
+      providerId: 'custom_0',
     })).toBe(ModelRuntimeProfile.MoonshotKimiK3);
   });
 
-  test('fails closed for Coding Plan, aliases, and non-OpenAI transport', () => {
-    expect(resolve({ codingPlanEnabled: true })).toBeUndefined();
+  test('requires the exact model ID and OpenAI-compatible transport', () => {
     expect(resolve({ modelId: 'my-kimi-prod' })).toBeUndefined();
     expect(resolve({ api: OpenClawApi.AnthropicMessages })).toBeUndefined();
-  });
-
-  test('requires an explicit profile for non-official built-in Moonshot routes', () => {
-    expect(resolve({ baseUrl: 'https://proxy.example.com/v1' })).toBeUndefined();
     expect(resolve({
-      baseUrl: 'https://proxy.example.com/v1',
-      compatibilityMode: ModelCompatibilityMode.Standard,
-    })).toBeUndefined();
-    expect(resolve({
-      baseUrl: 'https://proxy.example.com/v1',
-      compatibilityMode: ModelCompatibilityMode.MoonshotKimiK3,
-    })).toBe(ModelRuntimeProfile.MoonshotKimiK3);
-    expect(resolve({
-      modelId: 'my-kimi-prod',
-      baseUrl: 'https://proxy.example.com/v1',
-      compatibilityMode: ModelCompatibilityMode.MoonshotKimiK3,
-    })).toBe(ModelRuntimeProfile.MoonshotKimiK3);
-    expect(resolve({
-      modelId: 'my-kimi-prod',
-      compatibilityMode: ModelCompatibilityMode.MoonshotKimiK3,
+      source: 'unknown' as ModelRuntimeProfileSource,
     })).toBeUndefined();
   });
 
-  test('auto-resolves only exact custom K3 IDs', () => {
-    expect(resolve({
-      source: ModelRuntimeProfileSource.Custom,
-      providerId: 'custom_0',
-      baseUrl: 'https://proxy.example.com/v1',
-    })).toBe(ModelRuntimeProfile.MoonshotKimiK3);
-    expect(resolve({
-      source: ModelRuntimeProfileSource.Custom,
-      providerId: 'custom_0',
-      modelId: 'my-kimi-prod',
-      baseUrl: 'https://proxy.example.com/v1',
-    })).toBeUndefined();
-    expect(resolve({
-      source: ModelRuntimeProfileSource.Custom,
-      providerId: 'custom_0',
-      compatibilityMode: ModelCompatibilityMode.Standard,
-      baseUrl: 'https://proxy.example.com/v1',
-    })).toBeUndefined();
-  });
-
-  test('allows explicit K3 compatibility for a custom alias', () => {
+  test('applies the fixed Kimi K3 metadata profile', () => {
     const profile = resolve({
       source: ModelRuntimeProfileSource.Custom,
       providerId: 'custom_9',
-      modelId: 'my-kimi-prod',
-      baseUrl: 'https://proxy.example.com/v1',
-      compatibilityMode: ModelCompatibilityMode.MoonshotKimiK3,
     });
 
     expect(profile).toBe(ModelRuntimeProfile.MoonshotKimiK3);
@@ -184,14 +119,12 @@ describe('resolveModelRuntimeProfile', () => {
       source: ModelRuntimeProfileSource.Server,
       providerId: OpenClawProviderId.LobsteraiServer,
       modelId: 'kimi-k3-YoudaoInner',
-      baseUrl: 'http://127.0.0.1:12345/v1',
       serverRuntimeProfile: ModelRuntimeProfile.MoonshotKimiK3,
     })).toBe(ModelRuntimeProfile.MoonshotKimiK3);
     expect(resolve({
       source: ModelRuntimeProfileSource.Server,
       providerId: OpenClawProviderId.LobsteraiServer,
       modelId: 'kimi-k3-YoudaoInner',
-      baseUrl: 'http://127.0.0.1:12345/v1',
       serverRuntimeProfile: 'unknown-profile',
     })).toBeUndefined();
   });

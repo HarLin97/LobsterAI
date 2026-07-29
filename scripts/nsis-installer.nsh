@@ -64,6 +64,19 @@ Var lobsterTrustedPowerShellSource
   !endif
 !endif
 
+; -- Legacy Skills backup helper exit-code protocol --
+; The PowerShell backup helper reports its outcome ONLY through these process
+; exit codes. stdout is diagnostic text for the logs and must never drive
+; control flow: nsExec::ExecToStack returns output with the helper's trailing
+; CRLF attached, so an exact stdout comparison silently fails (this once
+; misclassified "no user skills" as "backup succeeded" and produced a spurious
+; legacy-restore-backup-missing degraded install).
+!define LOBSTER_SKILL_BACKUP_EXIT_VERIFIED "0"
+!define LOBSTER_SKILL_BACKUP_EXIT_INSPECT_FAILED "10"
+!define LOBSTER_SKILL_BACKUP_EXIT_COPY_FAILED "11"
+!define LOBSTER_SKILL_BACKUP_EXIT_VERIFY_FAILED "12"
+!define LOBSTER_SKILL_BACKUP_EXIT_NO_USER_SKILLS "13"
+
 ; -- Design invariant --
 ; Nothing destructive may run before the user confirms the wizard (or the
 ; uninstall prompt). electron-builder inserts customInit in .onInit, which
@@ -799,7 +812,7 @@ FunctionEnd
           }\
         } catch { });\
         $$userSkills = @(Get-ChildItem -LiteralPath $$src -Directory -ErrorAction Stop | Where-Object { $$bundled -notcontains $$_.Name });\
-        if ($$userSkills.Count -eq 0) { Write-Output \"legacy-no-user-skills\"; exit 0 };\
+        if ($$userSkills.Count -eq 0) { Write-Output \"legacy-no-user-skills\"; exit ${LOBSTER_SKILL_BACKUP_EXIT_NO_USER_SKILLS} };\
         $$phase = \"backup-copy\";\
         if (Test-Path -LiteralPath $$staging) { Remove-Item -LiteralPath $$staging -Recurse -Force -ErrorAction Stop };\
         if (Test-Path -LiteralPath $$backup) { throw \"attempt backup already exists\" };\
@@ -858,13 +871,13 @@ FunctionEnd
         $$finalManifest = Get-Content -LiteralPath $$manifest -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop;\
         if (($$finalManifest.attemptId -ne $$attempt) -or ($$finalManifest.validation.status -ne \"verified\")) { throw \"manifest final validation mismatch\" };\
         Write-Output (\"legacy-backup-succeeded skills=\" + $$finalManifest.statistics.skillCount + \" files=\" + $$finalManifest.statistics.fileCount + \" directories=\" + $$finalManifest.statistics.directoryCount + \" bytes=\" + $$finalManifest.statistics.totalBytes);\
-        exit 0\
+        exit ${LOBSTER_SKILL_BACKUP_EXIT_VERIFIED}\
       } catch {\
         if (Test-Path -LiteralPath $$staging) { Remove-Item -LiteralPath $$staging -Recurse -Force -ErrorAction SilentlyContinue };\
-        if ($$phase -eq \"inspect\") { Write-Output \"legacy-inspect-failed\"; exit 10 };\
-        if ($$phase -eq \"backup-verify\") { Write-Output \"legacy-backup-verify-failed\"; exit 12 };\
+        if ($$phase -eq \"inspect\") { Write-Output \"legacy-inspect-failed\"; exit ${LOBSTER_SKILL_BACKUP_EXIT_INSPECT_FAILED} };\
+        if ($$phase -eq \"backup-verify\") { Write-Output \"legacy-backup-verify-failed\"; exit ${LOBSTER_SKILL_BACKUP_EXIT_VERIFY_FAILED} };\
         Write-Output \"legacy-backup-copy-failed\";\
-        exit 11\
+        exit ${LOBSTER_SKILL_BACKUP_EXIT_COPY_FAILED}\
       }"'
     Pop $0
     Pop $1
@@ -882,19 +895,25 @@ FunctionEnd
       FileWrite $R0 "$8 phase=backup-output attempt_id=$lobsterInstallerAttemptId text=$1$\r$\n"
       FileClose $R0
     BackupSkipCloseLog:
+    ; Status is derived from the helper exit code alone. stdout ($1) is
+    ; logged above for diagnosis only: ExecToStack keeps the helper's
+    ; trailing CRLF, so an exact text match here silently fails. Unknown
+    ; exit codes keep the fail-closed copy-failed default.
     StrCpy $lobsterLegacySkillsStatus "legacy-backup-copy-failed"
     StrCmp $R2 "error" 0 +3
       StrCpy $lobsterLegacySkillsStatus "legacy-helper-launch-failed"
       Goto SkillBackupResultLog
-    StrCmp $R2 "0" 0 +4
+    StrCmp $R2 "${LOBSTER_SKILL_BACKUP_EXIT_VERIFIED}" 0 +3
       StrCpy $lobsterLegacySkillsStatus "legacy-backup-succeeded"
-      StrCmp $1 "legacy-no-user-skills" 0 SkillBackupResultLog
+      Goto SkillBackupResultLog
+    StrCmp $R2 "${LOBSTER_SKILL_BACKUP_EXIT_NO_USER_SKILLS}" 0 +3
       StrCpy $lobsterLegacySkillsStatus "legacy-no-user-skills"
-    StrCmp $R2 "10" 0 +2
+      Goto SkillBackupResultLog
+    StrCmp $R2 "${LOBSTER_SKILL_BACKUP_EXIT_INSPECT_FAILED}" 0 +2
       StrCpy $lobsterLegacySkillsStatus "legacy-inspect-failed"
-    StrCmp $R2 "11" 0 +2
+    StrCmp $R2 "${LOBSTER_SKILL_BACKUP_EXIT_COPY_FAILED}" 0 +2
       StrCpy $lobsterLegacySkillsStatus "legacy-backup-copy-failed"
-    StrCmp $R2 "12" 0 +2
+    StrCmp $R2 "${LOBSTER_SKILL_BACKUP_EXIT_VERIFY_FAILED}" 0 +2
       StrCpy $lobsterLegacySkillsStatus "legacy-backup-verify-failed"
 
     SkillBackupResultLog:
@@ -912,7 +931,19 @@ FunctionEnd
     ; fast update that silently drops user data is not.
     StrCmp $lobsterLegacySkillsStatus "legacy-source-not-present" SkillBackupValidated
     StrCmp $lobsterLegacySkillsStatus "legacy-no-user-skills" SkillBackupValidated
-    StrCmp $lobsterLegacySkillsStatus "legacy-backup-succeeded" SkillBackupValidated
+    StrCmp $lobsterLegacySkillsStatus "legacy-backup-succeeded" 0 SkillBackupFailedAbort
+      ; Post-condition for a verified backup: the manifest must still exist on
+      ; disk immediately before any destructive step. If it vanished (e.g.
+      ; antivirus quarantine), fail closed now while the old install is still
+      ; intact instead of discovering the loss at restore time.
+      IfFileExists "$APPDATA\LobsterAI\skills-backup\$lobsterInstallerAttemptId\backup-manifest.json" SkillBackupValidated
+      StrCpy $lobsterLegacySkillsStatus "legacy-backup-verify-failed"
+      FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
+      FileSeek $9 0 END
+      !insertmacro GetTimestamp $8
+      FileWrite $9 "$8 phase=skill-backup-manifest-postcheck-missing attempt_id=$lobsterInstallerAttemptId manifest=$APPDATA\LobsterAI\skills-backup\$lobsterInstallerAttemptId\backup-manifest.json$\r$\n"
+      FileClose $9
+    SkillBackupFailedAbort:
       FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
       FileSeek $9 0 END
       !insertmacro GetTimestamp $8
@@ -1872,14 +1903,28 @@ FunctionEnd
     SkillRestoreFailurePreserved:
       ; The stock-uninstaller fallback has no intact directory to roll back.
       ; Preserve P0 compatibility: keep the usable new payload and continue to
-      ; registration, but retain the exact attempt backup and record an
-      ; explicit degraded state for retry/manual recovery.
+      ; registration, but record an explicit degraded state for retry/manual
+      ; recovery. The dialog must state exactly what survives: when no backup
+      ; exists for this attempt, do not claim one was preserved.
+      StrCmp $lobsterLegacySkillsRestoreStatus "legacy-restore-backup-missing" SkillRestoreDegradedBackupMissing
       FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
       FileSeek $2 0 END
       !insertmacro GetTimestamp $8
       FileWrite $2 "$8 phase=skill-restore-degraded attempt_id=$lobsterInstallerAttemptId status=$lobsterLegacySkillsRestoreStatus action=continue-with-attempt-backup-preserved backup=$APPDATA\LobsterAI\skills-backup\$lobsterInstallerAttemptId$\r$\n"
       FileClose $2
-      MessageBox MB_OK|MB_ICONEXCLAMATION "LobsterAI will finish installing, but legacy user skills could not be restored automatically ($lobsterLegacySkillsRestoreStatus). The current-attempt recovery backup was not deleted. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
+      MessageBox MB_OK|MB_ICONEXCLAMATION "LobsterAI will finish installing, but legacy user skills could not be restored automatically ($lobsterLegacySkillsRestoreStatus). The recovery backup was preserved at $APPDATA\LobsterAI\skills-backup\$lobsterInstallerAttemptId. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
+      Goto SkillRestoreValidated
+
+    SkillRestoreDegradedBackupMissing:
+      ; No backup exists for this attempt, so nothing could be restored and
+      ; there is no preserved copy to point the user at.
+      FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
+      FileSeek $2 0 END
+      !insertmacro GetTimestamp $8
+      FileWrite $2 "$8 phase=skill-restore-degraded attempt_id=$lobsterInstallerAttemptId status=$lobsterLegacySkillsRestoreStatus action=continue-no-backup-found backup=$APPDATA\LobsterAI\skills-backup\$lobsterInstallerAttemptId$\r$\n"
+      FileClose $2
+      MessageBox MB_OK|MB_ICONEXCLAMATION "LobsterAI will finish installing, but the recovery backup for legacy user skills was not found, so no skills were restored ($lobsterLegacySkillsRestoreStatus). Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
+      Goto SkillRestoreValidated
 
     SkillRestoreConflictPreserved:
       ; A same-name entry in the new tree must never cause the user's only

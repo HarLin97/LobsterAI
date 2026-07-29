@@ -133,11 +133,6 @@ export const getEffectiveApiFormat = (provider: string, value: unknown): 'anthro
   return getFixedApiFormatForProvider(provider) ?? normalizeApiFormat(value);
 };
 
-export const supportsKimiK3Compatibility = (
-  provider: string,
-  value: unknown,
-): boolean => getEffectiveApiFormat(provider, value) === 'openai';
-
 export const shouldShowApiFormatSelector = (
   provider: string,
   value?: unknown,
@@ -279,9 +274,7 @@ export const CONNECTIVITY_TEST_TOKEN_BUDGET = 64;
 
 export const buildOpenAIConnectionTestRequestBody = (options: {
   provider: ProviderType;
-  providerConfig: Pick<ProviderConfig, 'codingPlanEnabled'>;
-  model: Pick<Model, 'compatibilityMode' | 'id'>;
-  effectiveBaseUrl: string;
+  model: Pick<Model, 'id'>;
   useResponsesApi: boolean;
 }): Record<string, unknown> => {
   if (options.useResponsesApi) {
@@ -299,9 +292,6 @@ export const buildOpenAIConnectionTestRequestBody = (options: {
     providerId: options.provider,
     modelId: options.model.id,
     api: OpenClawApi.OpenAICompletions,
-    baseUrl: options.effectiveBaseUrl,
-    codingPlanEnabled: options.providerConfig.codingPlanEnabled,
-    compatibilityMode: options.model.compatibilityMode,
   });
   if (runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3) {
     return {

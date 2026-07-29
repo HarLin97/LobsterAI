@@ -180,7 +180,7 @@ describe('AppUpdateCoordinator', () => {
         windowsInstallerUrlPolicyReceipt: {
           policyVersion: WINDOWS_INSTALLER_URL_POLICY_VERSION,
           inputOrigin: 'https://replacement-cdn.example.net',
-          finalOrigin: 'https://object-storage.example.org',
+          finalOrigin: 'https://replacement-cdn.example.net',
         },
       };
     });
@@ -264,7 +264,7 @@ describe('AppUpdateCoordinator', () => {
     });
   });
 
-  test('does not restore a cache whose recorded final transport origin is insecure', async () => {
+  test('does not restore a cache whose recorded final origin differs from its input', async () => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
     const store = createStoreStub();
     const filePath = seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
@@ -279,7 +279,7 @@ describe('AppUpdateCoordinator', () => {
       throw new Error('test fixture was not persisted');
     }
     stored.windowsInstallerUrlPolicyReceipt.finalOrigin =
-      'http://replacement-cdn.example.net';
+      'https://object-storage.example.org';
     store.set(readyFileStoreKey(AppUpdateSource.Auto), stored);
 
     const coordinator = new AppUpdateCoordinator(store);

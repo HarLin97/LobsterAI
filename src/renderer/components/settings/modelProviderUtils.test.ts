@@ -9,7 +9,6 @@ import {
   type ProviderConfig,
   providerRequiresApiKey,
   shouldShowApiFormatSelector,
-  supportsKimiK3Compatibility,
 } from './modelProviderUtils';
 
 const providerConfig = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({
@@ -87,12 +86,6 @@ test('provider model identity comparison preserves distinct non-K3 punctuation',
   )).toBe(false);
 });
 
-test('Kimi K3 compatibility is limited to the effective OpenAI transport', () => {
-  expect(supportsKimiK3Compatibility('custom_0', 'openai')).toBe(true);
-  expect(supportsKimiK3Compatibility('custom_0', 'anthropic')).toBe(false);
-  expect(supportsKimiK3Compatibility(ProviderName.Moonshot, 'anthropic')).toBe(false);
-});
-
 test('legacy Moonshot Anthropic configs stay visible and use their real transport', () => {
   expect(shouldShowApiFormatSelector(ProviderName.Moonshot, 'anthropic')).toBe(true);
   expect(shouldShowApiFormatSelector(ProviderName.Moonshot, 'openai')).toBe(false);
@@ -101,30 +94,23 @@ test('legacy Moonshot Anthropic configs stay visible and use their real transpor
 test('official Moonshot K3 connection test uses the K3 request contract', () => {
   expect(buildOpenAIConnectionTestRequestBody({
     provider: ProviderName.Moonshot,
-    providerConfig: { codingPlanEnabled: false },
-    model: { id: 'Kimi_K3' },
-    effectiveBaseUrl: 'https://api.moonshot.cn/v1',
+    model: { id: 'kimi-k3' },
     useResponsesApi: false,
   })).toEqual({
-    model: 'Kimi_K3',
+    model: 'kimi-k3',
     messages: [{ role: 'user', content: 'Hi' }],
     max_tokens: 64,
     reasoning_effort: 'max',
   });
 });
 
-test('explicit custom K3 alias connection test uses the K3 request contract', () => {
+test('exact custom K3 model ID uses the K3 request contract', () => {
   expect(buildOpenAIConnectionTestRequestBody({
     provider: 'custom_0',
-    providerConfig: { codingPlanEnabled: false },
-    model: {
-      id: 'my-kimi-prod',
-      compatibilityMode: 'moonshot-kimi-k3',
-    },
-    effectiveBaseUrl: 'https://proxy.example.com/v1',
+    model: { id: 'kimi-k3' },
     useResponsesApi: false,
   })).toMatchObject({
-    model: 'my-kimi-prod',
+    model: 'kimi-k3',
     max_tokens: 64,
     reasoning_effort: 'max',
   });
@@ -133,9 +119,7 @@ test('explicit custom K3 alias connection test uses the K3 request contract', ()
 test('ordinary OpenAI-compatible connection tests retain their existing token field', () => {
   expect(buildOpenAIConnectionTestRequestBody({
     provider: 'custom_0',
-    providerConfig: { codingPlanEnabled: false },
     model: { id: 'ordinary-model' },
-    effectiveBaseUrl: 'https://proxy.example.com/v1',
     useResponsesApi: false,
   })).toEqual({
     model: 'ordinary-model',

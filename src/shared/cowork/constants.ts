@@ -48,9 +48,12 @@ export const CoworkIpcChannel = {
   OpenSessionFromNotification: 'cowork:session:openFromNotification',
   OpenSessionFromNotificationReady: 'cowork:session:openFromNotificationReady',
   GoalCommand: 'cowork:session:goalCommand',
+  SubmitBtw: 'cowork:session:submitBtw',
+  AbortBtw: 'cowork:session:abortBtw',
   SubmitSteer: 'cowork:session:submitSteer',
   SessionModelOverrideChanged: 'cowork:session:modelOverrideChanged',
   SessionsChanged: 'cowork:sessions:changed',
+  StreamBtwResult: 'cowork:stream:btwResult',
   StreamGoal: 'cowork:stream:goal',
   MemoryReadRaw: 'cowork:memory:readRaw',
   MemoryWriteRaw: 'cowork:memory:writeRaw',
@@ -60,18 +63,6 @@ export const CoworkIpcChannel = {
   TempStorageClean: 'cowork:tempStorage:clean',
 } as const;
 export type CoworkIpcChannel = typeof CoworkIpcChannel[keyof typeof CoworkIpcChannel];
-
-export const CoworkStopStatus = {
-  Aborted: 'aborted',
-  AlreadyIdle: 'already_idle',
-  Failed: 'failed',
-} as const;
-export type CoworkStopStatus = typeof CoworkStopStatus[keyof typeof CoworkStopStatus];
-
-export type CoworkStopResult =
-  | { status: typeof CoworkStopStatus.Aborted }
-  | { status: typeof CoworkStopStatus.AlreadyIdle }
-  | { status: typeof CoworkStopStatus.Failed; error: string };
 
 export interface CoworkSessionsChangedPayload {
   sessionIds: string[];

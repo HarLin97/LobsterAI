@@ -62,6 +62,17 @@ import {
   normalizeBrowserAnnotationBatches,
 } from '../shared/cowork/browserAnnotations';
 import {
+  COWORK_BTW_EVENT_QUESTION_MAX_CHARS,
+  COWORK_BTW_IDENTIFIER_MAX_CHARS,
+  COWORK_BTW_RESULT_MAX_CHARS,
+  type CoworkBtwAbortRequest,
+  type CoworkBtwAbortResponse,
+  type CoworkBtwEntry,
+  type CoworkBtwSubmitRequest,
+  type CoworkBtwSubmitResponse,
+  normalizeCoworkBtwQuestion,
+} from '../shared/cowork/btw';
+import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SESSION_PAGE_SIZE,
   COWORK_TEMP_ATTACHMENTS_DIR_NAME,
@@ -70,7 +81,6 @@ import {
   CoworkContextUsageSource,
   CoworkForkMode,
   CoworkIpcChannel,
-  CoworkStopStatus,
 } from '../shared/cowork/constants';
 import {
   buildCoworkImageAttachmentPreviews,
@@ -2783,6 +2793,32 @@ const bindCoworkRuntimeForwarder = (): void => {
         win.webContents.send('cowork:stream:sessionStatus', { sessionId, status });
       } catch (error) {
         console.error('[CoworkRuntime] failed to forward session status:', error);
+      }
+    });
+  });
+
+  runtime.on('btwResult', (sessionId: string, result: CoworkBtwEntry) => {
+    const safeResult: CoworkBtwEntry = {
+      ...result,
+      sessionId,
+      question: truncateIpcString(result.question, COWORK_BTW_EVENT_QUESTION_MAX_CHARS),
+      ...(result.answer !== undefined
+        ? { answer: truncateIpcString(result.answer, COWORK_BTW_RESULT_MAX_CHARS) }
+        : {}),
+      ...(result.error !== undefined
+        ? { error: truncateIpcString(result.error, IPC_STRING_MAX_CHARS) }
+        : {}),
+    };
+    const windows = BrowserWindow.getAllWindows();
+    windows.forEach(win => {
+      if (win.isDestroyed()) return;
+      try {
+        win.webContents.send(CoworkIpcChannel.StreamBtwResult, {
+          sessionId,
+          result: safeResult,
+        });
+      } catch (error) {
+        console.error('[CoworkBtw] failed to forward side-question result:', error);
       }
     });
   });
@@ -7475,6 +7511,143 @@ if (!gotTheLock) {
     },
   );
 
+  ipcMain.handle(CoworkIpcChannel.SubmitBtw, async (
+    _event,
+    options: CoworkBtwSubmitRequest,
+  ): Promise<CoworkBtwSubmitResponse> => {
+    const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
+    const question = typeof options?.question === 'string'
+      ? normalizeCoworkBtwQuestion(options.question)
+      : '';
+    const runId = typeof options?.runId === 'string' ? options.runId.trim() : '';
+    if (!sessionId || !question || !runId) {
+      return {
+        success: false,
+        runId,
+        error: t('coworkBtwRequestRequired'),
+      };
+    }
+    if (
+      sessionId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+      || runId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+    ) {
+      return {
+        success: false,
+        runId: runId.slice(0, COWORK_BTW_IDENTIFIER_MAX_CHARS),
+        error: t('coworkBtwInvalidIdentifier'),
+      };
+    }
+    if (/[\r\n]/.test(question)) {
+      return {
+        success: false,
+        runId,
+        error: t('coworkBtwSingleLine'),
+      };
+    }
+    try {
+      console.debug(
+        '[CoworkBtw] side-question IPC received.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+        `Question chars ${question.length}.`,
+      );
+      const engineStatus = await ensureOpenClawRunningForCowork();
+      if (engineStatus.phase !== 'running') {
+        return {
+          ...getEngineNotReadyResponse(engineStatus),
+          runId,
+        };
+      }
+      const runtime = getCoworkEngineRouter();
+      if (!runtime.submitBtw) {
+        return {
+          success: false,
+          runId,
+          error: t('coworkBtwUnavailable'),
+        };
+      }
+      const result = await runtime.submitBtw(sessionId, question, runId);
+      console.debug(
+        '[CoworkBtw] side-question IPC completed.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+        `Success ${result.success ? 'yes' : 'no'}.`,
+      );
+      return result;
+    } catch (error) {
+      console.error(
+        '[CoworkBtw] side-question IPC failed.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+        error,
+      );
+      return {
+        success: false,
+        runId,
+        error: error instanceof Error ? error.message : t('coworkBtwSubmitFailed'),
+      };
+    }
+  });
+
+  ipcMain.handle(CoworkIpcChannel.AbortBtw, async (
+    _event,
+    options: CoworkBtwAbortRequest,
+  ): Promise<CoworkBtwAbortResponse> => {
+    const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
+    const runId = typeof options?.runId === 'string' ? options.runId.trim() : '';
+    if (
+      !sessionId
+      || !runId
+      || sessionId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+      || runId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+    ) {
+      return {
+        success: false,
+        aborted: false,
+        runId: runId.slice(0, COWORK_BTW_IDENTIFIER_MAX_CHARS),
+        error: t('coworkBtwInvalidIdentifier'),
+      };
+    }
+
+    try {
+      console.debug(
+        '[CoworkBtw] side-question stop IPC received.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+      );
+      const runtime = getCoworkEngineRouter();
+      if (!runtime.abortBtw) {
+        return {
+          success: false,
+          aborted: false,
+          runId,
+          error: t('coworkBtwUnavailable'),
+        };
+      }
+      const result = await runtime.abortBtw(sessionId, runId);
+      console.debug(
+        '[CoworkBtw] side-question stop IPC completed.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+        `Aborted ${result.aborted ? 'yes' : 'no'}.`,
+      );
+      return result;
+    } catch (error) {
+      console.error(
+        '[CoworkBtw] side-question stop IPC failed.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+        error,
+      );
+      return {
+        success: false,
+        aborted: false,
+        runId,
+        error: t('coworkBtwStopFailed'),
+      };
+    }
+  });
+
   ipcMain.handle(CoworkIpcChannel.SubmitSteer, async (
     _event,
     options: { sessionId: string; text: string; clientSteerId: string },
@@ -7587,22 +7760,11 @@ if (!gotTheLock) {
   ipcMain.handle(CoworkIpcChannel.StopSession, async (_event, sessionId: string) => {
     try {
       const runtime = getCoworkEngineRouter();
-      const result = await runtime.abortSessionAndConfirm(sessionId);
-      if (result.status === CoworkStopStatus.Failed) {
-        return {
-          success: false,
-          status: result.status,
-          error: result.error,
-        };
-      }
-      return {
-        success: true,
-        status: result.status,
-      };
+      runtime.stopSession(sessionId);
+      return { success: true };
     } catch (error) {
       return {
         success: false,
-        status: CoworkStopStatus.Failed,
         error: error instanceof Error ? error.message : 'Failed to stop session',
       };
     }
