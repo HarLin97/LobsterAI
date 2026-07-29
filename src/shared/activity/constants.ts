@@ -37,13 +37,13 @@ export type DailyCheckInAction =
   typeof DailyCheckInAction[keyof typeof DailyCheckInAction];
 
 export const ActivityServerErrorCode = {
-  NotFound: 41700,
-  NotActive: 41701,
-  LoginRequired: 41702,
-  ActionInvalid: 41703,
-  AlreadyClaimed: 41704,
-  ConfigInvalid: 41705,
-  RevisionMismatch: 41706,
+  NotFound: 51100,
+  NotActive: 51101,
+  LoginRequired: 51102,
+  ActionInvalid: 51103,
+  AlreadyClaimed: 51104,
+  ConfigInvalid: 51105,
+  RevisionMismatch: 51106,
 } as const;
 
 export type ActivityServerErrorCode =
