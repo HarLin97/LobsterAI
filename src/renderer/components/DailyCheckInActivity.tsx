@@ -10,6 +10,7 @@ import dailyCheckInGiftUrl from '../assets/daily-check-in-gift.png';
 import { authService } from '../services/auth';
 import { i18nService } from '../services/i18n';
 import {
+  canClaimDailyCheckIn,
   formatDailyCheckInCredits,
 } from './dailyCheckInActivityState';
 import type { DailyCheckInSnapshot } from './useDailyCheckInActivity';
@@ -138,6 +139,9 @@ export const DailyCheckInSidebarCard: React.FC<DailyCheckInSidebarCardProps> = (
   const { state } = context;
   const rewardCredits = formatDailyCheckInCredits(state.rewardCredits);
   const claimedCredits = formatDailyCheckInCredits(state.claimedCredits);
+  const claimDisabled = claiming
+    || successCredits !== null
+    || (context.authenticated && !canClaimDailyCheckIn(context));
 
   return (
     <div
@@ -179,7 +183,7 @@ export const DailyCheckInSidebarCard: React.FC<DailyCheckInSidebarCardProps> = (
       <button
         type="button"
         tabIndex={hidden ? -1 : 0}
-        disabled={claiming || successCredits !== null}
+        disabled={claimDisabled}
         onClick={onClaim}
         className={`mt-2 flex h-8 w-full items-center justify-center gap-1 rounded-lg text-[11px] font-semibold text-white transition-colors disabled:cursor-default ${
           successCredits !== null
@@ -212,7 +216,7 @@ export const DailyCheckInProfileCard: React.FC<DailyCheckInProfileCardProps> = (
 }) => {
   const { descriptor, context } = snapshot;
   const { state } = context;
-  const disabled = claiming || state.claimedToday || state.completed;
+  const disabled = claiming || !canClaimDailyCheckIn(context);
   const actionText = state.completed
     ? i18nService.t('dailyCheckInCompleted')
     : state.claimedToday

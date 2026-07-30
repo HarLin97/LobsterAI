@@ -2,18 +2,28 @@ import {
   type ActivityActionResponse,
   type ActivityContextResponse,
   type ActivityDescriptor,
-  ActivityLifecycleState,
-  ActivityPlacement,
   type ActivityResult,
   ActivityServerErrorCode,
   ActivitySlotState,
+  DailyCheckInAction,
 } from '@shared/activity/constants';
-import { useCallback, useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { useSelector } from 'react-redux';
 
 import { authService } from '../services/auth';
+import { i18nService } from '../services/i18n';
 import type { RootState } from '../store';
-import { isActiveDailyCheckInContext } from './dailyCheckInActivityState';
+import {
+  canClaimDailyCheckIn,
+  isActiveDailyCheckInContext,
+  isDailyCheckInContext,
+  isDailyCheckInDescriptor,
+} from './dailyCheckInActivityState';
 
 const DAILY_CHECK_IN_UPDATED_EVENT = 'lobster:daily-check-in-updated';
 
@@ -57,21 +67,38 @@ export function useDailyCheckInActivity(
   const [snapshot, setSnapshot] = useState<DailyCheckInSnapshot | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [claiming, setClaiming] = useState(false);
+  const loadRequestIdRef = useRef(0);
+  const claimingRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loadRequestIdRef.current += 1;
+    };
+  }, []);
 
   const load = useCallback(async (retryRevision = true): Promise<void> => {
+    const requestId = ++loadRequestIdRef.current;
+    const isCurrentRequest = () => (
+      mountedRef.current && loadRequestIdRef.current === requestId
+    );
     if (!enabled) {
-      setSnapshot(null);
-      setLoading(false);
+      if (isCurrentRequest()) {
+        setSnapshot(null);
+        setLoading(false);
+      }
       return;
     }
-    setLoading(true);
+    if (isCurrentRequest()) setLoading(true);
     try {
-      const slot = await window.electron.activity.getSlot({
-        placement: ActivityPlacement.DesktopSidebar,
-      });
+      const slot = await window.electron.activity.getSlot();
+      if (!isCurrentRequest()) return;
       if (!slot.success
+          || !slot.data
           || slot.data.slotState !== ActivitySlotState.Available
-          || !slot.data.activity) {
+          || !isDailyCheckInDescriptor(slot.data.activity)) {
         setSnapshot(null);
         return;
       }
@@ -81,6 +108,7 @@ export function useDailyCheckInActivity(
         activityCode: descriptor.activityCode,
         configRevision: descriptor.configRevision,
       });
+      if (!isCurrentRequest()) return;
       if (!context.success) {
         if (retryRevision
             && context.code === ActivityServerErrorCode.RevisionMismatch) {
@@ -91,16 +119,19 @@ export function useDailyCheckInActivity(
         return;
       }
       if (!isActiveDailyCheckInContext(context.data)
-          || context.data.lifecycleState !== ActivityLifecycleState.Active) {
+          || context.data.activityCode !== descriptor.activityCode
+          || context.data.configRevision !== descriptor.configRevision) {
         setSnapshot(null);
         return;
       }
       setSnapshot({ descriptor, context: context.data });
     } catch (error) {
-      console.warn('[DailyCheckIn] failed to load activity:', error);
-      setSnapshot(null);
+      if (isCurrentRequest()) {
+        console.warn('[DailyCheckIn] failed to load activity:', error);
+        setSnapshot(null);
+      }
     } finally {
-      setLoading(false);
+      if (isCurrentRequest()) setLoading(false);
     }
   }, [enabled]);
 
@@ -117,12 +148,16 @@ export function useDailyCheckInActivity(
 
   const claim = useCallback(async (): Promise<ActivityActionResponse> => {
     if (!snapshot) {
-      throw new Error('Daily check-in activity is unavailable');
+      throw new Error(i18nService.t('dailyCheckInClaimFailed'));
     }
-    if (claiming) {
-      throw new Error('Daily check-in is already in progress');
+    if (!canClaimDailyCheckIn(snapshot.context)) {
+      throw new Error(i18nService.t('dailyCheckInClaimFailed'));
     }
-    setClaiming(true);
+    if (claimingRef.current) {
+      throw new Error(i18nService.t('dailyCheckInClaimFailed'));
+    }
+    claimingRef.current = true;
+    if (mountedRef.current) setClaiming(true);
     try {
       const result = await window.electron.activity.executeAction({
         activityCode: snapshot.descriptor.activityCode,
@@ -136,21 +171,38 @@ export function useDailyCheckInActivity(
           await load();
         } else if (result.code === ActivityServerErrorCode.NotActive
             || result.code === ActivityServerErrorCode.NotFound) {
-          setSnapshot(null);
+          loadRequestIdRef.current += 1;
+          if (mountedRef.current) setSnapshot(null);
         }
         throw new DailyCheckInRequestError(result);
       }
-      setSnapshot({
-        descriptor: snapshot.descriptor,
-        context: result.data.context,
-      });
+      if (!result.data
+          || !isDailyCheckInContext(result.data.context)
+          || result.data.context.activityCode !== snapshot.descriptor.activityCode
+          || result.data.context.configRevision !== snapshot.descriptor.configRevision
+          || !result.data.result
+          || result.data.result.activityCode !== snapshot.descriptor.activityCode
+          || result.data.result.actionId !== DailyCheckInAction.CheckIn
+          || !Number.isFinite(result.data.result.creditsGranted)
+          || result.data.result.creditsGranted < 0) {
+        await load();
+        throw new Error(i18nService.t('dailyCheckInClaimFailed'));
+      }
+      loadRequestIdRef.current += 1;
+      if (mountedRef.current) {
+        setSnapshot({
+          descriptor: snapshot.descriptor,
+          context: result.data.context,
+        });
+      }
       window.dispatchEvent(new Event(DAILY_CHECK_IN_UPDATED_EVENT));
       void authService.fetchProfileSummary();
       return result.data;
     } finally {
-      setClaiming(false);
+      claimingRef.current = false;
+      if (mountedRef.current) setClaiming(false);
     }
-  }, [claiming, load, snapshot]);
+  }, [load, snapshot]);
 
   return {
     snapshot,

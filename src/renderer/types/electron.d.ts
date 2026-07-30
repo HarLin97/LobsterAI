@@ -4,7 +4,6 @@ import type {
   ActivityContextResponse,
   ActivityHostExecuteActionInput,
   ActivityHostGetContextInput,
-  ActivityHostGetSlotInput,
   ActivityResult,
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
@@ -1747,9 +1746,7 @@ interface IElectronAPI {
     }>;
   };
   activity: {
-    getSlot: (
-      input?: ActivityHostGetSlotInput,
-    ) => Promise<ActivityResult<ActivitySlotResponse>>;
+    getSlot: () => Promise<ActivityResult<ActivitySlotResponse>>;
     getContext: (
       input: ActivityHostGetContextInput,
     ) => Promise<ActivityResult<ActivityContextResponse>>;

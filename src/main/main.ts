@@ -5646,7 +5646,7 @@ if (!gotTheLock) {
     return quota;
   };
 
-  const startAuthLogin = async (loginUrl?: string) => {
+  ipcMain.handle(AuthIpcChannel.Login, async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
     const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
     const fallbackUrl = appendLoginParams(baseUrl, { source: 'electron' });
     let localCallback: Awaited<ReturnType<typeof startAuthLocalCallback>> | null = null;
@@ -5685,12 +5685,7 @@ if (!gotTheLock) {
         };
       }
     }
-  };
-
-  ipcMain.handle(
-    AuthIpcChannel.Login,
-    (_event, { loginUrl }: { loginUrl?: string } = {}) => startAuthLogin(loginUrl),
-  );
+  });
 
   registerActivityIpcHandlers({
     ipcMain,

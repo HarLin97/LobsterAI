@@ -8,10 +8,10 @@ import {
   ActivityContainerApiVersion,
   type ActivityHostExecuteActionInput,
   type ActivityHostGetContextInput,
-  type ActivityHostGetSlotInput,
   ActivityIpc,
   ActivityPlacement,
   type ActivityResult,
+  ActivitySlotState,
 } from '../../../shared/activity/constants';
 import { AuthSessionStatus } from '../../../shared/auth/constants';
 import {
@@ -65,6 +65,7 @@ function validateExecuteInput(
 
 export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void {
   let actionInFlight = false;
+  let activeBinding: ActivityHostGetContextInput | null = null;
 
   const getActivityServerBaseUrl = () => resolveActivityServerBaseUrl({
     defaultBaseUrl: deps.getServerBaseUrl(),
@@ -101,21 +102,47 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
     }
   };
 
+  const loadSlot = async () => {
+    const result = await getActivitySlot(
+      getActivityServerBaseUrl(),
+      activityFetch,
+      {
+        placement: ActivityPlacement.DesktopSidebar,
+        clientVersion: deps.getClientVersion(),
+        containerApiVersion: ActivityContainerApiVersion.NativeDailyCheckInV1,
+        platform: deps.platform,
+      },
+    );
+    if (result.success) {
+      activeBinding = null;
+      if (result.data.slotState === ActivitySlotState.Available && result.data.activity) {
+        validateActivityBinding(result.data.activity);
+        activeBinding = {
+          activityCode: result.data.activity.activityCode,
+          configRevision: result.data.activity.configRevision,
+        };
+      }
+    }
+    return result;
+  };
+
+  function requireActiveBinding(
+    input: ActivityHostGetContextInput | undefined,
+  ): asserts input is ActivityHostGetContextInput {
+    validateActivityBinding(input);
+    if (!activeBinding
+        || activeBinding.activityCode !== input.activityCode
+        || activeBinding.configRevision !== input.configRevision) {
+      throw new Error('Activity binding is no longer available');
+    }
+  }
+
   deps.ipcMain.handle(
     ActivityIpc.HostGetSlot,
-    async (event, input: ActivityHostGetSlotInput = {}) => {
+    async event => {
       try {
         requireMainRenderer(event);
-        return await getActivitySlot(
-          getActivityServerBaseUrl(),
-          activityFetch,
-          {
-            placement: input.placement ?? ActivityPlacement.DesktopSidebar,
-            clientVersion: deps.getClientVersion(),
-            containerApiVersion: ActivityContainerApiVersion.NativeDailyCheckInV1,
-            platform: deps.platform,
-          },
-        );
+        return await loadSlot();
       } catch (error) {
         return failure(error);
       }
@@ -127,7 +154,7 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
     async (event, input?: ActivityHostGetContextInput) => {
       try {
         requireMainRenderer(event);
-        validateActivityBinding(input);
+        requireActiveBinding(input);
         return await getDailyCheckInContext(
           getActivityServerBaseUrl(),
           activityFetch,
@@ -146,6 +173,7 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
       try {
         requireMainRenderer(event);
         validateExecuteInput(input);
+        requireActiveBinding(input);
         if (actionInFlight) {
           return {
             success: false,

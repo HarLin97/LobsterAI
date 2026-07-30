@@ -120,10 +120,6 @@ export type ActivityResult<T> =
   | { success: true; data: T }
   | { success: false; error: string; code?: number; httpStatus?: number };
 
-export interface ActivityHostGetSlotInput {
-  placement?: ActivityPlacement;
-}
-
 export interface ActivityHostGetContextInput {
   activityCode: string;
   configRevision: number;

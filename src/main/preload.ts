@@ -4,7 +4,6 @@ import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
 import {
   type ActivityHostExecuteActionInput,
   type ActivityHostGetContextInput,
-  type ActivityHostGetSlotInput,
   ActivityIpc,
 } from '../shared/activity/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
@@ -888,8 +887,7 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(AppIpcChannel.OpenSystemNotificationSettings),
   },
   activity: {
-    getSlot: (input?: ActivityHostGetSlotInput) =>
-      ipcRenderer.invoke(ActivityIpc.HostGetSlot, input),
+    getSlot: () => ipcRenderer.invoke(ActivityIpc.HostGetSlot),
     getContext: (input: ActivityHostGetContextInput) =>
       ipcRenderer.invoke(ActivityIpc.HostGetContext, input),
     executeAction: (input: ActivityHostExecuteActionInput) =>

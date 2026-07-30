@@ -8,6 +8,9 @@ import {
 import {
   canClaimDailyCheckIn,
   formatDailyCheckInCredits,
+  isActiveDailyCheckInContext,
+  isDailyCheckInContext,
+  isDailyCheckInDescriptor,
   isDailyCheckInState,
   shouldShowDailyCheckInSidebar,
 } from './dailyCheckInActivityState';
@@ -56,5 +59,47 @@ describe('dailyCheckInActivityState', () => {
     })).toBe(false);
     expect(formatDailyCheckInCredits(100)).toBe('100');
     expect(formatDailyCheckInCredits(12.5)).toBe('12.5');
+  });
+
+  test('validates the remote descriptor and context before rendering', () => {
+    expect(isDailyCheckInDescriptor({
+      activityCode: 'login-seven-days-native-1',
+      configRevision: 1,
+      startAt: '2026-07-28T04:00:00Z',
+      endAt: '2026-08-04T04:00:00Z',
+      timezone: 'Asia/Shanghai',
+      loginRequired: true,
+      periodLabel: 'Phase 1',
+      cardTitle: 'Daily credits',
+      guestModalTitle: 'Log in to claim',
+      guestModalDescription: 'Claim credits after login',
+      guestModalActionText: 'Log in',
+    })).toBe(true);
+    expect(isDailyCheckInDescriptor({
+      activityCode: '../unexpected',
+      configRevision: 1,
+    })).toBe(false);
+
+    expect(isDailyCheckInContext(context())).toBe(true);
+    expect(isActiveDailyCheckInContext(context())).toBe(true);
+    expect(isDailyCheckInContext({
+      ...context(),
+      actions: ['unexpected_action'],
+    })).toBe(false);
+    expect(isDailyCheckInContext({
+      ...context(),
+      activityCode: 'different-activity',
+    })).toBe(true);
+  });
+
+  test('rejects counters that exceed the configured activity duration', () => {
+    expect(isDailyCheckInState({
+      ...context().state,
+      claimedDays: 8,
+    })).toBe(false);
+    expect(isDailyCheckInState({
+      ...context().state,
+      remainingDays: 8,
+    })).toBe(false);
   });
 });
