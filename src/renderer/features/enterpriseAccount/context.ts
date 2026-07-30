@@ -23,10 +23,21 @@ export function applyEnterpriseAccountContext(
   return normalizedContext;
 }
 
-export async function refreshEnterpriseAccountContext(): Promise<EnterpriseAccountContext | null> {
+export async function refreshEnterpriseAccountContext(
+  options: {
+    shouldApply?: () => boolean;
+  } = {},
+): Promise<EnterpriseAccountContext | null> {
   logEnterpriseAccountDiagnostic('debug', 'requesting enterprise context from main process');
   try {
     const result = await window.electron.enterpriseAccount.getContext();
+    if (options.shouldApply && !options.shouldApply()) {
+      logEnterpriseAccountDiagnostic(
+        'debug',
+        'discarded stale enterprise context response after account change',
+      );
+      return store.getState().enterpriseAccount.context;
+    }
     if (!result.success) {
       logEnterpriseAccountDiagnostic(
         'warn',

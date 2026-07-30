@@ -131,6 +131,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Auth quota
     authPlanFree: '免费',
     authPlanStandard: '标准',
+    enterpriseAccountContextMismatchTitle: '企业身份已失效',
+    enterpriseAccountContextMismatchMessage:
+      '当前企业身份与登录凭证不一致。相关图片和视频任务已停止轮询，请重新登录或重新选择企业身份后再试。',
+    enterpriseAccountContextMismatchConfirm: '知道了',
+    authAccountChanged: '登录账号已发生变化，请重试。',
+    authLoginRequired: '请先登录后再试。',
+    mediaTaskAccountMismatch: '该媒体任务属于其他账号，无法操作。',
+    enterpriseMediaQuotaUnavailable: '当前企业的媒体生成额度暂不可用。',
 
     // Data migration dialogs
     dataMigrationBackupDialogTitle: '备份 LobsterAI 数据',
@@ -462,6 +470,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Auth quota
     authPlanFree: 'Free',
     authPlanStandard: 'Standard',
+    enterpriseAccountContextMismatchTitle: 'Enterprise identity expired',
+    enterpriseAccountContextMismatchMessage:
+      'Your enterprise identity no longer matches the login credentials. Related image and video polling has stopped. Sign in again or choose an enterprise identity before retrying.',
+    enterpriseAccountContextMismatchConfirm: 'OK',
+    authAccountChanged: 'The signed-in account changed. Try again.',
+    authLoginRequired: 'Sign in and try again.',
+    mediaTaskAccountMismatch: 'This media task belongs to another account.',
+    enterpriseMediaQuotaUnavailable: 'Media generation quota is unavailable for this enterprise.',
 
     // Data migration dialogs
     dataMigrationBackupDialogTitle: 'Back Up LobsterAI Data',

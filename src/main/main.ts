@@ -37,6 +37,7 @@ import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
+import { createAccountOwnerKey } from '../shared/auth/accountOwner';
 import {
   AuthIpcChannel,
   type AuthLifecycleEvent,
@@ -104,7 +105,13 @@ import {
   DataMigrationRestoreStatus,
 } from '../shared/dataMigration/constants';
 import { DialogIpc } from '../shared/dialog/constants';
-import { EnterpriseAccountMode } from '../shared/enterpriseAccount/constants';
+import {
+  EnterpriseAccountIpcChannel,
+  EnterpriseAccountMode,
+  EnterpriseApiErrorCode,
+  EnterpriseQuotaMessageMetadataKey,
+} from '../shared/enterpriseAccount/constants';
+import { resolveEnterpriseQuotaError } from '../shared/enterpriseAccount/quotaError';
 import {
   HtmlShareAccessMode,
   type HtmlShareAccessMode as HtmlShareAccessModeValue,
@@ -411,6 +418,23 @@ import {
 } from './libs/systemProxy';
 import { getLogFilePath, getRecentMainLogEntries, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
+import {
+  type AccountBoundValue,
+  type AuthExchangeIntentSnapshot,
+  type AuthStateSnapshot,
+  bindAccountValue,
+  canAccessTrackedMediaTask,
+  createAccountScopedFetch,
+  isAuthExchangeIntentCurrent,
+  isAuthStateSnapshotCurrent,
+  isMediaAccountScopeCurrent,
+  isMediaAccountScopeSnapshotCurrent,
+  type MediaAccountScope,
+  rebindMediaAccountScope,
+  rememberMediaTaskOwnerAliases,
+  resolveAccountBoundValue,
+  shouldRemoveMediaTaskAfterPoll,
+} from './mediaAccountIsolation';
 import {
   MediaGenerationGateReason,
   MediaGenerationTool,
@@ -2907,6 +2931,7 @@ const bindCoworkRuntimeForwarder = (): void => {
 
   runtime.on('complete', (sessionId: string, claudeSessionId: string | null) => {
     mediaSelectionBySession.delete(sessionId);
+    mediaTurnAccountScopeBySession.delete(sessionId);
     skinRuntimeController?.handleRuntimeComplete(sessionId);
     mediaReferencesBySession.delete(sessionId);
     getDesktopNotificationManager().handleComplete(sessionId);
@@ -2931,6 +2956,7 @@ const bindCoworkRuntimeForwarder = (): void => {
 
   runtime.on('error', (sessionId: string, error: string) => {
     mediaSelectionBySession.delete(sessionId);
+    mediaTurnAccountScopeBySession.delete(sessionId);
     skinRuntimeController?.handleRuntimeError(sessionId);
     mediaReferencesBySession.delete(sessionId);
     // Mark session as error in store so the .catch() fallback can detect duplicates.
@@ -3520,8 +3546,10 @@ const hideMainWindowForClose = (win: BrowserWindow): void => {
 // 存储活跃的流式请求控制器
 const activeStreamControllers = new Map<string, AbortController>();
 
-// Media generation selection per session (for turn-level tool gating)
-const mediaSelectionBySession = new Map<string, MediaSelectionState>();
+// Media generation selection and authenticated owner per session turn.
+const mediaSelectionBySession = new Map<string, AccountBoundValue<MediaSelectionState>>();
+const mediaTurnAccountScopeBySession = new Map<string, MediaAccountScope>();
+let resolveCurrentMediaAccountScope = (): MediaAccountScope | null => null;
 
 // Media attachment references per session (for @ mentions, FR-9)
 const mediaReferencesBySession = new Map<string, MediaAttachmentRefMain[]>();
@@ -3541,12 +3569,15 @@ interface MediaTaskTracker {
   sessionId: string;
   mediaType: 'image' | 'video';
   model: string;
+  ownerAccountKey: string;
+  accountGeneration: number;
   startedAt: number;
   pollCount: number;
   timeoutMs: number;
   lastPollAt?: number;
 }
 const pendingMediaTasks = new Map<string, MediaTaskTracker>();
+const mediaTaskOwnerById = new Map<string, string>();
 const mediaStatusPollCounts = new Map<string, number>();
 const mediaTasksHandledByStatusPolling = new Set<string>();
 let mediaTaskPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -3559,6 +3590,20 @@ const MEDIA_POLL_SLOW_COUNT = 18;
 const MEDIA_POLL_MEDIUM_COUNT = 10;
 const MEDIA_TASK_DEFAULT_TIMEOUT_MS = 172_800_000;
 const TERMINAL_MEDIA_TASK_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+
+const rememberMediaTaskOwnership = (
+  ownerAccountKey: string,
+  ...taskIds: unknown[]
+): void => {
+  rememberMediaTaskOwnerAliases(mediaTaskOwnerById, ownerAccountKey, taskIds);
+};
+
+const resolveMediaTaskOwner = (taskId: unknown): string | undefined => {
+  const normalizedTaskId = String(taskId ?? '').trim();
+  if (!normalizedTaskId) return undefined;
+  return pendingMediaTasks.get(normalizedTaskId)?.ownerAccountKey
+    ?? mediaTaskOwnerById.get(normalizedTaskId);
+};
 
 const normalizeOptionalMediaModelId = (modelId: string | undefined): string | undefined => {
   const canonicalModelId = canonicalizeMediaModelId(modelId);
@@ -3588,7 +3633,10 @@ const resolveMediaSelectionForSession = (sessionId: string | null): MediaSelecti
     if (seen.has(current)) return undefined;
     seen.add(current);
 
-    const selection = normalizeMediaSelectionState(mediaSelectionBySession.get(current));
+    const selection = normalizeMediaSelectionState(resolveAccountBoundValue(
+      mediaSelectionBySession.get(current),
+      resolveCurrentMediaAccountScope(),
+    ));
     if (selection && selection.mode !== 'none') {
       return selection;
     }
@@ -3602,6 +3650,30 @@ const resolveMediaSelectionForSession = (sessionId: string | null): MediaSelecti
   }
 
   return undefined;
+};
+
+const resolveMediaTurnAccountScopeForSession = (
+  sessionId: string | null,
+): MediaAccountScope | null => {
+  let current = sessionId?.trim() || null;
+  const seen = new Set<string>();
+
+  for (let depth = 0; current && depth < 16; depth++) {
+    if (seen.has(current)) return null;
+    seen.add(current);
+
+    const scope = mediaTurnAccountScopeBySession.get(current);
+    if (scope) return scope;
+
+    try {
+      current = getCoworkParentSessionId(getStore().getDatabase(), current);
+    } catch (error) {
+      console.warn('[MediaGeneration] failed to resolve parent turn account scope:', error);
+      return null;
+    }
+  }
+
+  return null;
 };
 
 const getSkinRuntimeController = (): SkinRuntimeController => {
@@ -3787,28 +3859,80 @@ const getInitialTheme = (): 'light' | 'dark' => {
   return resolveThemeFromConfig(config);
 };
 
-const getMediaStatusPollKey = (sessionId: string | null, taskId: string): string =>
-  `${sessionId ?? 'unknown'}:${taskId}`;
+const MEDIA_STATUS_POLL_KEY_SEPARATOR = '\u0000';
 
-const incrementMediaStatusPollCount = (sessionId: string | null, taskId: string): number => {
-  const key = getMediaStatusPollKey(sessionId, taskId);
+const getMediaStatusPollKey = (
+  sessionId: string | null,
+  ownerAccountKey: string,
+  taskId: string,
+): string => (
+  [sessionId ?? 'unknown', ownerAccountKey, taskId].join(MEDIA_STATUS_POLL_KEY_SEPARATOR)
+);
+
+const incrementMediaStatusPollCount = (
+  sessionId: string | null,
+  ownerAccountKey: string,
+  taskId: string,
+): number => {
+  const key = getMediaStatusPollKey(sessionId, ownerAccountKey, taskId);
   const nextCount = (mediaStatusPollCounts.get(key) ?? 0) + 1;
   mediaStatusPollCounts.set(key, nextCount);
   return nextCount;
 };
 
-const markMediaTaskHandledByStatusPolling = (sessionId: string, taskId: string): void => {
-  mediaTasksHandledByStatusPolling.add(getMediaStatusPollKey(sessionId, taskId));
-  pendingMediaTasks.delete(taskId);
+const markMediaTaskHandledByStatusPolling = (
+  sessionId: string,
+  ownerAccountKey: string,
+  taskId: string,
+): void => {
+  mediaTasksHandledByStatusPolling.add(getMediaStatusPollKey(sessionId, ownerAccountKey, taskId));
+  const tracker = pendingMediaTasks.get(taskId);
+  if (tracker?.ownerAccountKey === ownerAccountKey) {
+    pendingMediaTasks.delete(taskId);
+  }
 };
 
-const isMediaTaskHandledByStatusPolling = (sessionId: string, taskId: string): boolean =>
-  mediaTasksHandledByStatusPolling.has(getMediaStatusPollKey(sessionId, taskId));
+const isMediaTaskHandledByStatusPolling = (
+  sessionId: string,
+  ownerAccountKey: string,
+  taskId: string,
+): boolean => (
+  mediaTasksHandledByStatusPolling.has(getMediaStatusPollKey(sessionId, ownerAccountKey, taskId))
+);
 
 const clearMediaStatusPollCountsForSession = (sessionId: string): void => {
+  const prefix = `${sessionId}${MEDIA_STATUS_POLL_KEY_SEPARATOR}`;
   for (const key of mediaStatusPollCounts.keys()) {
-    if (key.startsWith(`${sessionId}:`)) {
+    if (key.startsWith(prefix)) {
       mediaStatusPollCounts.delete(key);
+    }
+  }
+};
+
+const clearHandledMediaTasksForSession = (sessionId: string): void => {
+  const prefix = `${sessionId}${MEDIA_STATUS_POLL_KEY_SEPARATOR}`;
+  for (const key of mediaTasksHandledByStatusPolling) {
+    if (key.startsWith(prefix)) {
+      mediaTasksHandledByStatusPolling.delete(key);
+    }
+  }
+};
+
+const clearMediaPollingStateForOwner = (ownerAccountKey: string): void => {
+  const ownerSegment = `${MEDIA_STATUS_POLL_KEY_SEPARATOR}${ownerAccountKey}${MEDIA_STATUS_POLL_KEY_SEPARATOR}`;
+  for (const [taskId, tracker] of pendingMediaTasks) {
+    if (tracker.ownerAccountKey === ownerAccountKey) {
+      pendingMediaTasks.delete(taskId);
+    }
+  }
+  for (const key of mediaStatusPollCounts.keys()) {
+    if (key.includes(ownerSegment)) {
+      mediaStatusPollCounts.delete(key);
+    }
+  }
+  for (const key of mediaTasksHandledByStatusPolling) {
+    if (key.includes(ownerSegment)) {
+      mediaTasksHandledByStatusPolling.delete(key);
     }
   }
 };
@@ -4301,6 +4425,8 @@ if (!gotTheLock) {
   // ── Auth IPC handlers ──
 
   let authAccountGeneration = 0;
+  let authExchangeIntentSequence = 0;
+  let activeAuthExchangeIntent: AuthExchangeIntentSnapshot | null = null;
 
   /**
    * Helper: Persist auth tokens into the kv store.
@@ -4312,6 +4438,22 @@ if (!gotTheLock) {
   const getAuthTokens = (): { accessToken: string; refreshToken: string } | null => {
     return getStore().get<{ accessToken: string; refreshToken: string }>('auth_tokens') || null;
   };
+
+  const captureAuthStateSnapshot = (): AuthStateSnapshot | null => {
+    const tokens = getAuthTokens();
+    return tokens
+      ? {
+        accountGeneration: authAccountGeneration,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      }
+      : null;
+  };
+
+  const isCurrentAuthStateSnapshot = (snapshot: AuthStateSnapshot | null): boolean => (
+    snapshot !== null
+    && isAuthStateSnapshotCurrent(snapshot, authAccountGeneration, getAuthTokens())
+  );
 
   const clearAuthTokens = () => {
     getStore().delete('auth_tokens');
@@ -4338,6 +4480,108 @@ if (!gotTheLock) {
     } catch (error) {
       console.warn('[Auth] failed to save auth user for attribution:', error);
     }
+  };
+
+  const getCurrentMediaAccountScope = (): MediaAccountScope | null => {
+    if (!getAuthTokens()) return null;
+    try {
+      const user = getStore().get<Record<string, unknown>>(AUTH_USER_STORE_KEY);
+      const enterpriseContext = getPersistedEnterpriseAccountContext(getStore());
+      if (
+        !enterpriseContext
+        && (
+          user?.accountMode === EnterpriseAccountMode.Enterprise
+          || cachedSubscriptionStatus === AuthSubscriptionStatus.Enterprise
+        )
+      ) {
+        return null;
+      }
+      const ownerAccountKey = createAccountOwnerKey({
+        user,
+        enterpriseId: enterpriseContext?.enterpriseId,
+      });
+      return ownerAccountKey
+        ? { ownerAccountKey, accountGeneration: authAccountGeneration }
+        : null;
+    } catch (error) {
+      console.warn('[MediaGeneration] failed to resolve authenticated account owner:', error);
+      return null;
+    }
+  };
+  resolveCurrentMediaAccountScope = getCurrentMediaAccountScope;
+
+  const notifyAuthQuotaChanged = (): void => {
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) win.webContents.send(AuthIpcChannel.QuotaChanged);
+    });
+  };
+
+  const handleEnterpriseAccountContextMismatch = (
+    code: number,
+    requestAccountScope: MediaAccountScope | null,
+  ): boolean => {
+    const currentAccountScope = getCurrentMediaAccountScope();
+    if (
+      code !== EnterpriseApiErrorCode.AccountModeMismatch
+      || !getAuthTokens()
+      || !isMediaAccountScopeSnapshotCurrent(requestAccountScope, currentAccountScope)
+    ) {
+      return false;
+    }
+
+    authExchangeIntentSequence += 1;
+    activeAuthExchangeIntent = null;
+    authAccountGeneration += 1;
+    const quotaGateChanged = (
+      cachedSubscriptionStatus !== AuthSubscriptionStatus.Free
+      || cachedMediaGenerationEntitled
+    );
+    cachedSubscriptionStatus = AuthSubscriptionStatus.Free;
+    cachedMediaGenerationEntitled = false;
+    clearAuthTokens();
+    clearAuthUser();
+    clearEnterpriseAccountContext(getStore());
+    clearServerModelMetadata();
+    mediaSelectionBySession.clear();
+    mediaTurnAccountScopeBySession.clear();
+    mediaReferencesBySession.clear();
+    if (requestAccountScope) {
+      clearMediaPollingStateForOwner(requestAccountScope.ownerAccountKey);
+    }
+    if (pendingMediaTasks.size === 0) {
+      stopMediaPollTimer();
+    }
+    syncOpenClawConfig({
+      reason: 'enterprise-account-context-invalidated',
+      restartGatewayIfRunning: quotaGateChanged,
+    }).catch(error => {
+      console.warn('[EnterpriseAccount] failed to sync OpenClaw after context invalidation:', error);
+    });
+
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send(EnterpriseAccountIpcChannel.ContextInvalidated);
+      }
+    });
+
+    const dialogOptions = {
+      type: 'warning' as const,
+      title: t('enterpriseAccountContextMismatchTitle'),
+      message: t('enterpriseAccountContextMismatchMessage'),
+      buttons: [t('enterpriseAccountContextMismatchConfirm')],
+    };
+    const ownerWindow = BrowserWindow.getFocusedWindow()
+      ?? (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+    const prompt = ownerWindow
+      ? dialog.showMessageBox(ownerWindow, dialogOptions)
+      : dialog.showMessageBox(dialogOptions);
+    void prompt.catch(error => {
+      console.warn('[EnterpriseAccount] failed to show account context mismatch prompt:', error);
+    });
+    console.warn(
+      `[EnterpriseAccount] invalidated account context and media polling after server code ${code}`,
+    );
+    return true;
   };
 
   const getAuthUserId = (): string | null => {
@@ -4427,6 +4671,11 @@ if (!gotTheLock) {
 
   const authSessionManager = new AuthSessionManager({
     getTokens: getAuthTokens,
+    getSessionKey: () => {
+      if (!getAuthTokens()) return null;
+      const scope = getCurrentMediaAccountScope();
+      return `${scope?.ownerAccountKey ?? 'unresolved'}:${authAccountGeneration}`;
+    },
     saveTokens: tokens => saveAuthTokens(tokens.accessToken, tokens.refreshToken),
     fetch: (url, options) => {
       const headers = new Headers(options?.headers);
@@ -4487,6 +4736,8 @@ if (!gotTheLock) {
     awaitConfigSync?: boolean;
     forceConfigSync?: boolean;
   }): Promise<AvailableServerModel[]> => {
+    const requestAccountGeneration = authAccountGeneration;
+    const requestAccountScope = getCurrentMediaAccountScope();
     const serverBaseUrl = getServerApiBaseUrl();
     const url = appendKeyfromQuery(`${serverBaseUrl}/api/models/available`);
     console.log(`[Auth:getModels] requesting available models at ${url}`);
@@ -4498,11 +4749,25 @@ if (!gotTheLock) {
       throw new Error(`Server model request failed with HTTP ${resp.status}.`);
     }
 
+    const responseAuthState = captureAuthStateSnapshot();
     const data = (await resp.json()) as {
       code: number;
       message?: string;
       data?: AvailableServerModel[];
     };
+    if (
+      authAccountGeneration !== requestAccountGeneration
+      || !isCurrentAuthStateSnapshot(responseAuthState)
+      || !isMediaAccountScopeSnapshotCurrent(
+        requestAccountScope,
+        getCurrentMediaAccountScope(),
+      )
+    ) {
+      throw new Error('Account changed while loading server models');
+    }
+    if (handleEnterpriseAccountContextMismatch(data.code ?? -1, requestAccountScope)) {
+      throw new Error('Enterprise account context changed while loading server models');
+    }
     console.log('[Auth:getModels] Response data:', JSON.stringify(data).slice(0, 500));
     if (data.code !== 0 || !Array.isArray(data.data)) {
       throw new Error(data.message || 'Server model response is invalid.');
@@ -4710,6 +4975,24 @@ if (!gotTheLock) {
     };
   };
 
+  const capturePublishingRequest = (): {
+    accountScope: MediaAccountScope;
+    scopedFetch: typeof fetchWithAuth;
+  } => {
+    const accountScope = getCurrentMediaAccountScope();
+    if (accountScope === null) {
+      throw new Error(t('authLoginRequired'));
+    }
+    return {
+      accountScope,
+      scopedFetch: createAccountScopedFetch(
+        accountScope,
+        getCurrentMediaAccountScope,
+        fetchWithAuth,
+      ),
+    };
+  };
+
   let pendingEnterpriseAccountContextRefresh: {
     generation: number;
     promise: ReturnType<typeof fetchEnterpriseAccountContext>;
@@ -4717,6 +5000,7 @@ if (!gotTheLock) {
 
   const refreshEnterpriseAccountContext = (): ReturnType<typeof fetchEnterpriseAccountContext> => {
     const generation = authAccountGeneration;
+    const requestAccountScope = getCurrentMediaAccountScope();
     if (pendingEnterpriseAccountContextRefresh?.generation === generation) {
       return pendingEnterpriseAccountContextRefresh.promise;
     }
@@ -4726,6 +5010,12 @@ if (!gotTheLock) {
       fetchWithAuth,
       store: getStore(),
       isRequestCurrent: () => authAccountGeneration === generation && getAuthTokens() !== null,
+      onAccountModeMismatch: () => {
+        handleEnterpriseAccountContextMismatch(
+          EnterpriseApiErrorCode.AccountModeMismatch,
+          requestAccountScope,
+        );
+      },
     }).finally(() => {
       if (pendingEnterpriseAccountContextRefresh?.promise === promise) {
         pendingEnterpriseAccountContextRefresh = null;
@@ -4794,6 +5084,25 @@ if (!gotTheLock) {
     const action = (args.action as string) || 'generate';
     const serverBaseUrl = getServerApiBaseUrl();
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);
+    const requestAccountScope = resolveMediaTurnAccountScopeForSession(sessionId);
+    const isRequestAccountCurrent = (): boolean => (
+      requestAccountScope !== null
+      && isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())
+    );
+    const staleAccountResult = () => ({
+      content: [{
+        type: 'text',
+        text: t('authAccountChanged'),
+      }],
+      isError: true,
+      details: { status: 'cancelled', warnings: ['MEDIA_ACCOUNT_CHANGED'] },
+    });
+    if (
+      requestAccountScope === null
+      || !isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())
+    ) {
+      return staleAccountResult();
+    }
     const selection = resolveMediaSelectionForSession(sessionId);
     const prompt = typeof args.prompt === 'string' ? args.prompt : '';
     const explicitModel = canonicalizeMediaModelId(typeof args.model === 'string' ? args.model : '');
@@ -4808,6 +5117,7 @@ if (!gotTheLock) {
         sessionId,
         selection,
       );
+      if (!isRequestAccountCurrent()) return staleAccountResult();
       if (skinPreflight) return skinPreflight;
     }
 
@@ -4853,6 +5163,13 @@ if (!gotTheLock) {
         const resp = await fetchWithAuth(`${serverBaseUrl}${endpoint}`);
         console.log(`[MediaGeneration] server returned HTTP ${resp.status} for ${mediaType} model list.`);
         const body = await resp.json() as { code: number; data?: unknown[]; message?: string };
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
+          return {
+            content: [{ type: 'text', text: t('enterpriseAccountContextMismatchMessage') }],
+            isError: true,
+          };
+        }
         if (body.code !== 0) {
           console.warn('[MediaGeneration] server rejected model list request:', serializeForLog({ mediaType, code: body.code, message: body.message }));
           return { content: [{ type: 'text', text: body.message || 'Failed to list models.' }], isError: true };
@@ -4887,18 +5204,43 @@ if (!gotTheLock) {
           console.warn('[MediaGeneration] blocked status request because taskId was missing.');
           return { content: [{ type: 'text', text: 'taskId is required for status action.' }], isError: true };
         }
-        const pollCount = incrementMediaStatusPollCount(sessionId, taskId);
+        if (requestAccountScope === null) return staleAccountResult();
+        const taskOwnerAccountKey = resolveMediaTaskOwner(taskId);
+        if (!canAccessTrackedMediaTask(taskOwnerAccountKey, requestAccountScope)) {
+          return staleAccountResult();
+        }
+        const pollCount = incrementMediaStatusPollCount(
+          sessionId,
+          requestAccountScope.ownerAccountKey,
+          taskId,
+        );
         const mediaType = tool === MediaGenerationTool.Image ? 'images' : 'videos';
         const statusMediaType = tool === MediaGenerationTool.Image ? 'image' : 'video';
         console.log(`[MediaGeneration] checking ${mediaType} task status for task ${taskId}.`);
         const resp = await fetchWithAuth(`${serverBaseUrl}/api/media/${mediaType}/tasks/${taskId}`);
         console.log(`[MediaGeneration] server returned HTTP ${resp.status} for ${mediaType} task status.`);
         const body = await resp.json() as { code: number; data?: Record<string, unknown>; message?: string };
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
+          return {
+            content: [{ type: 'text', text: t('enterpriseAccountContextMismatchMessage') }],
+            isError: true,
+            details: {
+              status: 'failed',
+              warnings: ['ENTERPRISE_ACCOUNT_CONTEXT_MISMATCH'],
+            },
+          };
+        }
         if (body.code !== 0) {
           console.warn('[MediaGeneration] server rejected task status request:', serializeForLog({ mediaType, taskId, code: body.code, message: body.message }));
           return { content: [{ type: 'text', text: body.message || 'Failed to get task status.' }], isError: true };
         }
         const task = body.data!;
+        rememberMediaTaskOwnership(
+          requestAccountScope.ownerAccountKey,
+          task.taskId,
+          task.upstreamTaskId,
+        );
         const status = task.status as string;
         const resultUrls = (task.resultUrls as string[]) || [];
         const outputModel = mediaModelIdForOutput(task.model);
@@ -4909,7 +5251,11 @@ if (!gotTheLock) {
           ? task.modelSelectionReason.trim()
           : undefined;
         if (sessionId && TERMINAL_MEDIA_TASK_STATUSES.has(status)) {
-          markMediaTaskHandledByStatusPolling(sessionId, taskId);
+          markMediaTaskHandledByStatusPolling(
+            sessionId,
+            requestAccountScope.ownerAccountKey,
+            taskId,
+          );
         }
         const assets = resultUrls.map(url => ({
           type: statusMediaType,
@@ -4921,6 +5267,7 @@ if (!gotTheLock) {
         let detailsAssets: unknown[] = assets;
         if (status === 'succeeded' && statusMediaType === 'image' && sessionId) {
           const persistResult = await persistGeneratedImages(sessionId, assets);
+          if (!isRequestAccountCurrent()) return staleAccountResult();
           if (persistResult && persistResult.saved.length > 0) {
             detailsAssets = persistResult.saved;
             resultLines = persistResult.saved.map(asset =>
@@ -4931,6 +5278,7 @@ if (!gotTheLock) {
           }
         } else if (status === 'succeeded' && statusMediaType === 'video' && sessionId) {
           const persistResult = await persistGeneratedVideos(sessionId, assets);
+          if (!isRequestAccountCurrent()) return staleAccountResult();
           if (persistResult && persistResult.saved.length > 0) {
             detailsAssets = persistResult.saved;
             resultLines = persistResult.saved.map(asset =>
@@ -4987,10 +5335,22 @@ if (!gotTheLock) {
           console.warn('[MediaGeneration] blocked cancel request because taskId was missing.');
           return { content: [{ type: 'text', text: 'taskId is required for cancel action.' }], isError: true };
         }
+        if (requestAccountScope === null) return staleAccountResult();
+        const taskOwnerAccountKey = resolveMediaTaskOwner(taskId);
+        if (!canAccessTrackedMediaTask(taskOwnerAccountKey, requestAccountScope)) {
+          return staleAccountResult();
+        }
         console.log(`[MediaGeneration] cancelling video task ${taskId}.`);
         const resp = await fetchWithAuth(`${serverBaseUrl}/api/media/videos/tasks/${taskId}/cancel`, { method: 'POST' });
         console.log(`[MediaGeneration] server returned HTTP ${resp.status} for video task cancel.`);
         const body = await resp.json() as { code: number; message?: string };
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
+          return {
+            content: [{ type: 'text', text: t('enterpriseAccountContextMismatchMessage') }],
+            isError: true,
+          };
+        }
         if (body.code !== 0) {
           console.warn('[MediaGeneration] server rejected task cancel request:', serializeForLog({ taskId, code: body.code, message: body.message }));
           return { content: [{ type: 'text', text: body.message || 'Failed to cancel task.' }], isError: true };
@@ -5037,6 +5397,7 @@ if (!gotTheLock) {
         const userCancelled = confirmResponse?.behavior === 'deny'
           || confirmResponse?.answers?.[questionText] === '取消';
 
+        if (!isRequestAccountCurrent()) return staleAccountResult();
         if (userCancelled) {
           console.log('[MediaGeneration] user cancelled video generation confirmation.');
           return {
@@ -5217,14 +5578,55 @@ if (!gotTheLock) {
         promptPreview: prompt.slice(0, 120),
         params: summarizeMediaGenerationParamsForLog(params),
       }));
+      if (!isRequestAccountCurrent()) return staleAccountResult();
+      const idempotencyKey = crypto.randomUUID();
       const resp = await fetchWithAuth(`${serverBaseUrl}${endpoint}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
         body: JSON.stringify(generateReq),
       });
       console.log(`[MediaGeneration] server returned HTTP ${resp.status} for ${mediaType} generate request.`);
       const body = await resp.json() as { code: number; data?: Record<string, unknown>; message?: string };
+      if (!isRequestAccountCurrent()) return staleAccountResult();
+      if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
+        return {
+          content: [{ type: 'text', text: t('enterpriseAccountContextMismatchMessage') }],
+          isError: true,
+          details: {
+            status: 'failed',
+            warnings: ['ENTERPRISE_ACCOUNT_CONTEXT_MISMATCH'],
+          },
+        };
+      }
 
+      const enterpriseQuotaError = resolveEnterpriseQuotaError(body.code, body.message);
+      if (enterpriseQuotaError) {
+        console.warn('[MediaGeneration] server rejected generate request because enterprise quota is unavailable:', serializeForLog({
+          mediaType,
+          selectedModel,
+          code: enterpriseQuotaError.code,
+          reason: enterpriseQuotaError.reason,
+          message: body.message,
+        }));
+        notifyAuthQuotaChanged();
+        const message = body.message?.trim() || t('enterpriseMediaQuotaUnavailable');
+        return {
+          content: [{
+            type: 'text',
+            text: `${message} (error ${enterpriseQuotaError.code})`,
+          }],
+          isError: true,
+          details: {
+            status: 'failed',
+            [EnterpriseQuotaMessageMetadataKey.ErrorCode]: enterpriseQuotaError.code,
+            [EnterpriseQuotaMessageMetadataKey.Reason]: enterpriseQuotaError.reason,
+            warnings: [enterpriseQuotaError.reason],
+          },
+        };
+      }
       if (body.code === 40203) {
         console.warn('[MediaGeneration] server rejected generate request because subscription is required.');
         return {
@@ -5251,6 +5653,11 @@ if (!gotTheLock) {
       }
 
       const task = body.data!;
+      rememberMediaTaskOwnership(
+        requestAccountScope.ownerAccountKey,
+        task.taskId,
+        task.upstreamTaskId,
+      );
       const status = task.status as string;
       const resultUrls = (task.resultUrls as string[]) || [];
       const outputModel = mediaModelIdForOutput(task.model, selectedModel);
@@ -5299,6 +5706,7 @@ if (!gotTheLock) {
 
       if (status === 'succeeded' && mediaType === 'image' && sessionId) {
         const persistResult = await persistGeneratedImages(sessionId, assets);
+        if (!isRequestAccountCurrent()) return staleAccountResult();
         if (persistResult && persistResult.saved.length > 0) {
           detailsAssets = persistResult.saved;
           const fileLines = persistResult.saved.map(asset =>
@@ -5311,6 +5719,7 @@ if (!gotTheLock) {
         }
       } else if (status === 'succeeded' && mediaType === 'video' && sessionId) {
         const persistResult = await persistGeneratedVideos(sessionId, assets);
+        if (!isRequestAccountCurrent()) return staleAccountResult();
         if (persistResult && persistResult.saved.length > 0) {
           detailsAssets = persistResult.saved;
           const fileLines = persistResult.saved.map(asset =>
@@ -5328,7 +5737,7 @@ if (!gotTheLock) {
 
       // Register async media tasks for background polling if not already completed.
       if (status !== 'succeeded' && status !== 'failed' && status !== 'cancelled') {
-        if (sessionId) {
+        if (sessionId && requestAccountScope && isRequestAccountCurrent()) {
           const metadata = task.metadata as Record<string, unknown> | undefined;
           const expiresAfterSec = metadata?.execution_expires_after ?? task.execution_expires_after;
           const timeoutMs = typeof expiresAfterSec === 'number' && expiresAfterSec > 0
@@ -5339,6 +5748,8 @@ if (!gotTheLock) {
             sessionId,
             mediaType,
             model: upstreamModel || outputModel,
+            ownerAccountKey: requestAccountScope.ownerAccountKey,
+            accountGeneration: requestAccountScope.accountGeneration,
             startedAt: Date.now(),
             pollCount: 0,
             timeoutMs,
@@ -5346,6 +5757,7 @@ if (!gotTheLock) {
         }
       }
 
+      if (!isRequestAccountCurrent()) return staleAccountResult();
       return {
         content: [{ type: 'text', text: lines.join('\n') }],
         details: {
@@ -5360,10 +5772,11 @@ if (!gotTheLock) {
         },
       };
     } catch (error) {
+      if (!isRequestAccountCurrent()) return staleAccountResult();
       const msg = error instanceof Error ? error.message : String(error);
       if (msg === 'No auth tokens') {
         console.warn('[MediaGeneration] blocked media generation because the user is not logged in.');
-        return { content: [{ type: 'text', text: 'Not logged in. Please log in to use media generation.' }], isError: true };
+        return { content: [{ type: 'text', text: t('authLoginRequired') }], isError: true };
       }
       console.error('[MediaGeneration] media generation request failed:', error);
       return { content: [{ type: 'text', text: `Media generation error: ${msg}` }], isError: true };
@@ -5373,6 +5786,7 @@ if (!gotTheLock) {
   getMcpRuntime().setMediaGenerationHandler(handleMediaGenerationCallback);
 
   const registerMediaTaskForPolling = (tracker: MediaTaskTracker) => {
+    rememberMediaTaskOwnership(tracker.ownerAccountKey, tracker.taskId);
     pendingMediaTasks.set(tracker.taskId, tracker);
     ensureMediaPollTimerRunning();
   };
@@ -5399,16 +5813,37 @@ if (!gotTheLock) {
 
     const serverBaseUrl = getServerApiBaseUrl();
     const now = Date.now();
-    const tasksToRemove: string[] = [];
+    const tasksToRemove = new Map<string, MediaTaskTracker>();
 
     for (const [taskId, tracker] of pendingMediaTasks) {
-      if (isMediaTaskHandledByStatusPolling(tracker.sessionId, taskId)) {
-        tasksToRemove.push(taskId);
+      const reboundAccountScope = rebindMediaAccountScope(
+        tracker.ownerAccountKey,
+        getCurrentMediaAccountScope(),
+      );
+      if (reboundAccountScope === null) {
+        // Keep the task paused in memory. If the user switches back to the
+        // owning account, polling resumes with that account's new generation.
+        continue;
+      }
+      if (tracker.accountGeneration !== reboundAccountScope.accountGeneration) {
+        tracker.accountGeneration = reboundAccountScope.accountGeneration;
+      }
+      const trackerAccountScope: MediaAccountScope = {
+        ownerAccountKey: tracker.ownerAccountKey,
+        accountGeneration: tracker.accountGeneration,
+      };
+
+      if (isMediaTaskHandledByStatusPolling(
+        tracker.sessionId,
+        tracker.ownerAccountKey,
+        taskId,
+      )) {
+        tasksToRemove.set(taskId, tracker);
         continue;
       }
 
       if (now - tracker.startedAt > tracker.timeoutMs) {
-        tasksToRemove.push(taskId);
+        tasksToRemove.set(taskId, tracker);
         emitMediaTaskMessage(tracker.sessionId, `${tracker.mediaType === 'video' ? 'Video' : 'Image'} generation timed out.\nTask ID: ${taskId}\nStatus: timeout`);
         continue;
       }
@@ -5435,16 +5870,28 @@ if (!gotTheLock) {
         const resp = await fetchWithAuth(`${serverBaseUrl}/api/media/${endpoint}/tasks/${taskId}`);
         const body = await resp.json() as { code: number; data?: Record<string, unknown>; message?: string };
 
+        if (!isMediaAccountScopeCurrent(trackerAccountScope, getCurrentMediaAccountScope())) {
+          continue;
+        }
+        if (handleEnterpriseAccountContextMismatch(body.code, trackerAccountScope)) continue;
         if (body.code !== 0) continue;
         const task = body.data!;
+        rememberMediaTaskOwnership(
+          tracker.ownerAccountKey,
+          task.taskId,
+          task.upstreamTaskId,
+        );
         const status = task.status as string;
-        if (isMediaTaskHandledByStatusPolling(tracker.sessionId, taskId)) {
-          tasksToRemove.push(taskId);
+        if (isMediaTaskHandledByStatusPolling(
+          tracker.sessionId,
+          tracker.ownerAccountKey,
+          taskId,
+        )) {
+          tasksToRemove.set(taskId, tracker);
           continue;
         }
 
         if (TERMINAL_MEDIA_TASK_STATUSES.has(status)) {
-          tasksToRemove.push(taskId);
           const resultUrls = (task.resultUrls as string[]) || [];
           const outputModel = mediaModelIdForOutput(task.model, tracker.model);
           const upstreamModel = typeof task.upstreamModel === 'string' && task.upstreamModel.trim()
@@ -5461,6 +5908,9 @@ if (!gotTheLock) {
           }));
           if (status === 'succeeded' && tracker.mediaType === 'image') {
             const persistResult = await persistGeneratedImages(tracker.sessionId, assets);
+            if (!isMediaAccountScopeCurrent(trackerAccountScope, getCurrentMediaAccountScope())) {
+              continue;
+            }
             if (persistResult && persistResult.saved.length > 0) {
               const fileLines = persistResult.saved.map(asset => `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`);
               emitMediaTaskMessage(
@@ -5486,6 +5936,9 @@ if (!gotTheLock) {
             }
           } else if (status === 'succeeded' && tracker.mediaType === 'video') {
             const persistResult = await persistGeneratedVideos(tracker.sessionId, assets);
+            if (!isMediaAccountScopeCurrent(trackerAccountScope, getCurrentMediaAccountScope())) {
+              continue;
+            }
             if (persistResult && persistResult.saved.length > 0) {
               const fileLines = persistResult.saved.map(asset => `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`);
               emitMediaTaskMessage(
@@ -5530,17 +5983,25 @@ if (!gotTheLock) {
             ];
             emitMediaTaskMessage(tracker.sessionId, lines.join('\n'));
           }
-          BrowserWindow.getAllWindows().forEach(win => {
-            if (!win.isDestroyed()) win.webContents.send(AuthIpcChannel.QuotaChanged);
-          });
+          if (!shouldRemoveMediaTaskAfterPoll(
+            trackerAccountScope,
+            getCurrentMediaAccountScope(),
+            true,
+          )) {
+            continue;
+          }
+          tasksToRemove.set(taskId, tracker);
+          notifyAuthQuotaChanged();
         }
       } catch {
         // Network error, retry on next poll
       }
     }
 
-    for (const taskId of tasksToRemove) {
-      pendingMediaTasks.delete(taskId);
+    for (const [taskId, tracker] of tasksToRemove) {
+      if (pendingMediaTasks.get(taskId) === tracker) {
+        pendingMediaTasks.delete(taskId);
+      }
     }
 
     if (pendingMediaTasks.size === 0) {
@@ -5704,8 +6165,20 @@ if (!gotTheLock) {
     reason: AuthSessionChangeReason;
     notifyRenderer: boolean;
   }): void => {
+    const previousAccountScope = getCurrentMediaAccountScope();
     const previousQuotaGateState = getAuthQuotaGateState();
+    authExchangeIntentSequence += 1;
+    activeAuthExchangeIntent = null;
     authAccountGeneration += 1;
+    mediaSelectionBySession.clear();
+    mediaTurnAccountScopeBySession.clear();
+    mediaReferencesBySession.clear();
+    if (previousAccountScope) {
+      clearMediaPollingStateForOwner(previousAccountScope.ownerAccountKey);
+    }
+    if (pendingMediaTasks.size === 0) {
+      stopMediaPollTimer();
+    }
     clearAuthTokens();
     clearAuthUser();
     clearEnterpriseAccountContext(getStore());
@@ -5795,6 +6268,26 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
+    const startingTokens = getAuthTokens();
+    const startingUser = getAuthUser();
+    const startingEnterpriseContext = getPersistedEnterpriseAccountContext(getStore());
+    const startingQuotaGateState = getAuthQuotaGateState();
+    const startingServerModels = getAllServerModelMetadata();
+    const exchangeIntent: AuthExchangeIntentSnapshot = {
+      intentId: ++authExchangeIntentSequence,
+      accountGeneration: authAccountGeneration,
+      accessToken: startingTokens?.accessToken ?? null,
+      refreshToken: startingTokens?.refreshToken ?? null,
+    };
+    activeAuthExchangeIntent = exchangeIntent;
+    const isExchangeIntentCurrent = (): boolean => isAuthExchangeIntentCurrent(
+      exchangeIntent,
+      activeAuthExchangeIntent?.intentId ?? null,
+      authAccountGeneration,
+      getAuthTokens(),
+    );
+    let committedExchangeGeneration: number | null = null;
+
     try {
       const serverBaseUrl = getServerApiBaseUrl();
       const exchangeUrl = `${serverBaseUrl}/api/auth/exchange`;
@@ -5820,8 +6313,14 @@ if (!gotTheLock) {
       if (body.code !== 0 || !body.data) {
         return { success: false, error: body.message || 'Exchange failed' };
       }
-      const previousQuotaGateState = getAuthQuotaGateState();
+      if (!isExchangeIntentCurrent()) {
+        return { success: false, error: t('authAccountChanged') };
+      }
+
+      const previousAccountScope = getCurrentMediaAccountScope();
+      activeAuthExchangeIntent = null;
       authAccountGeneration += 1;
+      const exchangeAccountGeneration = authAccountGeneration;
       clearEnterpriseAccountContext(getStore());
       clearServerModelMetadata();
       // A login exchange can switch accounts without an explicit logout.
@@ -5830,12 +6329,35 @@ if (!gotTheLock) {
       resetAuthQuotaGateState();
       saveAuthTokens(body.data.accessToken, body.data.refreshToken);
       saveAuthUser(body.data.user);
+      committedExchangeGeneration = exchangeAccountGeneration;
       const enterpriseContext = await syncEnterpriseAccountContextFromPayload(body.data);
+      const requiresEnterpriseContext = (
+        readAccountMode(body.data) === EnterpriseAccountMode.Enterprise
+        || body.data.quota.subscriptionStatus === AuthSubscriptionStatus.Enterprise
+      );
+      if (requiresEnterpriseContext && !enterpriseContext) {
+        throw new Error('Enterprise account context was unavailable after token exchange');
+      }
+      if (
+        authAccountGeneration !== exchangeAccountGeneration
+        || authExchangeIntentSequence !== exchangeIntent.intentId
+      ) {
+        return { success: false, error: t('authAccountChanged') };
+      }
+      mediaSelectionBySession.clear();
+      mediaTurnAccountScopeBySession.clear();
+      mediaReferencesBySession.clear();
+      if (previousAccountScope) {
+        clearMediaPollingStateForOwner(previousAccountScope.ownerAccountKey);
+      }
+      if (pendingMediaTasks.size === 0) {
+        stopMediaPollTimer();
+      }
       console.log(
         `[Auth] exchange completed; enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
       );
       const quota = normalizeQuota(body.data.quota);
-      syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
+      syncOpenClawConfigIfAuthQuotaGateChanged(startingQuotaGateState);
       return {
         success: true,
         user: body.data.user,
@@ -5843,15 +6365,63 @@ if (!gotTheLock) {
         enterpriseContext,
       };
     } catch (error) {
+      if (
+        committedExchangeGeneration !== null
+        && authAccountGeneration === committedExchangeGeneration
+        && authExchangeIntentSequence === exchangeIntent.intentId
+      ) {
+        authAccountGeneration += 1;
+        if (startingTokens) {
+          saveAuthTokens(startingTokens.accessToken, startingTokens.refreshToken);
+        } else {
+          clearAuthTokens();
+        }
+        if (startingUser) {
+          saveAuthUser(startingUser);
+        } else {
+          clearAuthUser();
+        }
+        if (startingEnterpriseContext) {
+          persistEnterpriseAccountContext(getStore(), startingEnterpriseContext);
+        } else {
+          clearEnterpriseAccountContext(getStore());
+        }
+        updateServerModelMetadata(startingServerModels);
+        cachedSubscriptionStatus = startingQuotaGateState.subscriptionStatus;
+        cachedMediaGenerationEntitled = startingQuotaGateState.mediaGenerationEntitled;
+        syncOpenClawConfig({
+          reason: 'auth-exchange-rollback',
+          restartGatewayIfRunning: false,
+        }).catch(syncError => {
+          console.warn('[Auth] failed to sync OpenClaw config after exchange rollback:', syncError);
+        });
+        console.warn('[Auth] rolled back local credentials after an incomplete exchange');
+      }
       console.error('[Auth] exchange failed:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Exchange failed',
       };
+    } finally {
+      if (activeAuthExchangeIntent?.intentId === exchangeIntent.intentId) {
+        activeAuthExchangeIntent = null;
+      }
     }
   });
 
   ipcMain.handle(AuthIpcChannel.GetUser, async () => {
+    const createUnavailableResponse = () => {
+      const hasCredentials = Boolean(getAuthTokens());
+      return {
+        success: false,
+        status: hasCredentials
+          ? AuthSessionStatus.TemporarilyUnavailable
+          : AuthSessionStatus.Unauthenticated,
+        hasCredentials,
+        cachedUser: hasCredentials ? getAuthUser() : null,
+      };
+    };
+
     try {
       const tokens = getAuthTokens();
       if (!tokens) {
@@ -5861,9 +6431,14 @@ if (!gotTheLock) {
           hasCredentials: false,
         };
       }
+      const requestAccountGeneration = authAccountGeneration;
+      const requestAccountScope = getCurrentMediaAccountScope();
       const serverBaseUrl = getServerApiBaseUrl();
       // Fetch user profile
       const profileResp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile`);
+      if (authAccountGeneration !== requestAccountGeneration) {
+        return createUnavailableResponse();
+      }
       if (!profileResp.ok) {
         return {
           success: false,
@@ -5872,10 +6447,17 @@ if (!gotTheLock) {
           cachedUser: getAuthUser(),
         };
       }
+      const profileResponseAuthState = captureAuthStateSnapshot();
       const profileBody = (await profileResp.json()) as {
         code: number;
         data: Record<string, unknown>;
       };
+      if (!isCurrentAuthStateSnapshot(profileResponseAuthState)) {
+        return createUnavailableResponse();
+      }
+      if (handleEnterpriseAccountContextMismatch(profileBody.code, requestAccountScope)) {
+        return createUnavailableResponse();
+      }
       if (profileBody.code !== 0 || !profileBody.data) {
         return {
           success: false,
@@ -5887,19 +6469,43 @@ if (!gotTheLock) {
       saveAuthUser(profileBody.data);
       // Fetch quota separately
       const quotaResp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
+      if (authAccountGeneration !== requestAccountGeneration) {
+        return createUnavailableResponse();
+      }
       let quota = null;
       if (quotaResp.ok) {
+        const quotaResponseAuthState = captureAuthStateSnapshot();
         const quotaBody = (await quotaResp.json()) as {
           code: number;
           data: Record<string, unknown>;
         };
+        if (!isCurrentAuthStateSnapshot(quotaResponseAuthState)) {
+          return createUnavailableResponse();
+        }
+        if (handleEnterpriseAccountContextMismatch(quotaBody.code, requestAccountScope)) {
+          return createUnavailableResponse();
+        }
         if (quotaBody.code === 0 && quotaBody.data) {
           const previousQuotaGateState = getAuthQuotaGateState();
           quota = normalizeQuota(quotaBody.data);
           syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
         }
       }
+      if (authAccountGeneration !== requestAccountGeneration) {
+        return createUnavailableResponse();
+      }
       const enterpriseContext = await syncEnterpriseAccountContextFromPayload(profileBody.data);
+      if (authAccountGeneration !== requestAccountGeneration) {
+        return createUnavailableResponse();
+      }
+      const requiresEnterpriseContext = (
+        readAccountMode(profileBody.data) === EnterpriseAccountMode.Enterprise
+        || quota?.subscriptionStatus === AuthSubscriptionStatus.Enterprise
+      );
+      if (requiresEnterpriseContext && !enterpriseContext) {
+        console.warn('[Auth] enterprise account context was unavailable during profile refresh');
+        return createUnavailableResponse();
+      }
       console.log(
         `[Auth] profile refresh completed; quota=${quota ? 'present' : 'absent'}; `
         + `enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
@@ -5931,15 +6537,24 @@ if (!gotTheLock) {
     try {
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
+      const requestAccountGeneration = authAccountGeneration;
+      const requestAccountScope = getCurrentMediaAccountScope();
       const serverBaseUrl = getServerApiBaseUrl();
       const resp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
+      if (authAccountGeneration !== requestAccountGeneration) return { success: false };
       if (!resp.ok) return { success: false };
+      const responseAuthState = captureAuthStateSnapshot();
       const body = (await resp.json()) as { code: number; data: Record<string, unknown> };
+      if (!isCurrentAuthStateSnapshot(responseAuthState)) return { success: false };
+      if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
+        return { success: false };
+      }
       if (body.code !== 0 || !body.data) return { success: false };
       const previousQuotaGateState = getAuthQuotaGateState();
       const quota = normalizeQuota(body.data);
       syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
       const enterpriseContextResult = await refreshEnterpriseAccountContext();
+      if (authAccountGeneration !== requestAccountGeneration) return { success: false };
       return {
         success: true,
         quota,
@@ -5954,12 +6569,31 @@ if (!gotTheLock) {
     try {
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
+      const requestAccountGeneration = authAccountGeneration;
+      const requestAccountScope = getCurrentMediaAccountScope();
+      if (requestAccountScope === null) return { success: false };
       const serverBaseUrl = getServerApiBaseUrl();
       const profileSummaryUrl = appendKeyfromQuery(`${serverBaseUrl}/api/user/profile-summary`);
       console.log(`[Auth] requesting profile summary at ${profileSummaryUrl}`);
       const resp = await fetchWithAuth(profileSummaryUrl);
+      if (
+        authAccountGeneration !== requestAccountGeneration
+        || !isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())
+      ) {
+        return { success: false };
+      }
       if (!resp.ok) return { success: false };
+      const responseAuthState = captureAuthStateSnapshot();
       const body = (await resp.json()) as { code: number; data: Record<string, unknown> };
+      if (
+        !isCurrentAuthStateSnapshot(responseAuthState)
+        || !isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())
+      ) {
+        return { success: false };
+      }
+      if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
+        return { success: false };
+      }
       if (body.code !== 0 || !body.data) return { success: false };
       return { success: true, data: body.data };
     } catch {
@@ -6024,40 +6658,34 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(AuthIpcChannel.Logout, async () => {
-    try {
-      const tokens = getAuthTokens();
-      if (tokens) {
+    const tokens = getAuthTokens();
+    const enterpriseHeaders = getEnterpriseAccountHeaders();
+    const logoutBody = JSON.stringify(withKeyfromBody({}));
+    clearLocalAuthSession({
+      reason: AuthSessionChangeReason.UserLogout,
+      notifyRenderer: false,
+    });
+    console.log('[Auth] cleared local login state and scheduled server model config refresh');
+
+    if (tokens) {
+      try {
         const serverBaseUrl = getServerApiBaseUrl();
         const logoutUrl = `${serverBaseUrl}/api/auth/logout`;
         console.log(`[Auth] requesting logout at ${logoutUrl}`);
-        await net
-          .fetch(logoutUrl, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${tokens.accessToken}`,
-              'Content-Type': 'application/json',
-              ...getEnterpriseAccountHeaders(),
-            },
-            body: JSON.stringify(withKeyfromBody({})),
-          })
-          .catch(() => {
-            /* best-effort */
-          });
+        await net.fetch(logoutUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${tokens.accessToken}`,
+            'Content-Type': 'application/json',
+            ...enterpriseHeaders,
+          },
+          body: logoutBody,
+        });
+      } catch (error) {
+        console.warn('[Auth] remote logout failed after local credentials were cleared:', error);
       }
-      clearLocalAuthSession({
-        reason: AuthSessionChangeReason.UserLogout,
-        notifyRenderer: false,
-      });
-      console.log('[Auth] cleared login state and scheduled server model config refresh');
-      return { success: true };
-    } catch (error) {
-      console.warn('[Auth] logout cleanup encountered an error; clearing local state anyway:', error);
-      clearLocalAuthSession({
-        reason: AuthSessionChangeReason.UserLogout,
-        notifyRenderer: false,
-      });
-      return { success: true };
     }
+    return { success: true };
   });
 
   ipcMain.handle(AuthIpcChannel.RefreshToken, async () => {
@@ -6137,6 +6765,7 @@ if (!gotTheLock) {
   ipcMain.handle(HtmlShareIpc.CreateFromHtmlFile, async (_event, input: unknown) => {
     let archivePath: string | undefined;
     try {
+      const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeCreateFromHtmlFileInput(input);
       console.debug(
         `[HtmlShare] received HTML file share request for session ${options.sessionId} and artifact ${options.artifactId}`,
@@ -6153,7 +6782,7 @@ if (!gotTheLock) {
       const result = await uploadHtmlShare(
         getServerApiBaseUrl(),
         getHtmlSharePublicBaseUrl(),
-        fetchWithAuth,
+        scopedFetch,
         {
           archivePath: packaged.archivePath,
           sourceType: HtmlShareSourceType.HtmlFile,
@@ -6215,6 +6844,7 @@ if (!gotTheLock) {
   ipcMain.handle(HtmlShareIpc.UpdateFromHtmlFile, async (_event, input: unknown) => {
     let archivePath: string | undefined;
     try {
+      const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeUpdateFromHtmlFileInput(input);
       const clientSourceKey = buildHtmlShareClientSourceKey(options.filePath);
       const packaged = await packageHtmlFile(options.filePath);
@@ -6222,7 +6852,7 @@ if (!gotTheLock) {
       const result = await updateHtmlShare(
         getServerApiBaseUrl(),
         getHtmlSharePublicBaseUrl(),
-        fetchWithAuth,
+        scopedFetch,
         options.shareId,
         {
           archivePath: packaged.archivePath,
@@ -6262,6 +6892,7 @@ if (!gotTheLock) {
   ipcMain.handle(HtmlShareIpc.CreateFromArtifactFile, async (_event, input: unknown) => {
     let archivePath: string | undefined;
     try {
+      const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeCreateFromArtifactFileInput(input);
       console.debug(
         `[HtmlShare] received ${options.sourceType} share request for session ${options.sessionId} and artifact ${options.artifactId}`,
@@ -6281,7 +6912,7 @@ if (!gotTheLock) {
       const result = await uploadHtmlShare(
         getServerApiBaseUrl(),
         getHtmlSharePublicBaseUrl(),
-        fetchWithAuth,
+        scopedFetch,
         {
           archivePath: packaged.archivePath,
           sourceType: options.sourceType,
@@ -6340,6 +6971,7 @@ if (!gotTheLock) {
   ipcMain.handle(HtmlShareIpc.UpdateFromArtifactFile, async (_event, input: unknown) => {
     let archivePath: string | undefined;
     try {
+      const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeUpdateFromArtifactFileInput(input);
       const clientSourceKey = buildArtifactShareClientSourceKey(options);
       const packaged = await packageArtifactFile({
@@ -6353,7 +6985,7 @@ if (!gotTheLock) {
       const result = await updateHtmlShare(
         getServerApiBaseUrl(),
         getHtmlSharePublicBaseUrl(),
-        fetchWithAuth,
+        scopedFetch,
         options.shareId,
         {
           archivePath: packaged.archivePath,
@@ -6557,6 +7189,7 @@ if (!gotTheLock) {
   ipcMain.handle(ShareDeploymentIpc.CreateNodeDeployment, async (_event, input: unknown) => {
     let archivePath: string | undefined;
     try {
+      const { accountScope, scopedFetch } = capturePublishingRequest();
       const options = sanitizeShareDeploymentCreateNodeInput(input);
       const operationSourceKey = buildNodeDeploymentClientSourceKey({
         sessionId: options.sessionId,
@@ -6566,7 +7199,8 @@ if (!gotTheLock) {
       console.debug(
         `[ShareDeployment] received node deployment request for session ${options.sessionId} and artifact ${options.artifactId}`,
       );
-      return await shareDeploymentOperationCoordinator.run(operationSourceKey, async () => {
+      const accountOperationKey = `${accountScope.ownerAccountKey}:${operationSourceKey}`;
+      return await shareDeploymentOperationCoordinator.run(accountOperationKey, async () => {
         const packaged = await packageNodeServiceDeployment({
           projectDirectory: options.projectDirectory,
           localServiceUrl: options.localServiceUrl,
@@ -6597,7 +7231,7 @@ if (!gotTheLock) {
           ? await uploadStaticDeployment(
               serverBaseUrl,
               publicBaseUrl,
-              fetchWithAuth,
+              scopedFetch,
               {
                 ...options,
                 archivePath: packaged.archivePath,
@@ -6613,7 +7247,7 @@ if (!gotTheLock) {
           : await uploadNodeDeployment(
               serverBaseUrl,
               publicBaseUrl,
-              fetchWithAuth,
+              scopedFetch,
               {
                 ...options,
                 archivePath: packaged.archivePath,
@@ -6637,14 +7271,14 @@ if (!gotTheLock) {
               updateAccessMode: (shareId, accessMode) => updateHtmlShareAccessMode(
                 serverBaseUrl,
                 publicBaseUrl,
-                fetchWithAuth,
+                scopedFetch,
                 shareId,
                 accessMode,
               ),
               updateStatus: (shareId, status) => updateHtmlShareStatus(
                 serverBaseUrl,
                 publicBaseUrl,
-                fetchWithAuth,
+                scopedFetch,
                 shareId,
                 status,
               ),
@@ -6750,18 +7384,25 @@ if (!gotTheLock) {
   });
 
   // Media generation IPC handlers
-  ipcMain.handle('media:getModels', async (_event, type: 'image' | 'video') => {
+  ipcMain.handle(CoworkIpcChannel.GetMediaModels, async (_event, type: 'image' | 'video') => {
     try {
       const tokens = getAuthTokens();
-      if (!tokens) {
+      const requestAccountScope = getCurrentMediaAccountScope();
+      if (!tokens || requestAccountScope === null) {
         console.warn('[Media:getModels] No auth tokens, skipping');
-        return { success: false, error: 'Not logged in' };
+        return { success: false, error: t('authLoginRequired') };
       }
       const serverBaseUrl = getServerApiBaseUrl();
       const endpoint = type === 'image' ? '/api/media/images/models' : '/api/media/videos/models';
       const resp = await fetchWithAuth(`${serverBaseUrl}${endpoint}`);
-      if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
       const body = await resp.json() as { code: number; data?: unknown[]; message?: string };
+      if (!isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
+        return { success: false, error: t('authAccountChanged') };
+      }
+      if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
+        return { success: false, error: t('enterpriseAccountContextMismatchMessage') };
+      }
+      if (!resp.ok) return { success: false, error: body.message || `HTTP ${resp.status}` };
       if (body.code !== 0) return { success: false, error: body.message };
       const models = (body.data || []).map(model => {
         const mediaModel = model as { modelId?: string; displayName?: string };
@@ -6782,17 +7423,36 @@ if (!gotTheLock) {
   ipcMain.handle('media:getTaskStatus', async (_event, taskId: number, type: 'image' | 'video') => {
     try {
       const tokens = getAuthTokens();
-      if (!tokens) return { success: false, error: 'Not logged in' };
+      const requestAccountScope = getCurrentMediaAccountScope();
+      if (!tokens || requestAccountScope === null) {
+        return { success: false, error: t('authLoginRequired') };
+      }
+      const taskOwnerAccountKey = resolveMediaTaskOwner(taskId);
+      if (!canAccessTrackedMediaTask(taskOwnerAccountKey, requestAccountScope)) {
+        return { success: false, error: t('mediaTaskAccountMismatch') };
+      }
       const serverBaseUrl = getServerApiBaseUrl();
       const mediaPath = type === 'image' ? 'images' : 'videos';
       const taskUrl = `${serverBaseUrl}/api/media/${mediaPath}/tasks/${taskId}`;
       console.log('[Media:getTaskStatus] Fetching:', taskUrl);
       const resp = await fetchWithAuth(taskUrl);
       console.log('[Media:getTaskStatus] Response status:', resp.status);
-      if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
       const body = await resp.json() as { code: number; data?: unknown; message?: string };
       console.log('[Media:getTaskStatus] Response body:', JSON.stringify(body));
+      if (!isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
+        return { success: false, error: t('authAccountChanged') };
+      }
+      if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
+        return { success: false, error: t('enterpriseAccountContextMismatchMessage') };
+      }
+      if (!resp.ok) return { success: false, error: body.message || `HTTP ${resp.status}` };
       if (body.code !== 0) return { success: false, error: body.message };
+      const task = body.data as Record<string, unknown> | undefined;
+      rememberMediaTaskOwnership(
+        requestAccountScope.ownerAccountKey,
+        task?.taskId,
+        task?.upstreamTaskId,
+      );
       return { success: true, task: body.data };
     } catch (e) {
       console.error('[Media:getTaskStatus] Error:', e);
@@ -7272,6 +7932,7 @@ if (!gotTheLock) {
     ) => {
       try {
         const ipcStartedAtMs = Date.now();
+        const requestAccountScope = getCurrentMediaAccountScope();
         console.log(
           '[CoworkFirstResponseTiming] start IPC received.',
           `Prompt length ${options.prompt.length}.`,
@@ -7290,6 +7951,15 @@ if (!gotTheLock) {
         const engineStatus = await ensureOpenClawRunningForCowork();
         if (engineStatus.phase !== 'running') {
           return getEngineNotReadyResponse(engineStatus);
+        }
+        if (!isMediaAccountScopeSnapshotCurrent(
+          requestAccountScope,
+          getCurrentMediaAccountScope(),
+        )) {
+          return {
+            success: false,
+            error: t('authAccountChanged'),
+          };
         }
 
         const coworkStoreInstance = getCoworkStore();
@@ -7361,8 +8031,20 @@ if (!gotTheLock) {
           mediaGenerationEntitled: cachedMediaGenerationEntitled,
         });
         const { workflowKind, mediaSelection: normalizedMediaSelection } = skinTurn;
-        if (normalizedMediaSelection && normalizedMediaSelection.mode !== 'none') {
-          mediaSelectionBySession.set(session.id, normalizedMediaSelection);
+        if (requestAccountScope) {
+          mediaTurnAccountScopeBySession.set(session.id, requestAccountScope);
+        } else {
+          mediaTurnAccountScopeBySession.delete(session.id);
+        }
+        if (
+          requestAccountScope
+          && normalizedMediaSelection
+          && normalizedMediaSelection.mode !== 'none'
+        ) {
+          mediaSelectionBySession.set(
+            session.id,
+            bindAccountValue(normalizedMediaSelection, requestAccountScope),
+          );
         } else {
           mediaSelectionBySession.delete(session.id);
         }
@@ -7491,6 +8173,7 @@ if (!gotTheLock) {
     ) => {
       try {
         const ipcStartedAtMs = Date.now();
+        const requestAccountScope = getCurrentMediaAccountScope();
         console.log(
           '[CoworkFirstResponseTiming] continue IPC received.',
           `Session ${options.sessionId}.`,
@@ -7506,6 +8189,15 @@ if (!gotTheLock) {
         const engineStatus = await ensureOpenClawRunningForCowork();
         if (engineStatus.phase !== 'running') {
           return getEngineNotReadyResponse(engineStatus);
+        }
+        if (!isMediaAccountScopeSnapshotCurrent(
+          requestAccountScope,
+          getCurrentMediaAccountScope(),
+        )) {
+          return {
+            success: false,
+            error: t('authAccountChanged'),
+          };
         }
 
         const runtime = getCoworkEngineRouter();
@@ -7548,8 +8240,20 @@ if (!gotTheLock) {
           mediaGenerationEntitled: cachedMediaGenerationEntitled,
         });
         const { workflowKind, mediaSelection: normalizedMediaSelection } = skinTurn;
-        if (normalizedMediaSelection && normalizedMediaSelection.mode !== 'none') {
-          mediaSelectionBySession.set(options.sessionId, normalizedMediaSelection);
+        if (requestAccountScope) {
+          mediaTurnAccountScopeBySession.set(options.sessionId, requestAccountScope);
+        } else {
+          mediaTurnAccountScopeBySession.delete(options.sessionId);
+        }
+        if (
+          requestAccountScope
+          && normalizedMediaSelection
+          && normalizedMediaSelection.mode !== 'none'
+        ) {
+          mediaSelectionBySession.set(
+            options.sessionId,
+            bindAccountValue(normalizedMediaSelection, requestAccountScope),
+          );
         } else {
           mediaSelectionBySession.delete(options.sessionId);
         }
@@ -7770,6 +8474,7 @@ if (!gotTheLock) {
       ? options.clientSteerId.trim()
       : `steer-${Date.now()}`;
     try {
+      const requestAccountScope = getCurrentMediaAccountScope();
       const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
       const text = typeof options?.text === 'string' ? options.text.trim() : '';
       if (!sessionId || !text) {
@@ -7779,6 +8484,19 @@ if (!gotTheLock) {
           clientSteerId,
           reason: CoworkSteerRejectReason.EmptyInput,
           error: 'Session id and steer input are required.',
+        };
+      }
+      const requestTurnAccountScope = resolveMediaTurnAccountScopeForSession(sessionId);
+      if (!isMediaAccountScopeSnapshotCurrent(
+        requestAccountScope,
+        requestTurnAccountScope,
+      )) {
+        return {
+          success: false,
+          status: CoworkSteerStatus.Rejected,
+          clientSteerId,
+          reason: CoworkSteerRejectReason.RuntimeRejected,
+          error: t('mediaTaskAccountMismatch'),
         };
       }
       console.debug(
@@ -7797,6 +8515,24 @@ if (!gotTheLock) {
           reason: CoworkSteerRejectReason.RuntimeRejected,
         };
       }
+      if (
+        !isMediaAccountScopeSnapshotCurrent(
+          requestAccountScope,
+          getCurrentMediaAccountScope(),
+        )
+        || !isMediaAccountScopeSnapshotCurrent(
+          requestTurnAccountScope,
+          resolveMediaTurnAccountScopeForSession(sessionId),
+        )
+      ) {
+        return {
+          success: false,
+          status: CoworkSteerStatus.Rejected,
+          clientSteerId,
+          reason: CoworkSteerRejectReason.RuntimeRejected,
+          error: t('authAccountChanged'),
+        };
+      }
 
       const runtime = getCoworkEngineRouter();
       if (!runtime.submitSteer) {
@@ -7810,6 +8546,18 @@ if (!gotTheLock) {
       }
 
       const result = await runtime.submitSteer(sessionId, text, clientSteerId);
+      if (!isMediaAccountScopeSnapshotCurrent(
+        requestAccountScope,
+        getCurrentMediaAccountScope(),
+      )) {
+        return {
+          success: false,
+          status: CoworkSteerStatus.Rejected,
+          clientSteerId,
+          reason: CoworkSteerRejectReason.RuntimeRejected,
+          error: t('authAccountChanged'),
+        };
+      }
       console.debug(
         '[CoworkSteer] steer IPC completed.',
         `Session ${sessionId}.`,
@@ -7933,6 +8681,7 @@ if (!gotTheLock) {
       const coworkStoreInstance = getCoworkStore();
       coworkStoreInstance.deleteSession(sessionId);
       mediaSelectionBySession.delete(sessionId);
+      mediaTurnAccountScopeBySession.delete(sessionId);
       skinRuntimeController?.handleSessionDeleted(sessionId);
       mediaReferencesBySession.delete(sessionId);
       getDesktopNotificationManager().handleSessionDeleted(sessionId);
@@ -7940,9 +8689,7 @@ if (!gotTheLock) {
       for (const [taskId, tracker] of pendingMediaTasks) {
         if (tracker.sessionId === sessionId) pendingMediaTasks.delete(taskId);
       }
-      for (const key of mediaTasksHandledByStatusPolling) {
-        if (key.startsWith(`${sessionId}:`)) mediaTasksHandledByStatusPolling.delete(key);
-      }
+      clearHandledMediaTasksForSession(sessionId);
       clearMediaStatusPollCountsForSession(sessionId);
       // Clean up IM session mapping so that new channel messages
       // create a fresh session instead of referencing a deleted one.
@@ -8418,11 +9165,25 @@ if (!gotTheLock) {
     getCoworkEngineRouter,
   });
 
-  ipcMain.handle('cowork:media:cancel', async (_event, taskId: string) => {
+  ipcMain.handle(CoworkIpcChannel.CancelMediaTask, async (_event, taskId: string) => {
     try {
+      const requestAccountScope = getCurrentMediaAccountScope();
+      if (requestAccountScope === null) {
+        return { success: false, message: t('authLoginRequired') };
+      }
+      const taskOwnerAccountKey = resolveMediaTaskOwner(taskId);
+      if (!canAccessTrackedMediaTask(taskOwnerAccountKey, requestAccountScope)) {
+        return { success: false, message: t('mediaTaskAccountMismatch') };
+      }
       const serverBaseUrl = getServerApiBaseUrl();
       const resp = await fetchWithAuth(`${serverBaseUrl}/api/media/videos/tasks/${taskId}/cancel`, { method: 'POST' });
       const body = await resp.json() as { code: number; message?: string };
+      if (!isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
+        return { success: false, message: t('authAccountChanged') };
+      }
+      if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
+        return { success: false, message: t('enterpriseAccountContextMismatchMessage') };
+      }
       if (body.code === 0) {
         return { success: true };
       }
@@ -11806,6 +12567,9 @@ if (!gotTheLock) {
     skillManager?.stopWatching();
     stopMediaPollTimer();
     pendingMediaTasks.clear();
+    mediaTaskOwnerById.clear();
+    mediaSelectionBySession.clear();
+    mediaTurnAccountScopeBySession.clear();
     mediaTasksHandledByStatusPolling.clear();
     mediaStatusPollCounts.clear();
 

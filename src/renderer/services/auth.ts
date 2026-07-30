@@ -1,9 +1,12 @@
+import { createAccountOwnerKey } from '@shared/auth/accountOwner';
 import {
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
   type AuthSessionChangedEvent,
   AuthSessionStatus,
+  AuthSubscriptionStatus,
 } from '@shared/auth/constants';
+import { EnterpriseAccountMode } from '@shared/enterpriseAccount/constants';
 import { ProviderName } from '@shared/providers';
 import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles';
 
@@ -15,6 +18,7 @@ import {
 import { store } from '../store';
 import {
   clearProfileSummary,
+  invalidateAuthAccountContext,
   setAuthExpired,
   setAuthLoading,
   setAuthTemporarilyUnavailable,
@@ -25,6 +29,7 @@ import {
   type UserProfile,
   type UserQuota,
 } from '../store/slices/authSlice';
+import { clearMediaAccountState } from '../store/slices/coworkSlice';
 import type { Model } from '../store/slices/modelSlice';
 import {
   clearServerModels,
@@ -94,6 +99,21 @@ const readPositiveNumber = (value: unknown): number | undefined => (
 );
 
 type AuthRendererLogLevel = 'debug' | 'info' | 'warn';
+
+export interface AuthAccountRequestSnapshot {
+  isLoggedIn: boolean;
+  ownerAccountKey: string | null;
+  accountGeneration: number;
+}
+
+export const isAuthAccountRequestCurrent = (
+  expected: AuthAccountRequestSnapshot,
+  current: AuthAccountRequestSnapshot,
+): boolean => (
+  current.isLoggedIn === expected.isLoggedIn
+  && current.ownerAccountKey === expected.ownerAccountKey
+  && current.accountGeneration === expected.accountGeneration
+);
 
 const writeAuthRendererLog = (
   level: AuthRendererLogLevel,
@@ -202,6 +222,7 @@ class AuthService {
   private unsubLifecycleEvent: (() => void) | null = null;
   private unsubQuotaChanged: (() => void) | null = null;
   private unsubSessionChanged: (() => void) | null = null;
+  private unsubEnterpriseContextInvalidated: (() => void) | null = null;
   private unsubWindowState: (() => void) | null = null;
   private pendingQuotaCheck: Promise<AuthQuotaCheckResult> | null = null;
   private lastRefreshTime = 0;
@@ -212,12 +233,49 @@ class AuthService {
     quota: UserQuota | null | undefined,
     enterpriseContext: EnterpriseAccountContext | null | undefined,
   ): void {
+    const isEnterpriseAccount = (
+      user.accountMode === EnterpriseAccountMode.Enterprise
+      || quota?.accountMode === EnterpriseAccountMode.Enterprise
+      || quota?.subscriptionStatus === AuthSubscriptionStatus.Enterprise
+    );
+    const hasMismatchedEnterpriseId = (
+      enterpriseContext !== null
+      && enterpriseContext !== undefined
+      && typeof quota?.enterpriseId === 'number'
+      && quota.enterpriseId !== enterpriseContext.enterpriseId
+    );
+    const ownerAccountKey = createAccountOwnerKey({
+      user,
+      enterpriseId: enterpriseContext?.enterpriseId,
+    });
+    if (
+      !ownerAccountKey
+      || (isEnterpriseAccount && !enterpriseContext)
+      || hasMismatchedEnterpriseId
+    ) {
+      this.clearAuthenticatedAccountState();
+      throw new Error('Authenticated account context is missing or inconsistent');
+    }
+    if (store.getState().auth.ownerAccountKey !== ownerAccountKey) {
+      store.dispatch(clearMediaAccountState());
+    }
     store.dispatch(clearServerModels());
-    store.dispatch(setLoggedIn({ user, quota: quota ?? null }));
+    store.dispatch(setLoggedIn({
+      user,
+      quota: quota ?? null,
+      ownerAccountKey,
+    }));
     const context = applyEnterpriseAccountContext(enterpriseContext);
     if (context) {
       store.dispatch(clearProfileSummary());
     }
+  }
+
+  private clearAuthenticatedAccountState(): void {
+    store.dispatch(setLoggedOut());
+    applyEnterpriseAccountContext(null);
+    store.dispatch(clearServerModels());
+    store.dispatch(clearMediaAccountState());
   }
 
   /**
@@ -237,6 +295,13 @@ class AuthService {
       void this.handleSessionChanged(event);
     });
     this.unsubLifecycleEvent = window.electron.auth.onLifecycleEvent(reportAuthLifecycleEvent);
+    this.unsubEnterpriseContextInvalidated = window.electron.enterpriseAccount.onContextInvalidated(() => {
+      this.clearAuthenticatedAccountState();
+      writeAuthRendererLog(
+        'warn',
+        'Enterprise account context was invalidated by the server; account-scoped media state was cleared',
+      );
+    });
 
     try {
       const pendingCode = await window.electron.auth.getPendingCallback();
@@ -333,6 +398,8 @@ class AuthService {
       const result = await window.electron.auth.exchange(code);
       if (result.success && result.user) {
         writeAuthRendererLog('info', 'login callback exchange succeeded');
+        store.dispatch(invalidateAuthAccountContext());
+        store.dispatch(clearMediaAccountState());
         this.applyAuthenticatedState(
           result.user,
           result.quota,
@@ -359,12 +426,43 @@ class AuthService {
       reportLifecycle?: boolean;
     } = {},
   ): Promise<AuthStateRefreshResult> {
+    const authStateAtStart = store.getState().auth;
     try {
       const result = await window.electron.auth.getUser();
+      if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
+        writeAuthRendererLog(
+          'debug',
+          'discarded stale auth restoration response after auth state changed',
+        );
+        const current = store.getState().auth;
+        return {
+          isLoggedIn: current.isLoggedIn,
+          user: current.user,
+          quota: current.quota,
+          enterpriseContext: store.getState().enterpriseAccount.context,
+        };
+      }
       if (result.success && result.user) {
         const enterpriseContext = result.enterpriseContext === undefined
-          ? await refreshEnterpriseAccountContext()
+          ? await refreshEnterpriseAccountContext({
+            shouldApply: () => (
+              isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)
+            ),
+          })
           : result.enterpriseContext;
+        if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
+          writeAuthRendererLog(
+            'debug',
+            'discarded stale auth restoration response after enterprise context refresh',
+          );
+          const current = store.getState().auth;
+          return {
+            isLoggedIn: current.isLoggedIn,
+            user: current.user,
+            quota: current.quota,
+            enterpriseContext: store.getState().enterpriseAccount.context,
+          };
+        }
         this.applyAuthenticatedState(result.user, result.quota, enterpriseContext);
         await this.loadServerModels();
         void this.fetchProfileSummary();
@@ -438,7 +536,11 @@ class AuthService {
    */
   async refreshQuota(): Promise<boolean> {
     const authStateAtStart = store.getState().auth;
-    if (!authStateAtStart.isLoggedIn || !authStateAtStart.user) {
+    if (
+      !authStateAtStart.isLoggedIn
+      || !authStateAtStart.user
+      || !authStateAtStart.ownerAccountKey
+    ) {
       return false;
     }
     try {
@@ -446,7 +548,8 @@ class AuthService {
       const currentAuthState = store.getState().auth;
       if (
         !currentAuthState.isLoggedIn
-        || currentAuthState.user !== authStateAtStart.user
+        || currentAuthState.ownerAccountKey !== authStateAtStart.ownerAccountKey
+        || currentAuthState.accountGeneration !== authStateAtStart.accountGeneration
       ) {
         const message = 'Discarded stale quota response after auth state changed';
         console.debug(`[Auth] ${message}`);
@@ -537,8 +640,23 @@ class AuthService {
       store.dispatch(clearProfileSummary());
       return;
     }
+    const authStateAtStart = store.getState().auth;
+    if (
+      !authStateAtStart.isLoggedIn
+      || !authStateAtStart.ownerAccountKey
+    ) {
+      return;
+    }
     try {
       const result = await window.electron.auth.getProfileSummary();
+      const currentAuthState = store.getState().auth;
+      if (
+        !isAuthAccountRequestCurrent(authStateAtStart, currentAuthState)
+        || store.getState().enterpriseAccount.context
+      ) {
+        writeAuthRendererLog('debug', 'discarded stale profile summary response after auth state changed');
+        return;
+      }
       if (result.success && result.data) {
         store.dispatch(setProfileSummary(result.data));
       }
@@ -576,6 +694,8 @@ class AuthService {
     this.unsubQuotaChanged = null;
     this.unsubSessionChanged?.();
     this.unsubSessionChanged = null;
+    this.unsubEnterpriseContextInvalidated?.();
+    this.unsubEnterpriseContextInvalidated = null;
     this.unsubWindowState?.();
     this.unsubWindowState = null;
   }
@@ -607,6 +727,7 @@ class AuthService {
     store.dispatch(expired ? setAuthExpired() : setLoggedOut());
     applyEnterpriseAccountContext(null);
     store.dispatch(clearServerModels());
+    store.dispatch(clearMediaAccountState());
     await this.loadPublicPricingCatalogModels();
   }
 
@@ -614,8 +735,19 @@ class AuthService {
    * Load available models from server and dispatch to store.
    */
   private async loadServerModels() {
+    const authStateAtStart = store.getState().auth;
+    if (
+      !authStateAtStart.isLoggedIn
+      || !authStateAtStart.ownerAccountKey
+    ) {
+      return;
+    }
     try {
       const modelsResult = await window.electron.auth.getModels();
+      if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
+        writeAuthRendererLog('debug', 'discarded stale server model response after auth state changed');
+        return;
+      }
       if (modelsResult.success && modelsResult.models) {
         const serverModels = mapAvailableServerModelsToModels(modelsResult.models);
         store.dispatch(setServerModels(serverModels));
@@ -632,8 +764,16 @@ class AuthService {
    * Load public pricing catalog models for unauthenticated read-only display.
    */
   private async loadPublicPricingCatalogModels() {
+    const authStateAtStart = store.getState().auth;
+    if (authStateAtStart.isLoggedIn || authStateAtStart.ownerAccountKey) {
+      return;
+    }
     try {
       const catalogResult = await window.electron.auth.getPricingCatalog();
+      if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
+        writeAuthRendererLog('debug', 'discarded stale public pricing catalog after auth state changed');
+        return;
+      }
       if (!catalogResult.success || !catalogResult.textModels) {
         return;
       }

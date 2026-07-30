@@ -16,6 +16,7 @@ import { setLoggedIn, setLoggedOut } from '../store/slices/authSlice';
 import { clearServerModels } from '../store/slices/modelSlice';
 import {
   authService,
+  isAuthAccountRequestCurrent,
   mapAvailableServerModelsToModels,
   mapPricingCatalogTextModelsToServerModels,
   mapPricingCatalogToPublicServerModels,
@@ -120,6 +121,67 @@ describe('authenticated server model mapping', () => {
       contextWindow: 1_048_576,
       maxTokens: 8_192,
       accessible: true,
+    });
+  });
+});
+
+describe('auth-scoped renderer requests', () => {
+  test('rejects late model, profile, and public-catalog responses after auth changes', () => {
+    const personalA = {
+      isLoggedIn: true,
+      ownerAccountKey: 'personal:6',
+      accountGeneration: 3,
+    };
+
+    expect(isAuthAccountRequestCurrent(personalA, { ...personalA })).toBe(true);
+    expect(isAuthAccountRequestCurrent(personalA, {
+      isLoggedIn: true,
+      ownerAccountKey: 'enterprise:6:1001',
+      accountGeneration: 4,
+    })).toBe(false);
+    expect(isAuthAccountRequestCurrent({
+      isLoggedIn: false,
+      ownerAccountKey: null,
+      accountGeneration: 4,
+    }, personalA)).toBe(false);
+  });
+
+  test('clears the previous renderer account when a committed exchange lacks a stable owner', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          exchange: vi.fn().mockResolvedValue({
+            success: true,
+            user: {
+              yid: 'enterprise-user',
+              accountMode: 'enterprise',
+              nickname: 'Enterprise User',
+              avatarUrl: null,
+            },
+            quota: null,
+            enterpriseContext: null,
+          }),
+        },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    store.dispatch(setLoggedIn({
+      user: {
+        yid: 'previous-user',
+        nickname: 'Previous User',
+        avatarUrl: null,
+      },
+      quota: null,
+      ownerAccountKey: 'personal:previous-user',
+    }));
+
+    await expect(authService.handleCallback('auth-code')).resolves.toBe(false);
+    expect(store.getState().auth).toMatchObject({
+      isLoggedIn: false,
+      ownerAccountKey: null,
+      user: null,
+      quota: null,
     });
   });
 });
@@ -252,6 +314,7 @@ describe('quota checks', () => {
         avatarUrl: null,
       },
       quota: null,
+      ownerAccountKey: 'personal:tester',
     }));
 
     await expect(authService.checkQuota()).resolves.toEqual({
@@ -305,6 +368,7 @@ describe('quota checks', () => {
         avatarUrl: null,
       },
       quota: null,
+      ownerAccountKey: 'personal:tester',
     }));
 
     const firstCheck = authService.checkQuota();
@@ -365,6 +429,7 @@ describe('quota checks', () => {
         avatarUrl: null,
       },
       quota: null,
+      ownerAccountKey: 'enterprise:tester:1001',
     }));
 
     await expect(authService.checkQuota()).resolves.toEqual({
@@ -391,7 +456,11 @@ describe('auth state restoration', () => {
   };
 
   test('preserves the current login snapshot for a temporary verification failure', async () => {
-    store.dispatch(setLoggedIn({ user, quota }));
+    store.dispatch(setLoggedIn({
+      user,
+      quota,
+      ownerAccountKey: 'personal:user@example.com',
+    }));
     vi.stubGlobal('window', {
       electron: {
         auth: {
@@ -417,7 +486,11 @@ describe('auth state restoration', () => {
   });
 
   test('clears the current login snapshot for terminal expiration', async () => {
-    store.dispatch(setLoggedIn({ user, quota }));
+    store.dispatch(setLoggedIn({
+      user,
+      quota,
+      ownerAccountKey: 'personal:user@example.com',
+    }));
     vi.stubGlobal('window', {
       electron: {
         auth: {
@@ -447,7 +520,11 @@ describe('auth state restoration', () => {
 
   test('shows a re-login toast when the main process reports terminal expiration', async () => {
     const dispatchEvent = vi.fn();
-    store.dispatch(setLoggedIn({ user, quota }));
+    store.dispatch(setLoggedIn({
+      user,
+      quota,
+      ownerAccountKey: 'personal:user@example.com',
+    }));
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubGlobal('window', {
       dispatchEvent,
@@ -474,5 +551,139 @@ describe('auth state restoration', () => {
     const toastEvent = dispatchEvent.mock.calls[0][0] as CustomEvent<string>;
     expect(toastEvent.type).toBe('app:showToast');
     expect(toastEvent.detail).toContain('登录状态已过期');
+  });
+
+  test('discards a stale restore response after the renderer account changes', async () => {
+    let resolveUser!: (value: {
+      success: true;
+      user: typeof user;
+      quota: typeof quota;
+      enterpriseContext: null;
+    }) => void;
+    const getUser = vi.fn(() => new Promise<{
+      success: true;
+      user: typeof user;
+      quota: typeof quota;
+      enterpriseContext: null;
+    }>(resolve => {
+      resolveUser = resolve;
+    }));
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getUser },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    store.dispatch(setLoggedIn({
+      user,
+      quota,
+      ownerAccountKey: 'personal:user@example.com',
+    }));
+
+    const refresh = authService.refreshAuthState({ clearOnFailure: true });
+    const nextUser = {
+      ...user,
+      yid: 'next@example.com',
+      nickname: 'Next User',
+    };
+    store.dispatch(setLoggedIn({
+      user: nextUser,
+      quota: null,
+      ownerAccountKey: 'personal:next@example.com',
+    }));
+    resolveUser({
+      success: true,
+      user,
+      quota,
+      enterpriseContext: null,
+    });
+
+    await expect(refresh).resolves.toMatchObject({
+      isLoggedIn: true,
+      user: nextUser,
+      quota: null,
+    });
+    expect(store.getState().auth.ownerAccountKey).toBe('personal:next@example.com');
+  });
+
+  test('does not apply a stale enterprise context after the renderer account changes', async () => {
+    let resolveContext!: (value: {
+      success: true;
+      context: {
+        enterpriseId: number;
+        enterpriseName: string;
+        role: EnterpriseMemberRole;
+        quotaStatus: {
+          available: true;
+          reason: null;
+        };
+      };
+    }) => void;
+    const getContext = vi.fn(() => new Promise<{
+      success: true;
+      context: {
+        enterpriseId: number;
+        enterpriseName: string;
+        role: EnterpriseMemberRole;
+        quotaStatus: {
+          available: true;
+          reason: null;
+        };
+      };
+    }>(resolve => {
+      resolveContext = resolve;
+    }));
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            success: true,
+            user,
+            quota,
+          }),
+        },
+        enterpriseAccount: { getContext },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    store.dispatch(setLoggedIn({
+      user,
+      quota,
+      ownerAccountKey: 'personal:user@example.com',
+    }));
+
+    const refresh = authService.refreshAuthState({ clearOnFailure: true });
+    await vi.waitFor(() => expect(getContext).toHaveBeenCalledOnce());
+    const nextUser = {
+      ...user,
+      yid: 'next@example.com',
+      nickname: 'Next User',
+    };
+    store.dispatch(setLoggedIn({
+      user: nextUser,
+      quota: null,
+      ownerAccountKey: 'personal:next@example.com',
+    }));
+    resolveContext({
+      success: true,
+      context: {
+        enterpriseId: 1001,
+        enterpriseName: 'Stale Enterprise',
+        role: EnterpriseMemberRole.Member,
+        quotaStatus: {
+          available: true,
+          reason: null,
+        },
+      },
+    });
+
+    await expect(refresh).resolves.toMatchObject({
+      isLoggedIn: true,
+      user: nextUser,
+      quota: null,
+      enterpriseContext: null,
+    });
+    expect(store.getState().enterpriseAccount.context).toBeNull();
+    expect(store.getState().auth.ownerAccountKey).toBe('personal:next@example.com');
   });
 });

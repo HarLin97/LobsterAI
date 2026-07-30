@@ -194,6 +194,11 @@ contextBridge.exposeInMainWorld('electron', {
     requestQuotaIncrease: (enterpriseId: number, requestType: EnterpriseQuotaRequestType) => (
       ipcRenderer.invoke(EnterpriseAccountIpcChannel.RequestQuotaIncrease, enterpriseId, requestType)
     ),
+    onContextInvalidated: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(EnterpriseAccountIpcChannel.ContextInvalidated, handler);
+      return () => ipcRenderer.removeListener(EnterpriseAccountIpcChannel.ContextInvalidated, handler);
+    },
   },
   api: {
     // 普通 API 请求（非流式）
@@ -522,7 +527,7 @@ contextBridge.exposeInMainWorld('electron', {
 
     // Media task management
     cancelMediaTask: (taskId: string) =>
-      ipcRenderer.invoke('cowork:media:cancel', taskId),
+      ipcRenderer.invoke(CoworkIpcChannel.CancelMediaTask, taskId),
 
     // Permission handling
     respondToPermission: (options: { requestId: string; result: any }) =>
@@ -1173,7 +1178,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
   media: {
     getModels: (type: 'image' | 'video') =>
-      ipcRenderer.invoke('media:getModels', type) as Promise<{ success: boolean; models?: unknown[]; error?: string }>,
+      ipcRenderer.invoke(CoworkIpcChannel.GetMediaModels, type) as Promise<{ success: boolean; models?: unknown[]; error?: string }>,
     getTaskStatus: (taskId: number, type: 'image' | 'video') =>
       ipcRenderer.invoke('media:getTaskStatus', taskId, type) as Promise<{ success: boolean; task?: unknown; error?: string }>,
   },

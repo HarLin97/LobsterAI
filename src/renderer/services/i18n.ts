@@ -421,6 +421,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     enterpriseQuotaCheckRestored: '额度已恢复，可以继续对话。',
     enterpriseQuotaCheckUnavailable: '额度尚未恢复，请确认额度调整完成后重试。',
     enterpriseQuotaHomeSubmitBlocked: '当前额度不足，请先处理额度问题后再创建任务。',
+    enterpriseMediaUnavailableTitle: '企业媒体服务暂不可用',
+    enterpriseMediaUnavailableDesc: '暂时无法确认当前企业的媒体权益，请重新检查或联系企业管理员。',
+    enterpriseMediaRetry: '重新检查',
     planFree: '免费',
     planStandard: '标准',
     planAdvanced: '进阶',
@@ -630,6 +633,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     htmlShareSubscriptionRequiredTitle: '开通订阅后即可分享内容',
     htmlShareSubscriptionRequiredMessage:
       '分享功能需要有效订阅。开通后即可生成分享链接，并可选择分享码或公开访问。',
+    htmlShareEnterpriseUnavailableTitle: '当前企业账号暂不可分享内容',
+    htmlShareEnterpriseUnavailableMessage:
+      '未获取到当前企业的分享权益。请重新登录后重试，或联系企业管理员。',
     htmlShareOpenSubscription: '去订阅',
     subscriptionGateOpenAction: '去订阅',
     htmlShareUnavailableInProduction: '分享功能暂不可用。',
@@ -683,6 +689,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentSubscriptionRequiredTitle: '开通订阅后即可部署网站',
     nodeDeploymentSubscriptionRequiredMessage:
       '网站部署需要有效订阅。开通后即可将本地网站部署到云端，并生成可访问链接。',
+    nodeDeploymentEnterpriseUnavailableTitle: '当前企业账号暂不可部署网站',
+    nodeDeploymentEnterpriseUnavailableMessage:
+      '未获取到当前企业的网站部署权益。请重新登录后重试，或联系企业管理员。',
     nodeDeploymentLookupFailed: '获取部署信息失败。',
     nodeDeploymentAccessStatusApplyFailed: '服务已部署，但访问状态更新失败：{message}',
     nodeDeploymentStoppedNotice: '该服务已停止',
@@ -3678,6 +3687,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     enterpriseQuotaCheckRestored: 'Quota restored. You can continue the conversation.',
     enterpriseQuotaCheckUnavailable: 'Quota is still unavailable. Confirm the adjustment is complete and try again.',
     enterpriseQuotaHomeSubmitBlocked: 'Your current quota is unavailable. Resolve it before creating a task.',
+    enterpriseMediaUnavailableTitle: 'Enterprise media is unavailable',
+    enterpriseMediaUnavailableDesc: 'Unable to verify media access for this enterprise. Try again or contact your administrator.',
+    enterpriseMediaRetry: 'Check again',
     planFree: 'Free',
     planStandard: 'Standard',
     planAdvanced: 'Advanced',
@@ -3899,6 +3911,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     htmlShareSubscriptionRequiredTitle: 'Subscribe to share content',
     htmlShareSubscriptionRequiredMessage:
       'Sharing requires an active subscription. After subscribing, you can create links with share-code or public access.',
+    htmlShareEnterpriseUnavailableTitle: 'Sharing is unavailable for this enterprise account',
+    htmlShareEnterpriseUnavailableMessage:
+      'Sharing entitlement was not available for the current enterprise. Sign in again or contact your enterprise administrator.',
     htmlShareOpenSubscription: 'View subscription',
     subscriptionGateOpenAction: 'View subscription',
     htmlShareUnavailableInProduction: 'Sharing is currently unavailable.',
@@ -3958,6 +3973,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentSubscriptionRequiredTitle: 'Subscribe to deploy a website',
     nodeDeploymentSubscriptionRequiredMessage:
       'Website deployment requires an active subscription. After subscribing, you can deploy a local website to the cloud and get an access link.',
+    nodeDeploymentEnterpriseUnavailableTitle: 'Deployment is unavailable for this enterprise account',
+    nodeDeploymentEnterpriseUnavailableMessage:
+      'Deployment entitlement was not available for the current enterprise. Sign in again or contact your enterprise administrator.',
     nodeDeploymentLookupFailed: 'Failed to load deployment information.',
     nodeDeploymentAccessStatusApplyFailed:
       'The service was deployed, but its access status could not be updated: {message}',
