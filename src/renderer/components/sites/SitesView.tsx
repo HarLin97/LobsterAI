@@ -1328,20 +1328,20 @@ const SitesView: React.FC<SitesViewProps> = ({
           updateBadge={updateBadge}
         />
       </div>
-      <header className="mx-auto w-full min-w-[720px] max-w-[840px] shrink-0 px-6 py-4">
+      <header className="mx-auto w-full min-w-[720px] max-w-[1120px] shrink-0 px-6 py-6">
         <div className="flex items-center justify-between gap-4">
           <p className="text-sm text-secondary">{i18nService.t('sitesSubtitle')}</p>
           {isUnfilteredEmpty && createSiteButton(true)}
         </div>
         {!isUnfilteredEmpty && (
-          <div className="mt-3 flex flex-nowrap items-center gap-2.5">
+          <div className="mt-4 flex flex-nowrap items-center gap-2.5">
             <div className="relative min-w-[280px] flex-1">
               <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-secondary" />
               <input
                 value={keywordInput}
                 onChange={event => setKeywordInput(event.target.value)}
                 placeholder={i18nService.t('sitesSearchPlaceholder')}
-                className="h-9 w-full rounded-lg border border-border bg-surface pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-secondary focus:border-primary"
+                className="h-9 w-full rounded-xl border border-border bg-surface pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-secondary focus:ring-2 focus:ring-primary"
               />
             </div>
             <div className="flex h-9 rounded-lg border border-border bg-surface p-0.5">
@@ -1379,7 +1379,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         )}
       </header>
       <main className="min-h-0 w-full min-w-[720px] flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-        <div className="mx-auto w-full max-w-[840px] px-6 pb-6">
+        <div className="mx-auto w-full max-w-[1120px] px-6 pb-6">
           {listError && (
             <div className="mb-3 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-sm text-red-600">
               <span>{listError}</span>
