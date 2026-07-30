@@ -9,6 +9,8 @@ import { selectQueuedFollowUp } from './queuedFollowUpSelection';
 const makePendingSteer = (id: string): CoworkPendingSteer => ({
   id,
   sessionId: 'session-1',
+  ownerAccountKey: 'personal:6',
+  accountGeneration: 1,
   text: `message-${id}`,
   status: CoworkSteerStatus.Pending,
   createdAt: 1,

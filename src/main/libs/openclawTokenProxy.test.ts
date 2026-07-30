@@ -98,6 +98,15 @@ test('extracts LobsterAI monthly quota error from proxy SSE packet', () => {
   });
 });
 
+test('extracts enterprise quota error from unified non-stream response', () => {
+  expect(testUtils.extractQuotaErrorFromProxyErrorPayload(
+    JSON.stringify({ code: 41607, message: '企业积分池已用完', data: null }),
+  )).toEqual({
+    message: '企业积分池已用完',
+    code: 41607,
+  });
+});
+
 test('ignores generic HTTP 402 without LobsterAI quota code or message', () => {
   const packet = [
     'event: error',
@@ -290,7 +299,7 @@ test('keeps Kimi K3 package payloads byte-for-byte transparent', () => {
   expect(testUtils.hydrateGeminiChatCompletionsBody(requestBody)).toBe(requestBody);
 });
 
-test('adds fixed capability and client version headers without trusting incoming values', () => {
+test('adds fixed capability, client version, and enterprise context headers without trusting incoming values', () => {
   expect(testUtils.buildUpstreamRequestHeaders(
     'access-token',
     {
@@ -300,12 +309,18 @@ test('adds fixed capability and client version headers without trusting incoming
       'x-lobsterai-client-version': '0.0.0',
     },
     '2026.7.23',
+    {
+      'X-LobsterAI-Account-Mode': 'enterprise',
+      'X-LobsterAI-Enterprise-Id': '1001',
+    },
   )).toEqual({
     Authorization: 'Bearer access-token',
     Accept: 'text/event-stream',
     'Content-Type': 'application/json',
     'X-LobsterAI-Client-Capabilities': 'kimi-k3-agentic-v1',
     'X-LobsterAI-Client-Version': '2026.7.23',
+    'X-LobsterAI-Account-Mode': 'enterprise',
+    'X-LobsterAI-Enterprise-Id': '1001',
   });
 });
 
@@ -440,28 +455,25 @@ test('node stream: upstream SSE error payload still passes through and ends clea
   });
 });
 
-test('node stream: classifies completion that arrives after the downstream closes', async () => {
+test('node stream: cancels the upstream when the downstream closes', async () => {
   const upstream = new PassThrough();
   const res = createMockProxyResponse();
-  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
 
   try {
     testUtils.pipeStreamingResponseWithQuotaScan(upstream, asServerResponse(res));
     upstream.write('data: {"choices":[{"delta":{"content":"working"},"finish_reason":null}]}\n\n');
     res.emitClose();
-    upstream.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
-    upstream.write('data: [DONE]\n\n');
-    upstream.end();
     await flushStreamEvents();
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('outcome=late_completion_after_downstream_close'),
+    expect(upstream.destroyed).toBe(true);
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining('outcome=downstream_closed_upstream_cancelled'),
     );
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('terminal=done'));
     expect(res.end).not.toHaveBeenCalled();
     expect(res.destroy).not.toHaveBeenCalled();
   } finally {
-    warnSpy.mockRestore();
+    debugSpy.mockRestore();
   }
 });
 
@@ -505,6 +517,48 @@ test('web stream: read failure aborts the proxied response', async () => {
     expect(res.destroy).toHaveBeenCalledTimes(1);
   });
   expect(res.end).not.toHaveBeenCalled();
+});
+
+test('web stream: cancels the reader when the downstream closes', async () => {
+  const res = createMockProxyResponse();
+  const cancel = vi.fn();
+  const webStream = new ReadableStream<Uint8Array>({
+    pull() {
+      // Keep the read pending until the downstream response closes.
+    },
+    cancel,
+  });
+
+  testUtils.pipeWebReadableResponseWithQuotaScan(
+    webStream,
+    asServerResponse(res),
+    testUtils.createProxySSEStreamScanState(),
+  );
+  res.emitClose();
+
+  await vi.waitFor(() => {
+    expect(cancel).toHaveBeenCalledWith('Downstream response closed');
+  });
+  expect(res.end).not.toHaveBeenCalled();
+  expect(res.destroy).not.toHaveBeenCalled();
+});
+
+test('web stream: cancels after downstream close even when completion scanning is disabled', async () => {
+  const res = createMockProxyResponse();
+  const cancel = vi.fn();
+  const webStream = new ReadableStream<Uint8Array>({
+    pull() {
+      // Keep the read pending until the downstream response closes.
+    },
+    cancel,
+  });
+
+  testUtils.pipeWebReadableResponseWithQuotaScan(webStream, asServerResponse(res));
+  res.emitClose();
+
+  await vi.waitFor(() => {
+    expect(cancel).toHaveBeenCalledWith('Downstream response closed');
+  });
 });
 
 test('web stream: completion check is skipped when no scan state is provided', async () => {

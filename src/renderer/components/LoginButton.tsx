@@ -7,6 +7,8 @@ import promoSubscriptionIconUrl from '../assets/icons/promo-subscription.svg';
 import rechargeIconUrl from '../assets/icons/recharge.svg';
 import soccerBallIconUrl from '../assets/icons/soccer-ball.svg';
 import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
+import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/EnterpriseAccountMenu';
+import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
 import { authService } from '../services/auth';
 import {
   getPortalCreditsResetActivityUrl,
@@ -500,6 +502,7 @@ interface LoginButtonProps {
 
 const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
   const { isLoggedIn, isLoading, profileSummary, user } = useSelector((state: RootState) => state.auth);
+  const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const [showMenu, setShowMenu] = useState(false);
   const [finalRewardOpen, setFinalRewardOpen] = useState(false);
   const [finalRewardLoading, setFinalRewardLoading] = useState(false);
@@ -517,7 +520,14 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      const target = event.target;
+      const isEnterpriseAccountFlyout = target instanceof Element
+        && target.closest('[data-enterprise-account-flyout="true"]') !== null;
+      if (
+        containerRef.current
+        && !containerRef.current.contains(target as Node)
+        && !isEnterpriseAccountFlyout
+      ) {
         setShowMenu(false);
       }
     };
@@ -621,10 +631,19 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
         )}
       </button>
       {showMenu && isLoggedIn && (
-        <UserMenu
-          onClose={() => setShowMenu(false)}
-          onOpenFinalReward={() => setFinalRewardOpen(true)}
-        />
+        enterpriseAccountContext
+          ? (
+            <EnterpriseAccountMenu
+              context={enterpriseAccountContext}
+              onClose={() => setShowMenu(false)}
+            />
+          )
+          : (
+            <UserMenu
+              onClose={() => setShowMenu(false)}
+              onOpenFinalReward={() => setFinalRewardOpen(true)}
+            />
+          )
       )}
       <CreditsFinalRewardModal
         open={finalRewardOpen}

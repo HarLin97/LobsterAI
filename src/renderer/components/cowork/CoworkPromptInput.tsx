@@ -412,6 +412,7 @@ interface CoworkPromptInputProps {
   isStreaming?: boolean;
   placeholder?: string;
   disabled?: boolean;
+  submitDisabled?: boolean;
   size?: 'normal' | 'large' | 'compact';
   workingDirectory?: string;
   onWorkingDirectoryChange?: (dir: string) => void;
@@ -448,6 +449,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       isStreaming = false,
       placeholder = 'Enter your task...',
       disabled = false,
+      submitDisabled = false,
       size = 'normal',
       workingDirectory = '',
       onWorkingDirectoryChange,
@@ -497,6 +499,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
     const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
     const authQuota = useSelector((state: RootState) => state.auth.quota);
+    const authOwnerAccountKey = useSelector((state: RootState) => state.auth.ownerAccountKey);
+    const authAccountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
     const asrQuota = useSelector((state: RootState) => state.asrQuota);
     const [value, setValue] = useState(draftPrompt);
     const [steerValue, setSteerValue] = useState(steerDraft);
@@ -1263,6 +1267,15 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const handleSubmit = useCallback(async (submitMethod: 'button' | 'keyboard' | 'voice' = 'button') => {
     let effectiveSubmitMethod = submitMethod;
+    if (submitDisabled) {
+      reportPromptControl('submit_blocked', {
+        blockedReason: 'quota_exhausted',
+        submitMethod: effectiveSubmitMethod,
+        ...getPromptTextAnalyticsParams(value),
+        ...getPromptCapabilityAnalyticsParams(),
+      });
+      return;
+    }
     const btwCommand = !goalInputActive && !steerInputActive && !isVoiceRecording
       ? parseCoworkBtwCommand(value)
       : { matched: false } as const;
@@ -1462,6 +1475,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       dispatch(addPendingSteer({
         id: queuedSteerId,
         sessionId,
+        ownerAccountKey: authOwnerAccountKey,
+        accountGeneration: authAccountGeneration,
         text: followUpText,
         attachments: queuedAttachments.length > 0 ? queuedAttachments : undefined,
         selectedTextSnippets: queuedPayload.selectedTextSnippets,
@@ -1805,7 +1820,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     resetGoalInput(false);
     draftStartedAnalyticsRef.current = false;
     inputSourceOverrideRef.current = null;
-  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, isPatchingModel, onSubmit, onGoalCommand, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection]);
+  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration]);
 
   const handleSelectSkill = useCallback((skill: Skill) => {
     const willSelect = !activeSkillIds.includes(skill.id);
@@ -2669,6 +2684,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [disabled, handleIncomingFiles, voiceInputLocksEditing]);
 
   const canSubmit = !disabled
+    && !submitDisabled
     && !isVoiceRecognizing
     && !isPatchingModel
     && !agentModelIsInvalid

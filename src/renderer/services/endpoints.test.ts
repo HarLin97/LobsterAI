@@ -2,6 +2,11 @@ import { afterEach, expect, test, vi } from 'vitest';
 
 import { configService } from './config';
 import {
+  getEnterpriseBillingUrl,
+  getEnterpriseMemberProfileUrl,
+  getEnterpriseOverviewUrl,
+  getEnterpriseRechargeUrl,
+  getEnterpriseUsageUrl,
   getPortalCreditsResetActivityUrl,
   getPortalInvitationUrl,
   getPortalPricingUrl,
@@ -46,5 +51,25 @@ test('portal pricing url can include html share keyfrom', () => {
 
   expect(getPortalPricingUrl(PortalPricingKeyfrom.HtmlShare)).toBe(
     'https://lobsterai.youdao.com/portal#/pricing?keyfrom=html_share',
+  );
+});
+
+test('enterprise console urls use the selected enterprise context', () => {
+  mockTestMode(false);
+
+  expect(getEnterpriseMemberProfileUrl(1001)).toBe(
+    'https://lobsterai.youdao.com/portal#/enterprise/profile/1001',
+  );
+  expect(getEnterpriseOverviewUrl(1001)).toBe(
+    'https://lobsterai.youdao.com/portal#/enterprise/console/1001/overview',
+  );
+  expect(getEnterpriseUsageUrl(1001)).toBe(
+    'https://lobsterai.youdao.com/portal#/enterprise/console/1001/usage',
+  );
+  expect(getEnterpriseBillingUrl(1001)).toBe(
+    'https://lobsterai.youdao.com/portal#/enterprise/console/1001/billing',
+  );
+  expect(getEnterpriseRechargeUrl(1001)).toBe(
+    'https://lobsterai.youdao.com/portal#/enterprise/console/1001/recharge',
   );
 });
