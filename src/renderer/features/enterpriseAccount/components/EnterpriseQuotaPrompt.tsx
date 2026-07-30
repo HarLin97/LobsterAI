@@ -3,7 +3,7 @@ import {
   CheckCircleIcon,
   ExclamationCircleIcon,
 } from '@heroicons/react/24/outline';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import {
@@ -11,6 +11,7 @@ import {
   EnterpriseQuotaReason,
   EnterpriseQuotaRequestType,
 } from '../../../../shared/enterpriseAccount/constants';
+import { authService } from '../../../services/auth';
 import {
   getEnterpriseRechargeUrl,
   getEnterpriseUsageUrl,
@@ -35,11 +36,64 @@ export const EnterpriseQuotaPrompt = ({
 }: EnterpriseQuotaPromptProps) => {
   const context = useSelector(selectEnterpriseAccountContext);
   const [requestState, setRequestState] = useState<RequestState>('idle');
+  const [isCheckingQuota, setIsCheckingQuota] = useState(false);
+  const quotaCheckInFlightRef = useRef(false);
+  const autoCheckedSignalKeyRef = useRef<string | null>(null);
   const quotaReason = signal?.reason ?? reason;
+  const enterpriseId = context?.enterpriseId;
+  const signalMessageId = signal?.messageId;
 
   useEffect(() => {
     setRequestState('idle');
   }, [context?.enterpriseId, quotaReason]);
+
+  const checkQuota = useCallback(async (showResultToast: boolean) => {
+    if (quotaCheckInFlightRef.current) return;
+    quotaCheckInFlightRef.current = true;
+    setIsCheckingQuota(true);
+    logEnterpriseAccountDiagnostic(
+      'debug',
+      `${showResultToast ? 'manual' : 'automatic'} quota check started`,
+    );
+    try {
+      const result = await authService.checkQuota();
+      logEnterpriseAccountDiagnostic(
+        'debug',
+        `quota check completed (success: ${result.success}, available: ${result.enterpriseQuotaAvailable})`,
+      );
+      if (showResultToast) {
+        const toastKey = !result.success
+          ? 'enterpriseQuotaCheckFailed'
+          : result.enterpriseQuotaAvailable
+            ? 'enterpriseQuotaCheckRestored'
+            : 'enterpriseQuotaCheckUnavailable';
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t(toastKey),
+        }));
+      }
+    } catch (error) {
+      logEnterpriseAccountDiagnostic('warn', 'quota check failed unexpectedly', error);
+      if (showResultToast) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('enterpriseQuotaCheckFailed'),
+        }));
+      }
+    } finally {
+      quotaCheckInFlightRef.current = false;
+      setIsCheckingQuota(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (enterpriseId === undefined || !signalMessageId) {
+      autoCheckedSignalKeyRef.current = null;
+      return;
+    }
+    const signalKey = `${enterpriseId}:${signalMessageId}`;
+    if (autoCheckedSignalKeyRef.current === signalKey) return;
+    autoCheckedSignalKeyRef.current = signalKey;
+    void checkQuota(false);
+  }, [checkQuota, enterpriseId, signalMessageId]);
 
   const presentation = useMemo(() => {
     if (!context || !quotaReason) return null;
@@ -171,20 +225,32 @@ export const EnterpriseQuotaPrompt = ({
           <div className="text-sm font-semibold text-foreground">{presentation.title}</div>
           <div className="mt-0.5 text-xs leading-5 text-secondary">{presentation.description}</div>
         </div>
-        <button
-          type="button"
-          onClick={() => void handleAction()}
-          disabled={requestState !== 'idle'}
-          className="inline-flex max-w-full shrink-0 items-center justify-center gap-1.5 whitespace-normal rounded-full bg-neutral-950 px-3.5 py-2 text-center text-xs font-medium text-white transition-opacity hover:opacity-80 disabled:cursor-default disabled:opacity-60 dark:bg-white dark:text-neutral-950"
-        >
-          {requestState === 'submitted' ? (
-            <CheckCircleIcon className="h-3.5 w-3.5" aria-hidden="true" />
-          ) : null}
-          {actionLabel}
-          {presentation.portalUrl && requestState === 'idle' ? (
-            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />
-          ) : null}
-        </button>
+        <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => void checkQuota(true)}
+            disabled={isCheckingQuota}
+            className="inline-flex max-w-full shrink-0 items-center justify-center whitespace-normal rounded-full border border-border bg-background px-3.5 py-2 text-center text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-default disabled:opacity-60"
+          >
+            {i18nService.t(isCheckingQuota
+              ? 'enterpriseQuotaChecking'
+              : 'enterpriseQuotaCheckAction')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleAction()}
+            disabled={requestState !== 'idle'}
+            className="inline-flex max-w-full shrink-0 items-center justify-center gap-1.5 whitespace-normal rounded-full bg-neutral-950 px-3.5 py-2 text-center text-xs font-medium text-white transition-opacity hover:opacity-80 disabled:cursor-default disabled:opacity-60 dark:bg-white dark:text-neutral-950"
+          >
+            {requestState === 'submitted' ? (
+              <CheckCircleIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : null}
+            {actionLabel}
+            {presentation.portalUrl && requestState === 'idle' ? (
+              <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : null}
+          </button>
+        </div>
       </div>
     </div>
   );

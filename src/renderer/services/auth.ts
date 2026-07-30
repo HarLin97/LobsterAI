@@ -32,6 +32,11 @@ interface AuthStateRefreshResult {
   enterpriseContext: EnterpriseAccountContext | null;
 }
 
+interface AuthQuotaCheckResult {
+  success: boolean;
+  enterpriseQuotaAvailable: boolean;
+}
+
 export interface PricingCatalogTextModel {
   modelId?: string;
   modelName?: string;
@@ -144,6 +149,7 @@ class AuthService {
   private unsubQuotaChanged: (() => void) | null = null;
   private unsubEnterpriseContextInvalidated: (() => void) | null = null;
   private unsubWindowState: (() => void) | null = null;
+  private pendingQuotaCheck: Promise<AuthQuotaCheckResult> | null = null;
   private lastRefreshTime = 0;
   private loginAttemptSequence = 0;
 
@@ -220,9 +226,7 @@ class AuthService {
 
     // Listen for quota changes (e.g. after cowork session using server model)
     this.unsubQuotaChanged = window.electron.auth.onQuotaChanged(() => {
-      this.refreshQuota();
-      void this.fetchProfileSummary();
-      this.loadServerModels();
+      void this.checkQuota();
     });
 
     // Refresh quota and models when Electron window gains focus — user may have purchased on portal
@@ -231,9 +235,7 @@ class AuthService {
         const now = Date.now();
         if (now - this.lastRefreshTime > 30_000) {
           this.lastRefreshTime = now;
-          this.refreshQuota();
-          void this.fetchProfileSummary();
-          this.loadServerModels();
+          void this.checkQuota();
         }
       }
     });
@@ -368,14 +370,14 @@ class AuthService {
   /**
    * Refresh quota information.
    */
-  async refreshQuota() {
+  async refreshQuota(): Promise<boolean> {
     const authStateAtStart = store.getState().auth;
     if (
       !authStateAtStart.isLoggedIn
       || !authStateAtStart.user
       || !authStateAtStart.ownerAccountKey
     ) {
-      return;
+      return false;
     }
     try {
       const result = await window.electron.auth.getQuota();
@@ -388,7 +390,7 @@ class AuthService {
         const message = 'Discarded stale quota response after auth state changed';
         console.debug(`[Auth] ${message}`);
         window.electron?.log?.fromRenderer?.('debug', 'Auth', message);
-        return;
+        return false;
       }
       if (result.success) {
         if (result.quota) {
@@ -397,7 +399,9 @@ class AuthService {
         if (result.enterpriseContext !== undefined) {
           applyEnterpriseAccountContext(result.enterpriseContext);
         }
+        return true;
       }
+      return false;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn('[Auth] quota refresh failed:', error);
@@ -406,6 +410,61 @@ class AuthService {
         'Auth',
         `Quota refresh failed: ${message.replace(/\s+/g, ' ').slice(0, 500)}`,
       );
+      return false;
+    }
+  }
+
+  async checkQuota(): Promise<AuthQuotaCheckResult> {
+    if (this.pendingQuotaCheck) {
+      writeAuthRendererLog('debug', 'joining the in-flight quota check');
+      return this.pendingQuotaCheck;
+    }
+
+    const check = this.performQuotaCheck();
+    this.pendingQuotaCheck = check;
+    try {
+      return await check;
+    } finally {
+      if (this.pendingQuotaCheck === check) {
+        this.pendingQuotaCheck = null;
+      }
+    }
+  }
+
+  private async performQuotaCheck(): Promise<AuthQuotaCheckResult> {
+    writeAuthRendererLog('debug', 'quota check started');
+    try {
+      const refreshed = await this.refreshQuota();
+      if (!refreshed) {
+        writeAuthRendererLog('warn', 'quota check could not refresh quota state');
+        return {
+          success: false,
+          enterpriseQuotaAvailable: false,
+        };
+      }
+      await Promise.all([
+        this.fetchProfileSummary(),
+        this.loadServerModels(),
+      ]);
+      const enterpriseContext = store.getState().enterpriseAccount.context;
+      const enterpriseQuotaAvailable = (
+        !enterpriseContext
+        || enterpriseContext.quotaStatus.available !== false
+      );
+      writeAuthRendererLog(
+        'debug',
+        `quota check completed (enterprise quota available: ${enterpriseQuotaAvailable})`,
+      );
+      return {
+        success: true,
+        enterpriseQuotaAvailable,
+      };
+    } catch (error) {
+      writeAuthRendererLog('warn', 'quota check failed unexpectedly', error);
+      return {
+        success: false,
+        enterpriseQuotaAvailable: false,
+      };
     }
   }
 

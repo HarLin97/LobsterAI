@@ -472,7 +472,14 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      const target = event.target;
+      const isEnterpriseAccountFlyout = target instanceof Element
+        && target.closest('[data-enterprise-account-flyout="true"]') !== null;
+      if (
+        containerRef.current
+        && !containerRef.current.contains(target as Node)
+        && !isEnterpriseAccountFlyout
+      ) {
         setShowMenu(false);
       }
     };
