@@ -186,6 +186,7 @@ import type {
   TelegramInstanceConfig,
   WecomInstanceConfig,
 } from './im/types';
+import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
@@ -5684,6 +5685,20 @@ if (!gotTheLock) {
         };
       }
     }
+  });
+
+  registerActivityIpcHandlers({
+    ipcMain,
+    isDev,
+    isPackaged: app.isPackaged,
+    getMainWindow: () => mainWindow,
+    getServerBaseUrl: getServerApiBaseUrl,
+    getClientVersion: () => app.getVersion(),
+    platform: process.platform,
+    hasAuthTokens: () => getAuthTokens() !== null,
+    fetchPublic: (url, options) => net.fetch(url, options),
+    fetchWithAuth,
+    developmentServerBaseUrl: process.env.LOBSTER_ACTIVITY_SERVER_BASE_URL,
   });
 
   ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {

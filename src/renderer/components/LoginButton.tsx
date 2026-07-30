@@ -23,7 +23,9 @@ import type {
   FreeCreditsReward,
 } from '../store/slices/authSlice';
 import CreditsFinalRewardModal from './CreditsFinalRewardModal';
+import { DailyCheckInProfileCard } from './DailyCheckInActivity';
 import UserAvatarIcon from './icons/UserAvatarIcon';
+import { useDailyCheckInActivity } from './useDailyCheckInActivity';
 
 const ACCOUNT_MENU_ANALYTICS_SOURCE = 'home_account_menu';
 
@@ -196,13 +198,23 @@ const PortalMenuIcon: React.FC<{ src: string; darkInvert?: boolean }> = ({
   />
 );
 
-const UserMenu: React.FC<{ onClose: () => void; onOpenFinalReward: () => void }> = ({
+interface UserMenuProps {
+  onClose: () => void;
+  onOpenFinalReward: () => void;
+}
+
+const UserMenu: React.FC<UserMenuProps> = ({
   onClose,
   onOpenFinalReward,
 }) => {
   const user = useSelector((state: RootState) => state.auth.user);
   const profileSummary = useSelector((state: RootState) => state.auth.profileSummary);
   const [creditsExpanded, setCreditsExpanded] = useState(false);
+  const {
+    snapshot: dailyCheckIn,
+    claiming: dailyCheckInClaiming,
+    claim: claimDailyCheckIn,
+  } = useDailyCheckInActivity();
   const isEn = i18nService.getLanguage() === 'en';
 
   useEffect(() => {
@@ -330,6 +342,34 @@ const UserMenu: React.FC<{ onClose: () => void; onOpenFinalReward: () => void }>
   const finalReward = getFinalRewards(profileSummary?.creditsResetCampaign)[0];
   const finalRewardText = getFinalRewardText(finalReward);
 
+  const handleDailyCheckIn = async () => {
+    try {
+      const response = await claimDailyCheckIn();
+      reportAccountMenuAction('claim_daily_check_in', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'success',
+      });
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('dailyCheckInClaimSuccess').replace(
+          '{credits}',
+          formatCredits(response.result.creditsGranted),
+        ),
+      }));
+    } catch (error) {
+      reportAccountMenuAction('claim_daily_check_in', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'failed',
+      });
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: error instanceof Error
+          ? error.message
+          : i18nService.t('dailyCheckInClaimFailed'),
+      }));
+    }
+  };
+
   return (
     <div className="absolute bottom-full left-[-0.5rem] mb-1 w-[14.5rem] bg-surface rounded-xl shadow-popover border border-border overflow-hidden z-50 popover-enter">
       {/* Account info */}
@@ -399,6 +439,14 @@ const UserMenu: React.FC<{ onClose: () => void; onOpenFinalReward: () => void }>
           </div>
         )}
       </div>
+
+      {dailyCheckIn && (
+        <DailyCheckInProfileCard
+          snapshot={dailyCheckIn}
+          claiming={dailyCheckInClaiming}
+          onClaim={handleDailyCheckIn}
+        />
+      )}
 
       {/* Actions */}
       <div className="py-1">
