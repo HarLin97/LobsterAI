@@ -202,6 +202,44 @@ describe('Windows installer hardening contracts', () => {
     expect(check).toContain('"ambiguous-dual-registration"');
   });
 
+  test('re-kills processes on every stop round and logs survivors on failure', () => {
+    const start = installerInclude.indexOf('!macro stopLobsterAIProcesses');
+    const end = installerInclude.indexOf('!macroend', start);
+    const stopMacro = installerInclude.slice(start, end);
+
+    // The kill must live inside the poll loop: a kill-once-then-observe gate
+    // loses against slow teardown and respawned processes.
+    const loop = stopMacro.indexOf('for ($$i = 0; $$i -lt 30; $$i++)');
+    const emptyCheck = stopMacro.indexOf('if ($$procs.Count -eq 0) { exit 0 }');
+    const rekill = stopMacro.indexOf(
+      '$$procs | Stop-Process -Force -ErrorAction SilentlyContinue',
+    );
+    const sleep = stopMacro.indexOf('Start-Sleep -Milliseconds 500');
+    expect(loop).toBeGreaterThan(-1);
+    expect(emptyCheck).toBeGreaterThan(loop);
+    expect(rekill).toBeGreaterThan(emptyCheck);
+    expect(sleep).toBeGreaterThan(rekill);
+    expect(stopMacro).toContain('exit 3');
+
+    // Survivor dump runs only on the exit-3 verdict, receives its inputs via
+    // the child environment, and always clears them afterwards.
+    expect(stopMacro).toContain('StrCmp $R2 "3" 0 StopLobsterAIProcessesLog');
+    expect(stopMacro).toContain(
+      String.raw`SetEnvironmentVariable(t "LOBSTERAI_STOP_LOG_PATH", t "$APPDATA\LobsterAI\install-timing.log")`,
+    );
+    expect(stopMacro).toContain(
+      'SetEnvironmentVariable(t "LOBSTERAI_STOP_ATTEMPT_ID", t "$lobsterInstallerAttemptId")',
+    );
+    expect(stopMacro).toContain('SetEnvironmentVariable(t "LOBSTERAI_STOP_LOG_PATH", t "")');
+    expect(stopMacro).toContain('SetEnvironmentVariable(t "LOBSTERAI_STOP_ATTEMPT_ID", t "")');
+    expect(stopMacro).toContain(
+      'phase=process-stop-survivor attempt_id=$$env:LOBSTERAI_STOP_ATTEMPT_ID',
+    );
+    expect(stopMacro).toContain('name=$$($$p.ProcessName) pid=$$($$p.Id) path=$$fp');
+    expect(stopMacro).toContain('phase=process-stop-survivors-logged');
+    expect(stopMacro).toContain('exit $$procs.Count');
+  });
+
   test('treats only an enumerably empty target as fresh', () => {
     expect(
       classifyFreshTarget({ hasRegistrationEvidence: false, entries: [] }),
