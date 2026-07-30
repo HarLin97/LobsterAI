@@ -42,7 +42,7 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
     loading,
     claiming,
     claim,
-  } = useDailyCheckInActivity();
+  } = useDailyCheckInActivity({ autoRefresh: true });
   const [dismissed, setDismissed] = useState(false);
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [successCredits, setSuccessCredits] = useState<number | null>(null);

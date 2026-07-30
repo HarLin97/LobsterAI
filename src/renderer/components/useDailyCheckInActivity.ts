@@ -24,12 +24,23 @@ import {
   isDailyCheckInContext,
   isDailyCheckInDescriptor,
 } from './dailyCheckInActivityState';
+import { startDailyCheckInAutoRefresh } from './dailyCheckInAutoRefresh';
 
 const DAILY_CHECK_IN_UPDATED_EVENT = 'lobster:daily-check-in-updated';
+
+interface DailyCheckInLoadOptions {
+  retryRevision?: boolean;
+  silent?: boolean;
+}
 
 export interface DailyCheckInSnapshot {
   descriptor: ActivityDescriptor;
   context: ActivityContextResponse;
+}
+
+export interface UseDailyCheckInActivityOptions {
+  enabled?: boolean;
+  autoRefresh?: boolean;
 }
 
 export interface UseDailyCheckInActivityResult {
@@ -57,7 +68,10 @@ function createIdempotencyKey(): string {
 }
 
 export function useDailyCheckInActivity(
-  enabled = true,
+  {
+    enabled = true,
+    autoRefresh = false,
+  }: UseDailyCheckInActivityOptions = {},
 ): UseDailyCheckInActivityResult {
   const authIdentity = useSelector(
     (state: RootState) => state.auth.user?.yid
@@ -79,7 +93,10 @@ export function useDailyCheckInActivity(
     };
   }, []);
 
-  const load = useCallback(async (retryRevision = true): Promise<void> => {
+  const load = useCallback(async ({
+    retryRevision = true,
+    silent = false,
+  }: DailyCheckInLoadOptions = {}): Promise<void> => {
     const requestId = ++loadRequestIdRef.current;
     const isCurrentRequest = () => (
       mountedRef.current && loadRequestIdRef.current === requestId
@@ -91,7 +108,7 @@ export function useDailyCheckInActivity(
       }
       return;
     }
-    if (isCurrentRequest()) setLoading(true);
+    if (isCurrentRequest() && !silent) setLoading(true);
     try {
       const slot = await window.electron.activity.getSlot();
       if (!isCurrentRequest()) return;
@@ -112,7 +129,7 @@ export function useDailyCheckInActivity(
       if (!context.success) {
         if (retryRevision
             && context.code === ActivityServerErrorCode.RevisionMismatch) {
-          await load(false);
+          await load({ retryRevision: false, silent });
           return;
         }
         setSnapshot(null);
@@ -135,16 +152,32 @@ export function useDailyCheckInActivity(
     }
   }, [enabled]);
 
+  const refresh = useCallback(
+    () => load({ silent: true }),
+    [load],
+  );
+
   useEffect(() => {
     void load();
   }, [authIdentity, load]);
 
   useEffect(() => {
     if (!enabled) return undefined;
-    const refresh = () => void load();
-    window.addEventListener(DAILY_CHECK_IN_UPDATED_EVENT, refresh);
-    return () => window.removeEventListener(DAILY_CHECK_IN_UPDATED_EVENT, refresh);
-  }, [enabled, load]);
+    const handleActivityUpdate = () => void refresh();
+    window.addEventListener(
+      DAILY_CHECK_IN_UPDATED_EVENT,
+      handleActivityUpdate,
+    );
+    return () => window.removeEventListener(
+      DAILY_CHECK_IN_UPDATED_EVENT,
+      handleActivityUpdate,
+    );
+  }, [enabled, refresh]);
+
+  useEffect(() => {
+    if (!enabled || !autoRefresh) return undefined;
+    return startDailyCheckInAutoRefresh(refresh);
+  }, [autoRefresh, enabled, refresh]);
 
   const claim = useCallback(async (): Promise<ActivityActionResponse> => {
     if (!snapshot) {
@@ -208,7 +241,7 @@ export function useDailyCheckInActivity(
     snapshot,
     loading,
     claiming,
-    refresh: load,
+    refresh,
     claim,
   };
 }
