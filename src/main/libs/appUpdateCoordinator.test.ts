@@ -4,8 +4,14 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { AppUpdateSource, AppUpdateStatus } from '../../shared/appUpdate/constants';
+import {
+  APP_UPDATE_URL_UNTRUSTED_ERROR,
+  type AppUpdateInfo,
+  AppUpdateSource,
+  AppUpdateStatus,
+} from '../../shared/appUpdate/constants';
 import type { SqliteStore } from '../sqliteStore';
+import { WINDOWS_INSTALLER_URL_POLICY_VERSION } from './appUpdateUrlPolicy';
 
 const mocks = vi.hoisted(() => ({
   getPath: vi.fn(),
@@ -70,7 +76,8 @@ function readyFileStoreKey(source: AppUpdateSource): string {
 
 function seedReadyFile(store: SqliteStore, updatesDir: string, source: AppUpdateSource): string {
   fs.mkdirSync(updatesDir, { recursive: true });
-  const filePath = path.join(updatesDir, `lobsterai-update-${source}-1.exe`);
+  const extension = process.platform === 'darwin' ? '.dmg' : '.exe';
+  const filePath = path.join(updatesDir, `lobsterai-update-${source}-1${extension}`);
   const bytes = 'installer-bytes';
   fs.writeFileSync(filePath, bytes);
   const fileHash = crypto.createHash('sha256').update(bytes).digest('hex');
@@ -85,13 +92,19 @@ function seedReadyFile(store: SqliteStore, updatesDir: string, source: AppUpdate
         zh: { title: '', content: [] },
         en: { title: '', content: [] },
       },
-      url: `https://updates.example.com/lobsterai-${READY_VERSION}.exe`,
+      url: `https://updates.example.com/lobsterai-${READY_VERSION}${extension}`,
+    },
+    windowsInstallerUrlPolicyReceipt: {
+      policyVersion: WINDOWS_INSTALLER_URL_POLICY_VERSION,
+      inputOrigin: 'https://updates.example.com',
+      finalOrigin: 'https://updates.example.com',
     },
   });
   return filePath;
 }
 
 describe('AppUpdateCoordinator', () => {
+  const originalPlatform = process.platform;
   let tmpDir: string;
   let updatesDir: string;
 
@@ -111,7 +124,307 @@ describe('AppUpdateCoordinator', () => {
   });
 
   afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('rejects an API-supplied insecure Windows installer URL with a stable error', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        code: 0,
+        data: {
+          value: {
+            version: READY_VERSION,
+            windowsX64: {
+              url: 'http://downloads.example/LobsterAI.exe',
+            },
+          },
+        },
+      }),
+    });
+    const coordinator = new AppUpdateCoordinator(createStoreStub());
+
+    const result = await coordinator.checkNow({ manual: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(APP_UPDATE_URL_UNTRUSTED_ERROR);
+    expect(result.state.info).toBeNull();
+    expect(result.state.errorMessage).toBe(APP_UPDATE_URL_UNTRUSTED_ERROR);
+    expect(JSON.stringify(result.state)).not.toContain('downloads.example');
+    expect(mocks.downloadUpdate).not.toHaveBeenCalled();
+  });
+
+  test('accepts a changing HTTPS CDN without passing a fixed origin allowlist', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const installerUrl = `https://replacement-cdn.example.net/LobsterAI-${READY_VERSION}.exe`;
+    const downloadedFile = path.join(updatesDir, 'lobsterai-update-auto-1.exe');
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        code: 0,
+        data: {
+          value: {
+            version: READY_VERSION,
+            windowsX64: { url: installerUrl },
+          },
+        },
+      }),
+    });
+    mocks.downloadUpdate.mockImplementation(async () => {
+      fs.mkdirSync(updatesDir, { recursive: true });
+      fs.writeFileSync(downloadedFile, 'installer-bytes');
+      return {
+        filePath: downloadedFile,
+        windowsInstallerUrlPolicyReceipt: {
+          policyVersion: WINDOWS_INSTALLER_URL_POLICY_VERSION,
+          inputOrigin: 'https://replacement-cdn.example.net',
+          finalOrigin: 'https://replacement-cdn.example.net',
+        },
+      };
+    });
+    const coordinator = new AppUpdateCoordinator(createStoreStub());
+
+    const result = await coordinator.checkNow();
+
+    expect(result.success).toBe(true);
+    expect(result.state.status).toBe(AppUpdateStatus.Ready);
+    expect(mocks.downloadUpdate).toHaveBeenCalledWith(
+      installerUrl,
+      AppUpdateSource.Auto,
+      expect.any(Function),
+    );
+  });
+
+  test('uses only the fixed download page when the Windows API omits an installer URL', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        code: 0,
+        data: {
+          value: {
+            version: READY_VERSION,
+          },
+        },
+      }),
+    });
+    const coordinator = new AppUpdateCoordinator(createStoreStub());
+
+    const result = await coordinator.checkNow({ manual: true });
+
+    expect(result.success).toBe(true);
+    expect(result.state.status).toBe(AppUpdateStatus.Available);
+    expect(result.state.info?.url).toBe('https://updates.example.com/download-list');
+    expect(mocks.downloadUpdate).not.toHaveBeenCalled();
+  });
+
+  test('does not restore a persisted Windows installer from an untrusted source', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const store = createStoreStub();
+    const filePath = seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const stored = store.get<{
+      info: AppUpdateInfo;
+    }>(readyFileStoreKey(AppUpdateSource.Auto));
+    if (!stored) {
+      throw new Error('test fixture was not persisted');
+    }
+    stored.info.url = 'http://downloads.example/LobsterAI.exe';
+    store.set(readyFileStoreKey(AppUpdateSource.Auto), stored);
+
+    const coordinator = new AppUpdateCoordinator(store);
+
+    expect(coordinator.getState().status).toBe(AppUpdateStatus.Idle);
+    expect(store.get(readyFileStoreKey(AppUpdateSource.Auto))).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(fs.existsSync(filePath)).toBe(false);
+    });
+  });
+
+  test('does not restore a legacy Windows cache without a policy receipt', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const store = createStoreStub();
+    const filePath = seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const stored = store.get<Record<string, unknown>>(
+      readyFileStoreKey(AppUpdateSource.Auto),
+    );
+    if (!stored) {
+      throw new Error('test fixture was not persisted');
+    }
+    delete stored.windowsInstallerUrlPolicyReceipt;
+    store.set(readyFileStoreKey(AppUpdateSource.Auto), stored);
+
+    const coordinator = new AppUpdateCoordinator(store);
+
+    expect(coordinator.getState().status).toBe(AppUpdateStatus.Idle);
+    expect(store.get(readyFileStoreKey(AppUpdateSource.Auto))).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(fs.existsSync(filePath)).toBe(false);
+    });
+  });
+
+  test('does not restore a cache whose recorded final origin differs from its input', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const store = createStoreStub();
+    const filePath = seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const stored = store.get<{
+      windowsInstallerUrlPolicyReceipt: {
+        policyVersion: typeof WINDOWS_INSTALLER_URL_POLICY_VERSION;
+        inputOrigin: string;
+        finalOrigin: string;
+      };
+    }>(readyFileStoreKey(AppUpdateSource.Auto));
+    if (!stored) {
+      throw new Error('test fixture was not persisted');
+    }
+    stored.windowsInstallerUrlPolicyReceipt.finalOrigin =
+      'https://object-storage.example.org';
+    store.set(readyFileStoreKey(AppUpdateSource.Auto), stored);
+
+    const coordinator = new AppUpdateCoordinator(store);
+
+    expect(coordinator.getState().status).toBe(AppUpdateStatus.Idle);
+    expect(store.get(readyFileStoreKey(AppUpdateSource.Auto))).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(fs.existsSync(filePath)).toBe(false);
+    });
+  });
+
+  test('never deletes or restores a persisted ready path outside the update cache', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const store = createStoreStub();
+    const cachedPath = seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const outsidePath = path.join(tmpDir, 'important-user-file.exe');
+    const outsideBytes = 'must-not-delete';
+    fs.writeFileSync(outsidePath, outsideBytes);
+    const stored = store.get<Record<string, unknown>>(
+      readyFileStoreKey(AppUpdateSource.Auto),
+    );
+    if (!stored) {
+      throw new Error('test fixture was not persisted');
+    }
+    stored.filePath = outsidePath;
+    stored.fileHash = crypto.createHash('sha256').update(outsideBytes).digest('hex');
+    store.set(readyFileStoreKey(AppUpdateSource.Auto), stored);
+
+    const coordinator = new AppUpdateCoordinator(store);
+
+    expect(coordinator.getState().status).toBe(AppUpdateStatus.Idle);
+    expect(fs.readFileSync(outsidePath, 'utf8')).toBe(outsideBytes);
+    expect(store.get(readyFileStoreKey(AppUpdateSource.Auto))).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(fs.existsSync(cachedPath)).toBe(false);
+    });
+  });
+
+  test('does not restore a symlinked Windows installer from the update cache', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const store = createStoreStub();
+    fs.mkdirSync(updatesDir, { recursive: true });
+    const targetPath = path.join(tmpDir, 'symlink-target.exe');
+    const symlinkPath = path.join(updatesDir, 'lobsterai-update-auto-2.exe');
+    const targetBytes = 'symlink-target';
+    fs.writeFileSync(targetPath, targetBytes);
+    fs.symlinkSync(targetPath, symlinkPath);
+    store.set(readyFileStoreKey(AppUpdateSource.Auto), {
+      version: READY_VERSION,
+      filePath: symlinkPath,
+      fileHash: crypto.createHash('sha256').update(targetBytes).digest('hex'),
+      info: {
+        latestVersion: READY_VERSION,
+        date: '',
+        changeLog: {
+          zh: { title: '', content: [] },
+          en: { title: '', content: [] },
+        },
+        url: `https://updates.example.com/lobsterai-${READY_VERSION}.exe`,
+      },
+      windowsInstallerUrlPolicyReceipt: {
+        policyVersion: WINDOWS_INSTALLER_URL_POLICY_VERSION,
+        inputOrigin: 'https://updates.example.com',
+        finalOrigin: 'https://updates.example.com',
+      },
+    });
+
+    const coordinator = new AppUpdateCoordinator(store);
+
+    expect(coordinator.getState().status).toBe(AppUpdateStatus.Idle);
+    expect(fs.readFileSync(targetPath, 'utf8')).toBe(targetBytes);
+    expect(store.get(readyFileStoreKey(AppUpdateSource.Auto))).toBeUndefined();
+  });
+
+  test('revalidates a ready installer source immediately before elevation', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const store = createStoreStub();
+    const filePath = seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const coordinator = new AppUpdateCoordinator(store);
+    const internal = coordinator as unknown as {
+      state: {
+        info: AppUpdateInfo | null;
+      };
+    };
+    if (!internal.state.info) {
+      throw new Error('test fixture did not restore ready state');
+    }
+    internal.state.info.url = 'http://downloads.example/LobsterAI.exe';
+
+    const result = await coordinator.installReadyUpdate();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(APP_UPDATE_URL_UNTRUSTED_ERROR);
+    expect(result.state.status).toBe(AppUpdateStatus.Error);
+    expect(result.state.info).toBeNull();
+    expect(result.state.readyFilePath).toBeNull();
+    expect(fs.existsSync(filePath)).toBe(false);
+    expect(mocks.installUpdate).not.toHaveBeenCalled();
+  });
+
+  test('revalidates ready installer bytes immediately before elevation', async () => {
+    const store = createStoreStub();
+    const filePath = seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    const coordinator = new AppUpdateCoordinator(store);
+    fs.writeFileSync(filePath, 'tampered-installer-bytes');
+
+    const result = await coordinator.installReadyUpdate();
+
+    expect(result.success).toBe(false);
+    expect(result.state.status).toBe(AppUpdateStatus.Available);
+    expect(result.state.readyFilePath).toBeNull();
+    expect(fs.existsSync(filePath)).toBe(false);
+    expect(mocks.installUpdate).not.toHaveBeenCalled();
+  });
+
+  test('keeps policy receipt bound across auto-to-manual ready-file reuse', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const store = createStoreStub();
+    seedReadyFile(store, updatesDir, AppUpdateSource.Auto);
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        code: 0,
+        data: {
+          value: {
+            version: READY_VERSION,
+            windowsX64: {
+              url: `https://updates.example.com/LobsterAI-${READY_VERSION}.exe`,
+            },
+          },
+        },
+      }),
+    });
+    const coordinator = new AppUpdateCoordinator(store);
+
+    const firstManualCheck = await coordinator.checkNow({ manual: true });
+    const secondManualCheck = await coordinator.checkNow({ manual: true });
+    const install = await coordinator.installReadyUpdate();
+
+    expect(firstManualCheck.state.status).toBe(AppUpdateStatus.Ready);
+    expect(firstManualCheck.state.source).toBe(AppUpdateSource.Manual);
+    expect(secondManualCheck.state.status).toBe(AppUpdateStatus.Ready);
+    expect(install.success).toBe(true);
+    expect(mocks.downloadUpdate).not.toHaveBeenCalled();
+    expect(mocks.installUpdate).toHaveBeenCalledOnce();
   });
 
   test('returns to Ready and keeps the verified installer when install fails', async () => {

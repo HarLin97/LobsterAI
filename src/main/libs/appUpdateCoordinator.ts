@@ -4,6 +4,8 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  APP_UPDATE_FILE_INVALID_ERROR,
+  APP_UPDATE_URL_UNTRUSTED_ERROR,
   type AppUpdateCheckResult,
   type AppUpdateInfo,
   AppUpdateIpc,
@@ -19,7 +21,19 @@ import {
   installUpdate,
   MAC_UPDATE_MOUNT_DIR_PREFIX,
 } from './appUpdateInstaller';
-import { getFallbackDownloadUrl, getManualUpdateCheckUrl, getUpdateCheckUrl } from './endpoints';
+import {
+  AppUpdateUrlUntrustedError,
+  assertTrustedWindowsInstallerUrl,
+  isSecureWindowsInstallerOrigin,
+  validateWindowsInstallerUrl,
+  WINDOWS_INSTALLER_URL_POLICY_VERSION,
+  type WindowsInstallerUrlPolicyReceipt,
+} from './appUpdateUrlPolicy';
+import {
+  getFallbackDownloadUrl,
+  getManualUpdateCheckUrl,
+  getUpdateCheckUrl,
+} from './endpoints';
 import { getKeyfromAttribution } from './keyfromAttribution';
 
 type ChangeLogLang = {
@@ -48,6 +62,18 @@ type UpdateApiResponse = {
   };
 };
 
+function formatUpdateUrlForLog(rawUrl: string): string {
+  if (process.platform !== 'win32') {
+    return rawUrl;
+  }
+  try {
+    const url = new URL(rawUrl);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return '[invalid-url]';
+  }
+}
+
 export const INSTALLATION_UUID_KEY = 'installation_uuid';
 const APP_UPDATE_TEST_CURRENT_VERSION_ENV = 'LOBSTERAI_UPDATE_CURRENT_VERSION';
 export const APP_UPDATE_READY_FILE_KEY_PREFIX = 'app_update_ready_file';
@@ -57,8 +83,16 @@ type StoredReadyFile = {
   filePath: string;
   fileHash: string;
   info?: AppUpdateInfo;
+  windowsInstallerUrlPolicyReceipt?: WindowsInstallerUrlPolicyReceipt;
   /** Set when the user launched an install; lets the next startup detect an install that never completed. */
   installAttempted?: boolean;
+};
+
+type ReadyWindowsInstallerTrust = {
+  version: string;
+  filePath: string;
+  fileHash: string;
+  receipt: WindowsInstallerUrlPolicyReceipt;
 };
 
 const initialState = (): AppUpdateRuntimeState => ({
@@ -74,6 +108,7 @@ const initialState = (): AppUpdateRuntimeState => ({
 export class AppUpdateCoordinator {
   private state: AppUpdateRuntimeState = initialState();
   private readonly store: SqliteStore;
+  private readyWindowsInstallerTrust: ReadyWindowsInstallerTrust | null = null;
   private autoOpenReadyModal = false;
   private completedUpdateVersion: string | null = null;
   private flowSequence = 0;
@@ -203,6 +238,7 @@ export class AppUpdateCoordinator {
         console.log(
           `[AppUpdate] reusing ready file for version ${info.latestVersion}: ${matchingReadyFile.filePath}`,
         );
+        this.bindReadyWindowsInstallerTrust(matchingReadyFile);
         const state = this.setState({
           ...previousState,
           info,
@@ -324,6 +360,56 @@ export class AppUpdateCoordinator {
     const filePath = this.state.readyFilePath;
     const readyInfo = this.state.info;
     const readyFileHash = this.state.readyFileHash;
+    const readyReceipt = this.getReadyWindowsInstallerReceipt({
+      version: readyInfo?.latestVersion ?? '',
+      filePath,
+      fileHash: readyFileHash ?? '',
+      source: this.state.source,
+    });
+    if (!this.isTrustedWindowsReadyInstallerInfo(readyInfo ?? undefined, readyReceipt)) {
+      const source = this.state.source;
+      await this.cleanupReadyFile(filePath);
+      this.clearStoredReadyFile(source);
+      this.readyWindowsInstallerTrust = null;
+      const state = this.setState({
+        status: AppUpdateStatus.Error,
+        source,
+        info: null,
+        progress: null,
+        readyFilePath: null,
+        readyFileHash: null,
+        errorMessage: APP_UPDATE_URL_UNTRUSTED_ERROR,
+      });
+      return {
+        success: false,
+        state,
+        error: APP_UPDATE_URL_UNTRUSTED_ERROR,
+      };
+    }
+    if (
+      readyFileHash == null
+      || !(await this.isReadyFileValid(filePath, readyFileHash))
+    ) {
+      const source = this.state.source;
+      await this.cleanupReadyFile(filePath);
+      this.clearStoredReadyFile(source);
+      this.readyWindowsInstallerTrust = null;
+      const message = APP_UPDATE_FILE_INVALID_ERROR;
+      const state = this.setState({
+        status: AppUpdateStatus.Available,
+        source,
+        info: readyInfo,
+        progress: null,
+        readyFilePath: null,
+        readyFileHash: null,
+        errorMessage: message,
+      });
+      return {
+        success: false,
+        state,
+        error: message,
+      };
+    }
     this.setState({
       ...this.state,
       status: AppUpdateStatus.Installing,
@@ -339,6 +425,7 @@ export class AppUpdateCoordinator {
         filePath,
         fileHash: readyFileHash,
         info: readyInfo,
+        windowsInstallerUrlPolicyReceipt: readyReceipt,
         installAttempted: true,
       });
     }
@@ -357,7 +444,8 @@ export class AppUpdateCoordinator {
       // user retry the install without re-downloading. Only fall back to
       // Available when the file is gone or corrupted.
       const fileIntact =
-        readyFileHash != null && (await this.isReadyFileValid(filePath, readyFileHash));
+        readyFileHash != null
+        && (await this.isReadyFileValid(filePath, readyFileHash));
       if (fileIntact) {
         const state = this.setState({
           ...this.state,
@@ -389,6 +477,7 @@ export class AppUpdateCoordinator {
       void this.cleanupReadyFile(previousReadyFilePath);
     }
     this.clearStoredReadyFile(previousSource);
+    this.readyWindowsInstallerTrust = null;
     return state;
   }
 
@@ -398,7 +487,7 @@ export class AppUpdateCoordinator {
     source: AppUpdateSource,
   ): Promise<AppUpdateRuntimeState> {
     console.log(
-      `[AppUpdate] startDownload requested, flowId=${flowId}, source=${source}, version=${info.latestVersion}, url=${info.url}`,
+      `[AppUpdate] startDownload requested, flowId=${flowId}, source=${source}, version=${info.latestVersion}, url=${formatUpdateUrlForLog(info.url)}`,
     );
     this.setState({
       status: AppUpdateStatus.Downloading,
@@ -409,24 +498,30 @@ export class AppUpdateCoordinator {
       readyFileHash: null,
       errorMessage: null,
     });
+    this.readyWindowsInstallerTrust = null;
 
     try {
-      const filePath = await downloadUpdate(info.url, source, progress => {
-        if (!this.isFlowActive(flowId, source)) {
-          console.log(
-            `[AppUpdate] ignoring stale download progress, flowId=${flowId}, source=${source}, activeFlowId=${this.activeFlowId}, activeSource=${this.activeFlowSource ?? 'none'}`,
-          );
-          return;
-        }
-        this.setState({
-          ...this.state,
-          status: AppUpdateStatus.Downloading,
-          source,
-          info,
-          progress,
-          errorMessage: null,
-        });
-      });
+      const download = await downloadUpdate(
+        info.url,
+        source,
+        progress => {
+          if (!this.isFlowActive(flowId, source)) {
+            console.log(
+              `[AppUpdate] ignoring stale download progress, flowId=${flowId}, source=${source}, activeFlowId=${this.activeFlowId}, activeSource=${this.activeFlowSource ?? 'none'}`,
+            );
+            return;
+          }
+          this.setState({
+            ...this.state,
+            status: AppUpdateStatus.Downloading,
+            source,
+            info,
+            progress,
+            errorMessage: null,
+          });
+        },
+      );
+      const filePath = download.filePath;
       if (!this.isFlowActive(flowId, source)) {
         console.log(
           `[AppUpdate] ignoring stale download completion, flowId=${flowId}, source=${source}, filePath=${filePath}`,
@@ -438,12 +533,16 @@ export class AppUpdateCoordinator {
       console.log(
         `[AppUpdate] download completed, flowId=${flowId}, source=${source}, version=${info.latestVersion}, filePath=${filePath}, fileHash=${fileHash}`,
       );
-      this.setStoredReadyFile({
+      const storedReadyFile: StoredReadyFile = {
         version: info.latestVersion,
         filePath,
         fileHash,
         info,
-      });
+        windowsInstallerUrlPolicyReceipt:
+          download.windowsInstallerUrlPolicyReceipt,
+      };
+      this.setStoredReadyFile(storedReadyFile);
+      this.bindReadyWindowsInstallerTrust(storedReadyFile);
       await this.pruneCachedInstallerFiles(source, [filePath]);
       this.autoOpenReadyModal = true;
       return this.setState({
@@ -541,7 +640,7 @@ export class AppUpdateCoordinator {
       url: this.getPlatformDownloadUrl(value),
     };
     console.log(
-      `[AppUpdate] update available: ${currentVersion} -> ${latestVersion}, downloadUrl=${result.url}`,
+      `[AppUpdate] update available: ${currentVersion} -> ${latestVersion}, downloadUrl=${formatUpdateUrlForLog(result.url)}`,
     );
     return result;
   }
@@ -555,7 +654,22 @@ export class AppUpdateCoordinator {
     }
 
     if (process.platform === 'win32') {
-      return value?.windowsX64?.url?.trim() || getFallbackDownloadUrl();
+      const candidate = value?.windowsX64?.url?.trim();
+      if (!candidate) {
+        return getFallbackDownloadUrl();
+      }
+      try {
+        assertTrustedWindowsInstallerUrl(candidate);
+      } catch (error) {
+        const reason = error instanceof AppUpdateUrlUntrustedError
+          ? error.reason
+          : 'unknown';
+        console.error(
+          `[AppUpdate] update API returned an unsafe Windows installer URL, reason=${reason}`,
+        );
+        throw error;
+      }
+      return candidate;
     }
 
     return getFallbackDownloadUrl();
@@ -572,12 +686,15 @@ export class AppUpdateCoordinator {
     if (!url || isManualDownloadUrl(url)) {
       return false;
     }
-    const normalizedPath = new URL(url).pathname.toLowerCase();
     if (process.platform === 'darwin') {
-      return normalizedPath.endsWith('.dmg');
+      try {
+        return new URL(url).pathname.toLowerCase().endsWith('.dmg');
+      } catch {
+        return false;
+      }
     }
     if (process.platform === 'win32') {
-      return normalizedPath.endsWith('.exe');
+      return validateWindowsInstallerUrl(url).trusted;
     }
     return false;
   }
@@ -690,6 +807,12 @@ export class AppUpdateCoordinator {
     if (!filePath) {
       return;
     }
+    if (!this.isExpectedReadyInstallerPath(filePath)) {
+      console.warn(
+        `[AppUpdate] refused to delete a ready-file path outside the managed update cache: ${filePath}`,
+      );
+      return;
+    }
     try {
       await fs.promises.unlink(filePath);
     } catch {
@@ -712,6 +835,29 @@ export class AppUpdateCoordinator {
       return true;
     }
     return /^lobsterai-update-\d+/.test(filename);
+  }
+
+  private isExpectedReadyInstallerPath(filePath: string): boolean {
+    const cacheDir = path.resolve(this.getUpdateCacheDir());
+    const resolvedFilePath = path.resolve(filePath);
+    const normalize = (value: string) =>
+      process.platform === 'win32' ? value.toLowerCase() : value;
+    if (normalize(path.dirname(resolvedFilePath)) !== normalize(cacheDir)) {
+      return false;
+    }
+
+    const filename = path.basename(resolvedFilePath);
+    if (!this.isCachedInstallerForSource(filename, null)) {
+      return false;
+    }
+    const extension = path.extname(filename).toLowerCase();
+    if (process.platform === 'win32') {
+      return extension === '.exe';
+    }
+    if (process.platform === 'darwin') {
+      return extension === '.dmg';
+    }
+    return extension === '.exe' || extension === '.dmg';
   }
 
   private async pruneCachedInstallerFiles(
@@ -770,6 +916,14 @@ export class AppUpdateCoordinator {
             version: latestVersion,
             filePath: previousState.readyFilePath,
             fileHash: previousState.readyFileHash,
+            info: previousState.info,
+            windowsInstallerUrlPolicyReceipt:
+              this.getReadyWindowsInstallerReceipt({
+                version: latestVersion,
+                filePath: previousState.readyFilePath,
+                fileHash: previousState.readyFileHash,
+                source: previousState.source,
+              }),
           }
         : null;
 
@@ -777,15 +931,24 @@ export class AppUpdateCoordinator {
       console.log(
         `[AppUpdate] checking in-memory ready file: ${inMemoryReadyFile.filePath}`,
       );
-      const isValid = await this.isReadyFileValid(
-        inMemoryReadyFile.filePath,
-        inMemoryReadyFile.fileHash,
-      );
-      if (isValid) {
-        console.log('[AppUpdate] in-memory ready file is valid');
-        return inMemoryReadyFile;
+      if (!this.isTrustedWindowsReadyInstallerInfo(
+        inMemoryReadyFile.info,
+        inMemoryReadyFile.windowsInstallerUrlPolicyReceipt,
+      )) {
+        await this.cleanupReadyFile(inMemoryReadyFile.filePath);
+        this.clearStoredReadyFile(previousState.source);
+        this.readyWindowsInstallerTrust = null;
+      } else {
+        const isValid = await this.isReadyFileValid(
+          inMemoryReadyFile.filePath,
+          inMemoryReadyFile.fileHash,
+        );
+        if (isValid) {
+          console.log('[AppUpdate] in-memory ready file is valid');
+          return inMemoryReadyFile;
+        }
+        console.warn('[AppUpdate] in-memory ready file is invalid');
       }
-      console.warn('[AppUpdate] in-memory ready file is invalid');
     }
 
     // A matching installer may have been downloaded by the other flow (e.g. a
@@ -807,6 +970,14 @@ export class AppUpdateCoordinator {
       console.log(
         `[AppUpdate] checking persisted ready file: ${storedReadyFile.filePath}`,
       );
+      if (!this.isTrustedWindowsReadyInstallerInfo(
+        storedReadyFile.info,
+        storedReadyFile.windowsInstallerUrlPolicyReceipt,
+      )) {
+        await this.cleanupReadyFile(storedReadyFile.filePath);
+        this.clearStoredReadyFile(source);
+        continue;
+      }
       const isValid = await this.isReadyFileValid(
         storedReadyFile.filePath,
         storedReadyFile.fileHash,
@@ -825,10 +996,19 @@ export class AppUpdateCoordinator {
     return null;
   }
 
-  private async isReadyFileValid(filePath: string, expectedHash: string): Promise<boolean> {
+  private async isReadyFileValid(
+    filePath: string,
+    expectedHash: string,
+  ): Promise<boolean> {
     try {
-      const stat = await fs.promises.stat(filePath);
-      if (!stat.isFile() || stat.size <= 0) {
+      if (!this.isExpectedReadyInstallerPath(filePath)) {
+        console.warn(
+          `[AppUpdate] ready file validation failed: path is outside the managed update cache, path=${filePath}`,
+        );
+        return false;
+      }
+      const stat = await fs.promises.lstat(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0) {
         console.warn(
           `[AppUpdate] ready file validation failed: file missing or empty, path=${filePath}`,
         );
@@ -898,9 +1078,27 @@ export class AppUpdateCoordinator {
         continue;
       }
 
+      if (!this.isTrustedWindowsReadyInstallerInfo(
+        storedReadyFile.info,
+        storedReadyFile.windowsInstallerUrlPolicyReceipt,
+      )) {
+        this.clearStoredReadyFile(source);
+        void this.cleanupReadyFile(storedReadyFile.filePath);
+        void this.pruneCachedInstallerFiles(source);
+        continue;
+      }
+
       try {
-        const stat = fs.statSync(storedReadyFile.filePath);
-        if (!stat.isFile() || stat.size <= 0) {
+        if (!this.isExpectedReadyInstallerPath(storedReadyFile.filePath)) {
+          console.warn(
+            `[AppUpdate] persisted ready file is outside the managed update cache: ${storedReadyFile.filePath}`,
+          );
+          this.clearStoredReadyFile(source);
+          void this.cleanupReadyFile(storedReadyFile.filePath);
+          continue;
+        }
+        const stat = fs.lstatSync(storedReadyFile.filePath);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0) {
           console.warn(
             `[AppUpdate] persisted ready file is missing or empty during startup restore: ${storedReadyFile.filePath}`,
           );
@@ -927,6 +1125,7 @@ export class AppUpdateCoordinator {
         errorMessage: null,
         installIncomplete: storedReadyFile.installAttempted === true,
       };
+      this.bindReadyWindowsInstallerTrust(storedReadyFile);
       void this.pruneCachedInstallerFiles(source, [storedReadyFile.filePath]);
       console.log(
         `[AppUpdate] restored ready update into runtime state, source=${source}, version=${this.state.info?.latestVersion ?? 'none'}, filePath=${this.state.readyFilePath ?? 'none'}`,
@@ -952,6 +1151,70 @@ export class AppUpdateCoordinator {
       },
       url: '',
     };
+  }
+
+  private bindReadyWindowsInstallerTrust(record: StoredReadyFile): void {
+    const receipt = record.windowsInstallerUrlPolicyReceipt;
+    if (process.platform !== 'win32' || !receipt) {
+      this.readyWindowsInstallerTrust = null;
+      return;
+    }
+    this.readyWindowsInstallerTrust = {
+      version: record.version,
+      filePath: record.filePath,
+      fileHash: record.fileHash,
+      receipt,
+    };
+  }
+
+  private getReadyWindowsInstallerReceipt(candidate: {
+    version: string;
+    filePath: string;
+    fileHash: string;
+    source: AppUpdateSource | null;
+  }): WindowsInstallerUrlPolicyReceipt | undefined {
+    const matches = (record: ReadyWindowsInstallerTrust | StoredReadyFile | null) =>
+      record?.version === candidate.version
+      && record.filePath === candidate.filePath
+      && record.fileHash === candidate.fileHash;
+
+    if (matches(this.readyWindowsInstallerTrust)) {
+      return this.readyWindowsInstallerTrust?.receipt;
+    }
+
+    const stored = this.getStoredReadyFile(candidate.source);
+    if (matches(stored)) {
+      return stored?.windowsInstallerUrlPolicyReceipt;
+    }
+    return undefined;
+  }
+
+  private isTrustedWindowsReadyInstallerInfo(
+    info?: AppUpdateInfo,
+    receipt?: WindowsInstallerUrlPolicyReceipt,
+  ): boolean {
+    if (process.platform !== 'win32') {
+      return true;
+    }
+
+    const result = validateWindowsInstallerUrl(info?.url?.trim() ?? '');
+    if ('reason' in result) {
+      console.error(
+        `[AppUpdate] rejected cached Windows installer source, reason=${result.reason}`,
+      );
+      return false;
+    }
+
+    const receiptTrusted =
+      receipt?.policyVersion === WINDOWS_INSTALLER_URL_POLICY_VERSION
+      && receipt.inputOrigin === result.url.origin
+      && receipt.finalOrigin === result.url.origin
+      && isSecureWindowsInstallerOrigin(receipt.inputOrigin)
+      && isSecureWindowsInstallerOrigin(receipt.finalOrigin);
+    if (!receiptTrusted) {
+      console.error('[AppUpdate] rejected cached Windows installer source, reason=receipt-invalid');
+    }
+    return receiptTrusted;
   }
 
   private getReadyFileStoreKey(source: AppUpdateSource | null): string {

@@ -249,6 +249,17 @@ test('rate: Gemini RESOURCE_EXHAUSTED', () => {
   expect(classifyError('RESOURCE_EXHAUSTED: quota exceeded')).toBe('coworkErrorRateLimit');
 });
 
+// ==================== Model response timeouts ====================
+
+test('model response timeout: OpenClaw idle timeout', () => {
+  expect(classifyError('LLM idle timeout (330s): no response from model'))
+    .toBe('coworkErrorModelResponseTimeout');
+});
+
+test('model response timeout: OpenClaw request timeout', () => {
+  expect(classifyError('LLM request timed out.')).toBe('coworkErrorModelResponseTimeout');
+});
+
 // ==================== Network errors ====================
 
 test('network: ECONNREFUSED', () => {

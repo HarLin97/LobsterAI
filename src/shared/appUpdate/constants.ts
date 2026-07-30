@@ -35,6 +35,15 @@ export const AppUpdateIpc = {
  */
 export const APP_UPDATE_ELEVATION_DECLINED_ERROR = 'update-elevation-declined';
 
+/**
+ * Stable marker returned when a Windows installer URL fails the HTTPS
+ * transport, credential, port, or extension policy.
+ */
+export const APP_UPDATE_URL_UNTRUSTED_ERROR = 'update-url-untrusted';
+
+/** Stable marker returned when cached installer bytes fail hash validation. */
+export const APP_UPDATE_FILE_INVALID_ERROR = 'update-file-invalid';
+
 export interface ChangeLogEntry {
   title: string;
   content: string[];

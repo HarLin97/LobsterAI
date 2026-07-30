@@ -42,6 +42,18 @@ describe('ProviderRegistry', () => {
     expect(xiaomi?.defaultBaseUrl).toBe('https://api.xiaomimimo.com/v1/chat/completions');
   });
 
+  test('moonshot defaults to Kimi K3 with the controlled model capabilities', () => {
+    expect(ProviderRegistry.get(ProviderName.Moonshot)?.defaultModels[0]).toEqual({
+      id: 'kimi-k3',
+      name: 'Kimi K3',
+      supportsImage: true,
+      supportsVideo: true,
+      supportsThinking: true,
+      contextWindow: 1_048_576,
+      maxTokens: 8_192,
+    });
+  });
+
   test('xiaomi default models are limited to MiMo V2.5 models with 1M context', () => {
     const xiaomi = ProviderRegistry.get(ProviderName.Xiaomi);
     expect(xiaomi?.defaultModels).toEqual([
@@ -120,6 +132,7 @@ describe('ProviderRegistry', () => {
       [ProviderName.DeepSeek, 'deepseek-reasoner'],
       [ProviderName.Moonshot, 'kimi-k2.6'],
       [ProviderName.Moonshot, 'kimi-k2.5'],
+      [ProviderName.Moonshot, 'kimi-k3'],
       [ProviderName.Moonshot, 'kimi-for-coding'],
       [ProviderName.Zhipu, 'glm-5.1'],
       [ProviderName.Zhipu, 'glm-5'],
@@ -165,6 +178,14 @@ describe('ProviderRegistry', () => {
     expect(ProviderRegistry.resolveModelContextWindow(ProviderName.DeepSeek, 'deepseek-v4-pro', 200_000)).toBe(200_000);
     expect(ProviderRegistry.resolveModelContextWindow(ProviderName.OpenAI, 'gpt-5.6-sol')).toBe(1_050_000);
     expect(ProviderRegistry.resolveModelContextWindow(ProviderName.Xai, 'grok-4.5')).toBe(500_000);
+  });
+
+  test('resolves Kimi K3 video and output token metadata', () => {
+    expect(ProviderRegistry.resolveModelSupportsVideo(ProviderName.Moonshot, 'kimi-k3')).toBe(true);
+    expect(ProviderRegistry.resolveModelSupportsVideo('custom_0', 'kimi-k3')).toBe(true);
+    expect(ProviderRegistry.resolveModelSupportsVideo('custom_0', 'unknown-model')).toBe(false);
+    expect(ProviderRegistry.resolveModelMaxTokens(ProviderName.Moonshot, 'kimi-k3')).toBe(8_192);
+    expect(ProviderRegistry.resolveModelMaxTokens(ProviderName.Moonshot, 'kimi-k3', 4_096)).toBe(4_096);
   });
 
   test('supportsCodingPlan is true for moonshot, qwen, zhipu, volcengine, qianfan, xiaomi', () => {

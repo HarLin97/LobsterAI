@@ -139,6 +139,7 @@ describe('deployment persistence data management client', () => {
       Buffer.from('504b0506000000000000000000000000000000000000', 'hex'),
     );
     let manifest: Record<string, unknown> | undefined;
+    let quotaReservationId: string | undefined;
     const persistence: ShareDeploymentPersistence = {
       enabled: true,
       provider: ShareDeploymentPersistenceProvider.Filesystem,
@@ -156,6 +157,7 @@ describe('deployment persistence data management client', () => {
         async (_url, options) => {
           const form = options?.body as FormData;
           manifest = JSON.parse(String(form.get('manifest'))) as Record<string, unknown>;
+          quotaReservationId = String(form.get('quotaReservationId'));
           return Response.json({
             code: 0,
             data: {
@@ -181,6 +183,7 @@ describe('deployment persistence data management client', () => {
           port: 8000,
           persistence,
           persistenceUpdateMode: ShareDeploymentPersistenceUpdateMode.Replace,
+          quotaReservationId: 'qrs_test',
           archivePath,
           sourceSha256: 'source-hash',
           archiveBytes: 22,
@@ -211,6 +214,7 @@ describe('deployment persistence data management client', () => {
       expect((manifest?.persistence as Record<string, unknown>).updateMode).toBe(
         ShareDeploymentPersistenceUpdateMode.Replace,
       );
+      expect(quotaReservationId).toBe('qrs_test');
     } finally {
       await fs.promises.rm(tempDirectory, { recursive: true, force: true });
     }

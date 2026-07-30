@@ -3,6 +3,11 @@ import { session } from 'electron';
 import http from 'http';
 
 import {
+  AuthRefreshOutcome,
+  type AuthTokenRefreshResult,
+} from '../../shared/auth/constants';
+import { ProviderName } from '../../shared/providers';
+import {
   anthropicToOpenAI,
   buildOpenAIChatCompletionsURL,
   formatSSEEvent,
@@ -180,7 +185,11 @@ export function isAllowedProxyHost(req: http.IncomingMessage): boolean {
  * with the new token.  Providers register their refresher via
  * {@link registerProxyTokenRefresher}.
  */
-const tokenRefreshers = new Map<string, () => Promise<string | null>>();
+type ProxyTokenRefresher = (
+  rejectedToken?: string,
+) => Promise<AuthTokenRefreshResult>;
+
+const tokenRefreshers = new Map<string, ProxyTokenRefresher>();
 let currentCoworkSessionId: string | null = null;
 const toolCallExtraContentById = new Map<string, unknown>();
 
@@ -230,6 +239,19 @@ function toOptionalObject(value: unknown): Record<string, unknown> | null {
     return value as Record<string, unknown>;
   }
   return null;
+}
+
+function shouldRefreshProxyToken(status: number, provider?: string): boolean {
+  if (status === 401) return true;
+  return status === 403 && provider !== ProviderName.LobsteraiServer;
+}
+
+function isTemporaryLobsterAIAuthRefreshFailure(
+  provider: string | undefined,
+  result: AuthTokenRefreshResult,
+): boolean {
+  return provider === ProviderName.LobsteraiServer
+    && result.outcome === AuthRefreshOutcome.TransientFailure;
 }
 
 function toString(value: unknown): string {
@@ -2520,23 +2542,36 @@ async function handleRequest(
       });
       // Auto-retry once for token expiry using provider-based refresher
       if (
-        (upstreamResponse.status === 401 || upstreamResponse.status === 403)
+        shouldRefreshProxyToken(upstreamResponse.status, upstreamConfig.provider)
         && upstreamConfig.provider
       ) {
         const refresher = tokenRefreshers.get(upstreamConfig.provider);
         if (refresher) {
           console.log(`[CoworkProxy] OpenAI passthrough: ${upstreamConfig.provider} auth error, refreshing token and retrying...`);
           try {
-            const newToken = await refresher();
-            if (newToken) {
-              upstreamConfig.apiKey = newToken;
-              upstreamHeaders.Authorization = `Bearer ${newToken}`;
+            const refreshResult = await refresher(upstreamConfig.apiKey);
+            if (refreshResult.accessToken) {
+              upstreamConfig.apiKey = refreshResult.accessToken;
+              upstreamHeaders.Authorization = `Bearer ${refreshResult.accessToken}`;
               upstreamResponse = await session.defaultSession.fetch(upstreamUrl, {
                 method: 'POST',
                 headers: upstreamHeaders,
                 body,
               });
               console.log(`[CoworkProxy] OpenAI passthrough: retry status=${upstreamResponse.status}`);
+            } else if (isTemporaryLobsterAIAuthRefreshFailure(
+              upstreamConfig.provider,
+              refreshResult,
+            )) {
+              writeJSON(
+                res,
+                503,
+                createAnthropicErrorBody(
+                  'Login verification is temporarily unavailable. Please retry.',
+                  'service_unavailable',
+                ),
+              );
+              return;
             }
           } catch (refreshErr) {
             console.warn(`[CoworkProxy] OpenAI passthrough: ${upstreamConfig.provider} token refresh failed:`, refreshErr);
@@ -2709,26 +2744,39 @@ async function handleRequest(
     // 401/403 likely means the token expired.  Look up the registered
     // refresher for this provider and retry once with a fresh token.
     if (
-      (upstreamResponse.status === 401 || upstreamResponse.status === 403)
+      shouldRefreshProxyToken(upstreamResponse.status, upstreamConfig?.provider)
       && upstreamConfig?.provider
     ) {
       const refresher = tokenRefreshers.get(upstreamConfig.provider);
       if (refresher) {
         console.log(`[CoworkProxy] Got ${upstreamResponse.status} from ${upstreamConfig.provider}, attempting token refresh and retry...`);
         try {
-          const newToken = await refresher();
-          if (newToken) {
+          const refreshResult = await refresher(upstreamConfig.apiKey);
+          if (refreshResult.accessToken) {
             if (isGeminiProvider(upstreamConfig.provider, upstreamConfig.baseURL)) {
-              headers['x-goog-api-key'] = newToken;
+              headers['x-goog-api-key'] = refreshResult.accessToken;
             } else {
-              headers.Authorization = `Bearer ${newToken}`;
+              headers.Authorization = `Bearer ${refreshResult.accessToken}`;
             }
             if (upstreamConfig) {
-              upstreamConfig.apiKey = newToken;
+              upstreamConfig.apiKey = refreshResult.accessToken;
             }
             upstreamResponse = await sendUpstreamRequest(upstreamRequest, currentTargetURL);
             const retryDuration = Date.now() - fetchStartTime;
             console.log(`[CoworkProxy] Token refresh retry: status=${upstreamResponse.status}, ok=${upstreamResponse.ok}, fetchTime=${retryDuration}ms`);
+          } else if (isTemporaryLobsterAIAuthRefreshFailure(
+            upstreamConfig.provider,
+            refreshResult,
+          )) {
+            writeJSON(
+              res,
+              503,
+              createAnthropicErrorBody(
+                'Login verification is temporarily unavailable. Please retry.',
+                'service_unavailable',
+              ),
+            );
+            return;
           }
         } catch (refreshError) {
           console.warn(`[CoworkProxy] Token refresh for ${upstreamConfig.provider} failed:`, refreshError);
@@ -2890,7 +2938,9 @@ export const __openAICompatProxyTestUtils = {
   processResponsesStreamEvent,
   convertChatCompletionsRequestToResponsesRequest,
   filterOpenAIToolsForProvider,
+  isTemporaryLobsterAIAuthRefreshFailure,
   isGeminiProvider,
+  shouldRefreshProxyToken,
 };
 
 export async function startCoworkOpenAICompatProxy(): Promise<void> {
@@ -2963,7 +3013,7 @@ export function configureCoworkOpenAICompatProxy(config: OpenAICompatUpstreamCon
   lastProxyError = null;
 }
 
-export function registerProxyTokenRefresher(provider: string, refresher: () => Promise<string | null>): void {
+export function registerProxyTokenRefresher(provider: string, refresher: ProxyTokenRefresher): void {
   tokenRefreshers.set(provider, refresher);
 }
 

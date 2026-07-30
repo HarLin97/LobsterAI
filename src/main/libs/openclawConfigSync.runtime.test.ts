@@ -18,14 +18,20 @@ vi.mock('electron', () => ({
 
 const mockRuntimeState = vi.hoisted(() => ({
   proxyPort: null as number | null,
+  modelCompatPluginAvailable: true,
   serverModels: [] as Array<{
     modelId: string;
     modelName?: string;
     provider?: string;
     apiFormat?: string;
+    runtimeProfile?: string;
     supportsImage?: boolean;
+    supportsVideo?: boolean;
     supportsThinking?: boolean;
+    supportsToolCalling?: boolean;
+    agenticReady?: boolean;
     contextWindow?: number;
+    maxTokens?: number;
     explicitContextCache?: boolean;
   }>,
   enabledProviders: [] as Array<{
@@ -39,8 +45,10 @@ const mockRuntimeState = vi.hoisted(() => ({
       id: string;
       name: string;
       supportsImage?: boolean;
+      supportsVideo?: boolean;
       supportsThinking?: boolean;
       contextWindow?: number;
+      maxTokens?: number;
       customParams?: Record<string, unknown>;
     }>;
   }>,
@@ -63,6 +71,25 @@ const mockRuntimeState = vi.hoisted(() => ({
       supportsImage: false,
       modelName: 'GPT Test',
     },
+  } as {
+    config: {
+      baseURL: string;
+      apiKey: string;
+      model: string;
+      apiType: 'anthropic' | 'openai';
+    };
+    providerMetadata: {
+      providerName: string;
+      authType?: 'apikey' | 'oauth';
+      codingPlanEnabled: boolean;
+      runtimeProfile?: string;
+      supportsImage?: boolean;
+      supportsVideo?: boolean;
+      supportsThinking?: boolean;
+      modelName?: string;
+      contextWindow?: number;
+      maxTokens?: number;
+    };
   },
 }));
 
@@ -77,7 +104,10 @@ vi.mock('./claudeSettings', () => ({
 vi.mock('./openclawLocalExtensions', () => ({
   findBundledExtensionsDir: () => null,
   findThirdPartyExtensionsDir: () => null,
-  hasBundledOpenClawExtension: (id: string) => id !== 'qwen-portal-auth',
+  hasBundledOpenClawExtension: (id: string) => (
+    id !== 'qwen-portal-auth'
+    && (id !== 'lobsterai-model-compat' || mockRuntimeState.modelCompatPluginAvailable)
+  ),
   hasRuntimeBundledOpenClawExtension: (id: string) => id === 'xai',
   resolveOpenClawExtensionPluginId: (id: string) => {
     const manifestIds: Record<string, string> = {
@@ -100,6 +130,7 @@ describe('OpenClawConfigSync runtime config output', () => {
 
   beforeEach(() => {
     mockRuntimeState.proxyPort = null;
+    mockRuntimeState.modelCompatPluginAvailable = true;
     mockRuntimeState.serverModels = [];
     mockRuntimeState.enabledProviders = [];
     mockRuntimeState.providerSourceEntries = [];
@@ -1145,6 +1176,364 @@ describe('OpenClawConfigSync runtime config output', () => {
       'lobsterai-server/MiniMax-M2.7-YoudaoInner',
       'lobsterai-server/kimi-k2.6-inhouse-ZhiYun',
     ]));
+  });
+
+  test('activates deterministic Kimi K3 ownership for exact custom and package models', async () => {
+    mockRuntimeState.proxyPort = 56646;
+    mockRuntimeState.rawApiConfig = {
+      config: {
+        baseURL: 'https://gateway.example.com/v1',
+        apiKey: 'sk-custom',
+        model: 'kimi-k3',
+        apiType: 'openai',
+      },
+      providerMetadata: {
+        providerName: 'custom_0',
+        codingPlanEnabled: false,
+        supportsImage: false,
+        modelName: 'Kimi K3',
+      },
+    };
+    mockRuntimeState.enabledProviders = [{
+      providerName: 'custom_0',
+      baseURL: 'https://gateway.example.com/v1',
+      apiKey: 'sk-custom',
+      apiType: 'openai',
+      codingPlanEnabled: false,
+      models: [
+        {
+          id: 'plain-model',
+          name: 'Plain Model',
+          customParams: { temperature: 0.4 },
+        },
+        {
+          id: 'kimi-k3',
+          name: 'Kimi K3',
+          customParams: {
+            metadata: 'kept',
+            temperature: 0.1,
+            reasoning_effort: 'low',
+            thinking: { type: 'disabled' },
+          },
+        },
+      ],
+    }];
+    mockRuntimeState.serverModels = [
+      {
+        modelId: 'kimi-k3-package',
+        modelName: 'Kimi K3 Package',
+        apiFormat: 'openai',
+        runtimeProfile: 'moonshot-kimi-k3',
+        supportsImage: false,
+        supportsVideo: false,
+        supportsThinking: false,
+        supportsToolCalling: true,
+        agenticReady: true,
+        contextWindow: 128_000,
+        maxTokens: 1024,
+      },
+    ];
+
+    const sync = await createSync();
+    const { OpenClawConfigImpact } = await import('./openclawConfigImpact');
+    const firstSync = sync.sync('kimi-k3-compat');
+    expect(firstSync).toMatchObject({
+      ok: true,
+      restartImpact: OpenClawConfigImpact.Restart,
+    });
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const customProvider = config.models.providers.custom_0;
+    const serverProvider = config.models.providers['lobsterai-server'];
+    const customK3 = customProvider.models.find((model: { id: string }) =>
+      model.id === 'kimi-k3');
+    const serverK3 = serverProvider.models.find((model: { id: string }) =>
+      model.id === 'kimi-k3-package');
+
+    expect(customProvider.api).toBe('lobsterai-model-compat');
+    expect(serverProvider.api).toBe('lobsterai-model-compat');
+    expect(customProvider.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'plain-model', api: 'openai-completions' }),
+      expect.objectContaining({ id: 'kimi-k3', api: 'openai-completions' }),
+    ]));
+    expect(customK3).toMatchObject({
+      reasoning: true,
+      input: ['text', 'image', 'video'],
+      contextWindow: 1_048_576,
+      maxTokens: 8192,
+      thinkingLevelMap: {
+        off: null,
+        minimal: 'max',
+        low: 'max',
+        medium: 'max',
+        high: 'max',
+        xhigh: 'max',
+        max: 'max',
+      },
+      compat: {
+        maxTokensField: 'max_tokens',
+        supportsUsageInStreaming: false,
+        requiresStringContent: true,
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+      },
+    });
+    expect(serverK3).toMatchObject({
+      api: 'openai-completions',
+      reasoning: true,
+      input: ['text', 'image', 'video'],
+      contextWindow: 1_048_576,
+      maxTokens: 8192,
+    });
+    expect(config.agents.defaults.models['custom_0/kimi-k3']).toEqual({
+      params: {
+        extra_body: {
+          metadata: 'kept',
+        },
+      },
+    });
+    expect(config.agents.defaults.models['custom_0/plain-model']).toEqual({
+      params: {
+        extra_body: {
+          temperature: 0.4,
+        },
+      },
+    });
+    expect(config.plugins.entries['lobsterai-model-compat']).toEqual({
+      enabled: true,
+      config: {
+        modelProfiles: {
+          'custom_0/kimi-k3': 'moonshot-kimi-k3',
+          'lobsterai-server/kimi-k3-package': 'moonshot-kimi-k3',
+        },
+      },
+    });
+    expect(config.plugins.allow).toContain('lobsterai-model-compat');
+
+    const unchangedSync = sync.sync('kimi-k3-compat-unchanged');
+    expect(unchangedSync.ok).toBe(true);
+    expect(unchangedSync.restartImpact).toBeUndefined();
+    const stableSync = sync.sync('kimi-k3-compat-stable');
+    expect(stableSync.changed).toBe(false);
+    expect(stableSync.restartImpact).toBeUndefined();
+  });
+
+  test('restarts only when Kimi K3 compatibility ownership or profile mapping changes', async () => {
+    const { modelCompatConfigChangeRequiresRestart } = await import('./openclawConfigSync');
+    const ordinaryConfig = {
+      models: {
+        providers: {
+          custom_0: {
+            api: 'openai-completions',
+          },
+        },
+      },
+      plugins: {
+        entries: {},
+      },
+    };
+    const compatConfig = {
+      models: {
+        providers: {
+          custom_0: {
+            api: 'lobsterai-model-compat',
+            models: [{ id: 'plain-model', api: 'openai-completions' }],
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          'lobsterai-model-compat': {
+            enabled: true,
+            config: {
+              modelProfiles: {
+                'custom_0/my-kimi-prod': 'moonshot-kimi-k3',
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(modelCompatConfigChangeRequiresRestart(ordinaryConfig, compatConfig)).toBe(true);
+    expect(modelCompatConfigChangeRequiresRestart(compatConfig, ordinaryConfig)).toBe(true);
+    expect(modelCompatConfigChangeRequiresRestart(compatConfig, {
+      ...compatConfig,
+      plugins: {
+        entries: {
+          'lobsterai-model-compat': {
+            enabled: true,
+            config: {
+              modelProfiles: {
+                'custom_0/next-kimi': 'moonshot-kimi-k3',
+              },
+            },
+          },
+        },
+      },
+    })).toBe(true);
+    expect(modelCompatConfigChangeRequiresRestart(compatConfig, {
+      ...compatConfig,
+      models: {
+        providers: {
+          custom_0: {
+            api: 'lobsterai-model-compat',
+            models: [
+              { id: 'another-plain-model', api: 'openai-completions' },
+              { id: 'plain-model', api: 'openai-completions' },
+            ],
+          },
+        },
+      },
+    })).toBe(false);
+  });
+
+  test('assigns mixed-provider compatibility ownership independently of model order', async () => {
+    const { finalizeModelCompatibilityOwners } = await import('./openclawConfigSync');
+    const buildProviders = (modelIds: string[]) => ({
+      custom_0: {
+        baseUrl: 'https://gateway.example.com/v1',
+        api: 'openai-completions',
+        apiKey: '${LOBSTER_APIKEY_CUSTOM_0}',
+        auth: 'api_key',
+        models: modelIds.map(id => ({
+          id,
+          name: id,
+          api: 'openai-completions',
+          input: ['text'],
+        })),
+      },
+    });
+    const modelProfiles = {
+      'custom_0/my-kimi-prod': 'moonshot-kimi-k3',
+    };
+    const forward = buildProviders(['plain-model', 'my-kimi-prod']);
+    const reverse = buildProviders(['my-kimi-prod', 'plain-model']);
+
+    const forwardResult = finalizeModelCompatibilityOwners(forward as never, modelProfiles);
+    const reverseResult = finalizeModelCompatibilityOwners(reverse as never, modelProfiles);
+
+    expect(forwardResult).toEqual(reverseResult);
+    expect(forwardResult).toEqual({
+      modelProfiles,
+      rejectedModelRefs: [],
+    });
+    for (const providers of [forward, reverse]) {
+      expect(providers.custom_0.api).toBe('lobsterai-model-compat');
+      expect(Object.fromEntries(
+        providers.custom_0.models.map(model => [model.id, model.api]),
+      )).toEqual({
+        'plain-model': 'openai-completions',
+        'my-kimi-prod': 'openai-completions',
+      });
+    }
+  });
+
+  test.each([
+    [undefined, 'missing'],
+    ['unknown', 'unknown'],
+    ['anthropic', 'anthropic'],
+  ])(
+    'fails closed for Kimi K3 package apiFormat %s',
+    async (apiFormat, expectedFormat) => {
+      mockRuntimeState.serverModels = [{
+        modelId: `package-k3-${expectedFormat}`,
+        apiFormat,
+        runtimeProfile: 'moonshot-kimi-k3',
+      }];
+
+      const sync = await createSync();
+      const result = sync.sync(`kimi-k3-package-${expectedFormat}`);
+
+      expect(result).toMatchObject({
+        ok: false,
+        changed: false,
+      });
+      expect(result.error).toContain('require apiFormat "openai"');
+      expect(result.error).toContain(`package-k3-${expectedFormat} (${expectedFormat})`);
+      expect(fs.existsSync(configPath)).toBe(false);
+    },
+  );
+
+  test('preserves the legacy OpenAI fallback for ordinary package models without apiFormat', async () => {
+    mockRuntimeState.proxyPort = 56646;
+    mockRuntimeState.serverModels = [{
+      modelId: 'ordinary-package-model',
+      modelName: 'Ordinary Package Model',
+    }];
+
+    const sync = await createSync();
+    expect(sync.sync('ordinary-package-api-fallback')).toMatchObject({ ok: true });
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.models.providers['lobsterai-server'].models).toContainEqual(
+      expect.objectContaining({
+        id: 'ordinary-package-model',
+        api: 'openai-completions',
+      }),
+    );
+  });
+
+  test('fails closed when the Kimi K3 compatibility extension is unavailable', async () => {
+    mockRuntimeState.modelCompatPluginAvailable = false;
+    mockRuntimeState.rawApiConfig = {
+      config: {
+        baseURL: 'https://gateway.example.com/v1',
+        apiKey: 'sk-custom',
+        model: 'kimi-k3',
+        apiType: 'openai',
+      },
+      providerMetadata: {
+        providerName: 'custom_0',
+        codingPlanEnabled: false,
+      },
+    };
+    mockRuntimeState.enabledProviders = [{
+      providerName: 'custom_0',
+      baseURL: 'https://gateway.example.com/v1',
+      apiKey: 'sk-custom',
+      apiType: 'openai',
+      codingPlanEnabled: false,
+      models: [{ id: 'kimi-k3', name: 'Kimi K3' }],
+    }];
+
+    const sync = await createSync();
+    const result = sync.sync('kimi-k3-plugin-missing');
+
+    expect(result).toMatchObject({
+      ok: false,
+      changed: false,
+    });
+    expect(result.error).toContain('lobsterai-model-compat');
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
+  test('rejects compatibility ownership when the configured model ref is absent', async () => {
+    const { finalizeModelCompatibilityOwners } = await import('./openclawConfigSync');
+    const providers = {
+      custom_0: {
+        baseUrl: 'https://gateway.example.com/v1',
+        api: 'openai-completions',
+        apiKey: '${LOBSTER_APIKEY_CUSTOM_0}',
+        auth: 'api_key',
+        models: [{
+          id: 'plain-model',
+          name: 'Plain Model',
+          api: 'openai-completions',
+          input: ['text'],
+        }],
+      },
+    };
+
+    const result = finalizeModelCompatibilityOwners(providers as never, {
+      'custom_0/missing-kimi': 'moonshot-kimi-k3',
+    });
+
+    expect(result).toEqual({
+      modelProfiles: {},
+      rejectedModelRefs: ['custom_0/missing-kimi'],
+    });
+    expect(providers.custom_0.api).toBe('openai-completions');
   });
 
   test('removes stale agent model allowlist when no model has custom params', async () => {

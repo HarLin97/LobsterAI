@@ -24,6 +24,69 @@ export type QualifiedAgentModelRefResolution =
   | { status: 'ambiguous'; modelId: string; providerIds: string[] }
   | { status: 'unresolved'; modelId: string };
 
+export const ServerModelRefResolutionStatus = {
+  Server: 'server',
+  NonServer: 'non_server',
+  Ambiguous: 'ambiguous',
+  RefreshRequired: 'refresh_required',
+  Unresolved: 'unresolved',
+} as const;
+
+export type ServerModelRefResolutionStatus =
+  typeof ServerModelRefResolutionStatus[keyof typeof ServerModelRefResolutionStatus];
+
+export type ServerModelRefResolution =
+  | {
+    status: typeof ServerModelRefResolutionStatus.Server;
+    modelId: string;
+    primaryModel: string;
+  }
+  | {
+    status: typeof ServerModelRefResolutionStatus.NonServer;
+    modelId: string;
+    providerIds: string[];
+  }
+  | {
+    status: typeof ServerModelRefResolutionStatus.Ambiguous;
+    modelId: string;
+    providerIds: string[];
+  }
+  | {
+    status: typeof ServerModelRefResolutionStatus.RefreshRequired;
+    modelId: string;
+  }
+  | {
+    status: typeof ServerModelRefResolutionStatus.Unresolved;
+    modelId: string;
+  };
+
+export function shouldSyncServerModelConfig(options: {
+  metadataChanged: boolean;
+  modelsMissingFromConfig: boolean;
+  forceConfigSync?: boolean;
+}): boolean {
+  return options.forceConfigSync === true
+    || options.metadataChanged
+    || options.modelsMissingFromConfig;
+}
+
+export async function syncServerModelConfigIfNeeded(options: {
+  metadataChanged: boolean;
+  modelsMissingFromConfig: boolean;
+  forceConfigSync?: boolean;
+  sync: () => Promise<{ success: boolean; error?: string }>;
+}): Promise<boolean> {
+  if (!shouldSyncServerModelConfig(options)) {
+    return false;
+  }
+
+  const result = await options.sync();
+  if (!result.success) {
+    throw new Error(result.error || 'Failed to sync server model configuration.');
+  }
+  return true;
+}
+
 const LegacyQualifiedProviderMigration: Record<string, readonly string[]> = {
   [OpenClawProviderId.OpenAI]: [OpenClawProviderId.OpenAICodex],
   [OpenClawProviderId.Minimax]: [OpenClawProviderId.MinimaxPortal],
@@ -204,6 +267,81 @@ export function resolveQualifiedAgentModelRef(options: {
   return {
     status: 'unresolved',
     modelId: explicitModel,
+  };
+}
+
+/**
+ * Resolve whether a run model reference belongs to lobsterai-server without
+ * silently assigning a historical bare id to the wrong provider.
+ *
+ * The candidate callback is intentionally checked before accepting a custom
+ * provider match. This keeps a stale bare package K3 id fail-closed while the
+ * authenticated package catalog is still loading.
+ */
+export function resolveServerModelRefForRun(options: {
+  modelRef: string;
+  availableProviders: ProviderModelCatalog;
+  isKnownServerModelCandidate?: (modelId: string) => boolean;
+}): ServerModelRefResolution {
+  const modelRef = options.modelRef.trim();
+  if (!modelRef) {
+    return {
+      status: ServerModelRefResolutionStatus.Unresolved,
+      modelId: '',
+    };
+  }
+
+  const explicitTarget = parsePrimaryModelRef(modelRef);
+  if (explicitTarget) {
+    if (explicitTarget.providerId === OpenClawProviderId.LobsteraiServer) {
+      return {
+        status: ServerModelRefResolutionStatus.Server,
+        modelId: explicitTarget.modelId,
+        primaryModel: explicitTarget.primaryModel,
+      };
+    }
+    return {
+      status: ServerModelRefResolutionStatus.NonServer,
+      modelId: explicitTarget.modelId,
+      providerIds: [explicitTarget.providerId],
+    };
+  }
+
+  const matchingProviders = Object.entries(options.availableProviders)
+    .filter(([, config]) => config.models.some(model => model.id === modelRef))
+    .map(([providerId]) => providerId);
+  const serverMatched = matchingProviders.includes(OpenClawProviderId.LobsteraiServer);
+
+  if (serverMatched && matchingProviders.length === 1) {
+    return {
+      status: ServerModelRefResolutionStatus.Server,
+      modelId: modelRef,
+      primaryModel: `${OpenClawProviderId.LobsteraiServer}/${modelRef}`,
+    };
+  }
+  if (serverMatched) {
+    return {
+      status: ServerModelRefResolutionStatus.Ambiguous,
+      modelId: modelRef,
+      providerIds: matchingProviders,
+    };
+  }
+  if (options.isKnownServerModelCandidate?.(modelRef)) {
+    return {
+      status: ServerModelRefResolutionStatus.RefreshRequired,
+      modelId: modelRef,
+    };
+  }
+  if (matchingProviders.length === 0) {
+    return {
+      status: ServerModelRefResolutionStatus.Unresolved,
+      modelId: modelRef,
+    };
+  }
+  return {
+    status: ServerModelRefResolutionStatus.NonServer,
+    modelId: modelRef,
+    providerIds: matchingProviders,
   };
 }
 

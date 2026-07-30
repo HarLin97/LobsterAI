@@ -8,12 +8,14 @@ import { OpenClawTranscriptSafetyErrorCode } from '../shared/openclawTranscript/
 
 export const CoworkErrorI18nKey = {
   AuthInvalid: 'coworkErrorAuthInvalid',
+  LobsterAILoginExpired: 'coworkErrorLobsterAILoginExpired',
   OAuthInvalid: 'coworkErrorOAuthInvalid',
   ModelAccessDenied: 'coworkErrorModelAccessDenied',
   QuotaExhausted: 'coworkErrorQuotaExhausted',
   FreeQuotaExhausted: 'coworkErrorFreeQuotaExhausted',
   InsufficientBalance: 'coworkErrorInsufficientBalance',
   RateLimit: 'coworkErrorRateLimit',
+  ModelResponseTimeout: 'coworkErrorModelResponseTimeout',
   NetworkError: 'coworkErrorNetworkError',
   ServerError: 'coworkErrorServerError',
   TranscriptOversized: 'coworkErrorTranscriptOversized',
@@ -57,6 +59,8 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   [/gateway.*draining|draining.*restart/i, 'coworkErrorGatewayDraining'],
   // Content moderation: Qwen, StepFun 451, generic
   [/DataInspectionFailed|content.*(review|filter)|审核未通过|未通过.*审核|inappropriate.*content|\b451\b|flagged.*input/i, 'coworkErrorContentFiltered'],
+  // Model/provider response timeouts. Must precede generic request/network timeouts.
+  [/LLM (?:idle timeout|request timed out)|no response from model|model response (?:timeout|timed out)/i, CoworkErrorI18nKey.ModelResponseTimeout],
   // Network errors
   [new RegExp(`${UNAVAILABLE_NETWORK_CODE_PATTERN}|fetch failed|ConnectTimeoutError|network request failed|socket (?:hang up|closed|reset)|connection.*(?:refused|reset|aborted|closed|timeout|timed out)|could not connect|network.*error|request.*timed out`, 'i'), CoworkErrorI18nKey.NetworkError],
   // Server errors: HTTP 500/502/503

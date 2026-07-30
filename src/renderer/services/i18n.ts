@@ -151,12 +151,19 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelNameHint: '自定义模型在列表中显示的名称',
     modelIdHint: '模型的唯一标识符，将用于 API 调用',
     supportsImageInputHint: '开启后可在对话中发送图片，实际是否支持取决于模型本身',
-    supportsThinkingOutputHint: '开启后会将该模型标记为可返回思考内容；实际是否产生思考取决于模型能力和自定义参数',
+    supportsThinkingOutputHint:
+      '开启后会将该模型标记为可返回思考内容；实际是否产生思考取决于模型能力和自定义参数',
     contextWindow: '上下文窗口',
     contextWindowHint: '模型一次可处理的最大 token 数量，窗口越大可容纳越多对话历史与文档。较低的窗口大小可能无法体验完整功能，实际支持的窗口大小取决于模型本身。',
     customParams: '自定义参数',
-    customParamsHint: '以 JSON 格式填写需要透传给模型的额外参数，如 {"reasoning_effort": "high"}。这些参数将直接传递给模型 API。',
+    customParamsHint:
+      '以 JSON 格式填写需要透传给模型的额外参数，如 {"reasoning_effort": "high"}。这些参数将直接传递给模型 API。',
     customParamsInvalidJson: '自定义参数格式不正确，请输入合法的 JSON 对象',
+    kimiK3CustomParamsConflict: '以下参数由 Kimi K3 自动配置管理，请从自定义参数中移除：{keys}',
+    serverModelMetadataUnavailable: '套餐模型信息暂不可用，请刷新后重试',
+    serverModelRuntimeProfileUnsupported: '套餐模型兼容配置不受支持',
+    serverModelToolCallingUnavailable: '该模型尚未开放任务工具调用',
+    serverModelAgenticNotReady: '该模型正在进行任务能力验证',
     imageInput: '图像',
     thinkingOutput: '思考',
     modelSuffixSecure: '（安全）',
@@ -245,14 +252,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     xaiOAuthRelogin: '重新登录',
     xaiOAuthLogout: '退出登录',
     xaiOAuthHint: '使用 SuperGrok / X Premium 订阅额度调用 Grok 模型，无需 API Key',
-    xaiOAuthConsentNote: '授权页面可能显示为 "Grok Build"——这是 xAI 共享 OAuth 应用的名称，属正常现象',
+    xaiOAuthConsentNote:
+      '授权页面可能显示为 "Grok Build"——这是 xAI 共享 OAuth 应用的名称，属正常现象',
     addCustomProvider: '+ 添加自定义',
     customBadge: '自定义',
     customDisplayName: '显示名称',
     customDisplayNamePlaceholder: '输入自定义名称...',
     deleteCustomProvider: '删除',
     deleteCustomProviderTitle: '删除自定义提供商',
-    confirmDeleteCustomProviderNamed: '确定要删除「{name}」吗？其 API 配置和模型列表将一并移除，此操作无法撤销。',
+    confirmDeleteCustomProviderNamed:
+      '确定要删除「{name}」吗？其 API 配置和模型列表将一并移除，此操作无法撤销。',
     import: '导入',
     export: '导出',
     importProvidersFailed: '导入失败',
@@ -285,7 +294,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     sendMessageShortcut: '发送消息',
     shortcutConflict: '快捷键 "{0}" 已被 "{1}" 使用',
     shortcutSearchPlaceholder: '搜索快捷键',
-    shortcutScopeHint: '快捷键仅在 LobsterAI 窗口获得焦点时生效；正在编辑输入框时不会触发全局快捷键。',
+    shortcutScopeHint:
+      '快捷键仅在 LobsterAI 窗口获得焦点时生效；正在编辑输入框时不会触发全局快捷键。',
     shortcutNoResults: '没有匹配的快捷键',
     shortcutClear: '清除快捷键',
     shortcutEditCommand: '更改 {command} 的快捷键',
@@ -474,6 +484,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     copyToClipboard: '复制到剪贴板',
     coworkReEdit: '重新编辑',
     coworkSelectedTextAddToChat: '添加到对话',
+    coworkSelectedTextAskInSideChat: '在侧边聊天中提问',
     coworkSelectedTextSnippetCount: '{count} 个已选文本片段',
     coworkSelectedTextRemove: '移除文本片段',
     coworkSelectedTextInvalid: '无法添加该文本片段',
@@ -641,11 +652,32 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentStatusDeployingMessage: '正在创建服务，完成后会生成可访问链接。',
     nodeDeploymentStatusLiveMessage: '服务已创建，可复制链接访问。',
     nodeDeploymentStatusFailedMessage: '服务创建失败。',
-    nodeDeploymentPersistenceUnavailableMessage: '云端存储暂时不可用，新版本未部署。请稍后重新部署。',
-    nodeDeploymentPersistenceInvalidMessage: '云端数据目录状态异常，新版本未部署。请联系管理员处理。',
+    nodeDeploymentPersistenceUnavailableMessage:
+      '云端存储暂时不可用，新版本未部署。请稍后重新部署。',
+    nodeDeploymentPersistenceInvalidMessage:
+      '云端数据目录状态异常，新版本未部署。请联系管理员处理。',
     nodeDeploymentStatusExpiredMessage: '该服务分享已过期。',
     nodeDeploymentStatusStoppedMessage: '该服务分享已停止。',
     nodeDeploymentDialogTitle: '网站部署',
+    siteQuotaTitle: '在线站点数量已达上限',
+    siteQuotaDescription:
+      '当前「{plan}」套餐最多同时开启 {limit} 个站点。关闭一个已有站点后，可以继续部署。',
+    siteQuotaUsage: '在线站点',
+    siteQuotaUsageValue: '{used} / {limit}',
+    siteQuotaRequiredStops: '当前已超出新套餐额度，需要关闭 {count} 个站点后才能继续部署。',
+    siteQuotaReservedHint: '另有 {count} 个部署正在预留名额，稍后未提交会自动释放。',
+    siteQuotaSearchPlaceholder: '搜索要关闭的站点',
+    siteQuotaChooseHint: '选择一个当前在线的站点。系统不会自动替你关闭服务。',
+    siteQuotaNoCandidates: '没有找到可关闭的在线站点',
+    siteQuotaStopAndContinue: '关闭并继续',
+    siteQuotaConfirmTitle: '确认关闭这个站点？',
+    siteQuotaConfirmDescription:
+      '关闭「{name}」后，它将无法继续访问。确认后返回当前部署配置，由你再次提交。',
+    siteQuotaNodeStopWarning: '动态服务关闭后会释放云端运行资源；下次恢复需要重新部署。',
+    siteQuotaConfirmStop: '确认关闭',
+    siteQuotaLoadFailed: '无法获取站点数量，请稍后重试。',
+    siteQuotaStopFailed: '站点关闭失败，请稍后重试。',
+    siteQuotaReservationFailed: '部署名额已发生变化，请重新选择要关闭的站点。',
     nodeDeploymentLoginRequiredTitle: '登录并订阅后即可部署网站',
     nodeDeploymentLoginRequiredMessage: '网站部署是订阅用户功能。请登录后开通订阅。',
     nodeDeploymentSubscriptionRequiredTitle: '开通订阅后即可部署网站',
@@ -698,12 +730,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentPersistenceEnable: '开启云端存储',
     nodeDeploymentPersistenceEnabledHint: '更新服务后，会继续保留已选择位置中的线上服务数据。',
     nodeDeploymentPersistenceResetPendingHint: '已选择用本地数据替换线上数据。',
-    nodeDeploymentPersistenceResetPendingRedeployHint: '部署时将先删除线上数据，再使用当前项目中的对应数据重新初始化。',
+    nodeDeploymentPersistenceResetPendingRedeployHint:
+      '部署时将先删除线上数据，再使用当前项目中的对应数据重新初始化。',
     nodeDeploymentPersistenceResetPendingStatusHint: '正在使用本地数据替换线上服务数据。',
-    nodeDeploymentPersistenceInitialHint: '所选本地内容将用于初始化云端数据，后续重新部署不会覆盖。',
-    nodeDeploymentPersistenceDisabledHint: '未检测到需要保留的本地位置。如果服务会在项目目录中保存运行数据，可以手动添加对应文件或文件夹。',
-    nodeDeploymentPersistenceDisabledWithLocationsHint: '关闭后，新版本不会连接这些线上服务数据；已有线上数据不会被删除或覆盖。',
-    nodeDeploymentPersistenceDisabledStatus: '当前版本未启用服务数据保留，因此暂时没有线上数据管理操作。重新部署时可以重新开启。',
+    nodeDeploymentPersistenceInitialHint:
+      '所选本地内容将用于初始化云端数据，后续重新部署不会覆盖。',
+    nodeDeploymentPersistenceDisabledHint:
+      '未检测到需要保留的本地位置。如果服务会在项目目录中保存运行数据，可以手动添加对应文件或文件夹。',
+    nodeDeploymentPersistenceDisabledWithLocationsHint:
+      '关闭后，新版本不会连接这些线上服务数据；已有线上数据不会被删除或覆盖。',
+    nodeDeploymentPersistenceDisabledStatus:
+      '当前版本未启用服务数据保留，因此暂时没有线上数据管理操作。重新部署时可以重新开启。',
     nodeDeploymentPersistenceAutoSelected: '已为你选择可能保存服务数据的位置。你可以查看或调整。',
     nodeDeploymentPersistenceShowItems: '查看保留内容',
     nodeDeploymentPersistenceHideItems: '收起保留内容',
@@ -714,8 +751,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentPersistenceRemove: '移除',
     nodeDeploymentPersistenceLimit: '最多可添加 8 个保存位置。',
     nodeDeploymentPersistencePathConflict: '数据位置不能重复或互相包含，请调整后重试。',
-    nodeDeploymentPersistenceDataFileHint: '检测到本地数据文件。如果这次修改了数据保存方式，建议先将线上服务数据备份到本地，再部署。',
-    nodeDeploymentPersistenceRedeployHint: '服务运行产生的数据将持久保存在云端，重新部署服务时不会被覆盖。',
+    nodeDeploymentPersistenceDataFileHint:
+      '检测到本地数据文件。如果这次修改了数据保存方式，建议先将线上服务数据备份到本地，再部署。',
+    nodeDeploymentPersistenceRedeployHint:
+      '服务运行产生的数据将持久保存在云端，重新部署服务时不会被覆盖。',
     nodeDeploymentPersistenceReplace: '清空云端数据并使用本地数据覆盖',
     nodeDeploymentPersistenceReplaceSelectedHint: '本次重新部署将使用本地数据替换线上数据。',
     nodeDeploymentPersistenceReplaceBackupHint: '覆盖后无法恢复，建议先备份云端数据。',
@@ -732,7 +771,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentPersistenceRetry: '重试',
     nodeDeploymentPersistenceDownloadComplete: '服务数据已备份到 {path}',
     nodeDeploymentPersistenceDownloadFailed: '服务数据备份失败。',
-    nodeDeploymentPersistenceManagementUnavailable: '线上服务数据管理暂未启用，请联系管理员配置后重试。',
+    nodeDeploymentPersistenceManagementUnavailable:
+      '线上服务数据管理暂未启用，请联系管理员配置后重试。',
     nodeDeploymentPersistenceShowInFolder: '在文件夹中显示',
     nodeDeploymentCurrentStatus: '当前状态',
     nodeDeploymentUpdateFile: '更新文件',
@@ -969,6 +1009,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelSelectorSubscribeTitle: '套餐模型',
     modelSelectorSubscribeDesc: '订阅套餐或购买加油包后即可使用更多模型',
     modelSelectorSubscribeBtn: '去购买',
+    modelSelectorAgenticNotReadyTitle: '任务能力验证中',
+    modelSelectorAgenticNotReadyBtn: '知道了',
+    modelSelectorAgenticVerifyingBadge: '验证中',
     modelSelectorLearnMore: '了解订阅权益',
     modelSupportsImageInputBadge: '可读图',
     modelSupportsThinkingBadge: '深度思考',
@@ -1060,7 +1103,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawRepairConfigApplyPendingError: 'OpenClaw 正在应用配置变更，请稍后再修复。',
     openClawRepairApiUnavailable: '修复接口不可用，请重启应用后再试。',
     openClawDataBackupTitle: '数据备份',
-    openClawDataBackupDesc: '备份登录态、任务记录、模型配置、技能、记忆和 OpenClaw 状态，不包含项目工作目录。',
+    openClawDataBackupDesc:
+      '备份登录态、任务记录、模型配置、技能、记忆和 OpenClaw 状态，不包含项目工作目录。',
     openClawDataBackupAction: '备份数据',
     openClawDataBackupRunning: '正在备份...',
     openClawDataBackupSuccess: '数据备份已保存。',
@@ -1069,7 +1113,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawDataBackupSize: '大小',
     openClawDataBackupBlockingTitle: '正在备份 LobsterAI 数据',
     openClawDataBackupBlockingDesc: '备份期间应用会暂时锁定，请等待备份完成后再继续操作。',
-    openClawDataBackupBlockingWarning: '请不要关闭应用。关闭应用会中断备份，并可能留下不完整的备份文件。',
+    openClawDataBackupBlockingWarning:
+      '请不要关闭应用。关闭应用会中断备份，并可能留下不完整的备份文件。',
     openClawDataMigrationTitle: '数据迁移',
     openClawDataMigrationDesc: '导入另一台机器导出的备份，替换当前应用数据。',
     openClawDataMigrationAction: '导入备份',
@@ -1078,11 +1123,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawDataMigrationFailed: '数据迁移失败',
     openClawDataMigrationRestarting: '已选择备份文件，应用将重启并导入数据。',
     openClawDataMigrationBlockingTitle: '正在准备导入 LobsterAI 数据',
-    openClawDataMigrationBlockingDesc: '导入期间应用会暂时锁定。选择备份文件后，应用会自动重启并完成导入。',
-    openClawDataMigrationBlockingWarning: '请不要关闭应用。关闭应用会中断导入准备流程，可能需要重新选择备份文件。',
+    openClawDataMigrationBlockingDesc:
+      '导入期间应用会暂时锁定。选择备份文件后，应用会自动重启并完成导入。',
+    openClawDataMigrationBlockingWarning:
+      '请不要关闭应用。关闭应用会中断导入准备流程，可能需要重新选择备份文件。',
     openClawDataMigrationConfirmTitle: '导入 LobsterAI 数据备份？',
-    openClawDataMigrationConfirmDesc: '导入会替换当前应用数据，包括登录态、会话、配置、技能、记忆和 OpenClaw 状态。',
-    openClawDataMigrationConfirmSafeDesc: '应用会先为当前数据生成回滚备份，然后重启并完成导入。项目工作目录不会被导入包覆盖。',
+    openClawDataMigrationConfirmDesc:
+      '导入会替换当前应用数据，包括登录态、会话、配置、技能、记忆和 OpenClaw 状态。',
+    openClawDataMigrationConfirmSafeDesc:
+      '应用会先为当前数据生成回滚备份，然后重启并完成导入。项目工作目录不会被导入包覆盖。',
     openClawDataMigrationConfirmAction: '选择备份并导入',
     openClawMaintenanceComingSoon: '即将支持',
     coworkMemoryTitle: '记忆',
@@ -1134,7 +1183,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryCrudContentLabel: '记忆内容',
     coworkMemoryCrudCreate: '新增条目',
     coworkMemoryCrudUpdate: '更新条目',
-    coworkMemoryCrudMultilineHint: '支持多行：换行后的内容会与首行保存为同一条记忆，子要点可用「- 」开头。',
+    coworkMemoryCrudMultilineHint:
+      '支持多行：换行后的内容会与首行保存为同一条记忆，子要点可用「- 」开头。',
     coworkMemoryRawButton: '编辑原文',
     coworkMemoryRawHint: '直接编辑整个 MEMORY.md 文件，保存后条目列表将同步刷新。',
     coworkMemoryRawLoadFailed: '读取记忆文件失败',
@@ -1276,6 +1326,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkToolResult: '执行结果',
     coworkToolRunning: '执行中',
     coworkContextMaintenanceRunning: '正在整理上下文...',
+    coworkModelResponseWaitingLong: '模型仍在响应，请耐心等待…',
     coworkToolNoErrorDetail: '执行失败（无详细错误输出）',
     coworkToolOutputLine: '行',
     coworkToolOutputLines: '行',
@@ -1521,6 +1572,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     updateInstallIncomplete: '上次更新未完成，请重新安装',
     updateReadyHint: '点击"立即更新"后将自动完成安装并重启应用，无需手动操作',
     updateElevationDeclined: '更新需要系统授权，本次安装已取消。请重试并在系统弹窗中选择"是"',
+    updateUrlUntrusted: '更新包地址未满足 HTTPS 安全要求，已停止下载。请稍后重试或前往官网下载',
+    updateFileInvalid: '更新包文件校验失败，请重新下载',
     updateInstalledToast: '已更新至',
     updateInstallingHint: '应用即将退出并在后台完成更新，完成后会自动启动，请稍候',
     updateRetry: '重试',
@@ -1572,6 +1625,24 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkSteerRejected: '引导未送达',
     coworkSteerNoActiveTurn: '当前没有可引导的运行中任务。',
     coworkSteerUnavailable: '当前版本暂不可用引导功能，请重启或更新运行时后重试。',
+    coworkBtwPending: '正在回答…',
+    coworkBtwStopped: '已停止',
+    coworkBtwWindowTitle: '侧边聊天',
+    coworkBtwWindowSubtitle: '临时对话，不会加入主对话记录',
+    coworkBtwCloseWindow: '关闭侧边聊天',
+    coworkBtwEmptyThread: '在下方输入问题，开始临时对话。',
+    coworkBtwEmptyThreadWithSelection: '已添加所选文本，可继续输入问题或直接发送。',
+    coworkBtwInputPlaceholder: '输入你的问题…',
+    coworkBtwSend: '发送侧边问题',
+    coworkBtwStop: '停止回答',
+    coworkBtwFollowUpHint: 'Enter 发送，Shift+Enter 换行',
+    coworkBtwEmptyQuestion: '请输入问题，例如：/btw 这个错误是什么意思？',
+    coworkBtwMultilineUnsupported: '顺便问问暂时只支持单行问题。',
+    coworkBtwRequiresSession: '请先开始一个对话，再使用 /btw 提问。',
+    coworkBtwAlreadyPending: '当前对话已有一个正在回答的顺便问问。',
+    coworkBtwUnavailable: '当前运行时暂不支持顺便问问，请重启或更新后重试。',
+    coworkBtwFailed: '顺便问问回答失败，请重试。',
+    coworkBtwStopFailed: '停止侧边回答失败，请重试。',
     voiceInput: '点击开始语音输入',
     voiceInputStopRecording: '点击结束语音输入',
     voiceInputRecognizing: '正在识别语音',
@@ -1589,7 +1660,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     voiceInputDailyLimitExceeded: '今日语音输入额度已用完，明天可继续使用',
     voiceInputQuotaExhausted: '暂无语音输入时长',
     voiceInputQuotaExhaustedTitle: '语音输入时长已用完',
-    voiceInputQuotaExhaustedFreeDesc: '今日 {limit} 语音输入时长已用完。升级订阅可获得每日 200 分钟语音输入时长。',
+    voiceInputQuotaExhaustedFreeDesc:
+      '今日 {limit} 语音输入时长已用完。升级订阅可获得每日 200 分钟语音输入时长。',
     voiceInputQuotaExhaustedSubscribedDesc: '今日 {limit} 语音输入时长已用完。',
     voiceInputUpgradeSubscription: '升级订阅',
     voiceInputQuotaAcknowledge: '知道了',
@@ -1677,6 +1749,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork 错误消息
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请在设置中检查并更新您的 API 密钥。',
+    coworkErrorLobsterAILoginExpired: '登录状态已过期，请重新登录后继续使用 LobsterAI 套餐模型。',
     coworkErrorOAuthInvalid: 'OAuth 授权已失效或权限不足，请重新授权后重试。',
     coworkErrorModelAccessDenied: '当前账号无权访问该模型，请切换模型或检查服务商账号权限。',
     coworkErrorQuotaExhausted:
@@ -1695,6 +1768,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorGatewayDisconnected: 'AI 引擎连接中断，请重试。如果问题持续，请尝试重启应用。',
     coworkErrorServiceRestart: 'AI 引擎正在重启，请稍后重试。',
     coworkErrorGatewayDraining: 'AI 引擎正在重启中，请稍等片刻后重试。',
+    coworkErrorModelResponseTimeout: '模型响应超时，请稍后重试。',
     coworkErrorNetworkError: '网络连接失败，请检查网络设置后重试。',
     coworkErrorRateLimit: '请求过于频繁，请稍后再试。',
     coworkErrorContentFiltered: '内容未通过安全审核，请修改后重试。',
@@ -1904,7 +1978,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     kitUninstalling: '卸载中...',
     kitInstalled: '已安装',
     kitReinstallRequiredBadge: '需重新安装',
-    kitReinstallRequiredDetail: '已安装版本 v{installedVersion}，当前版本 v{currentVersion}。请先卸载后重新安装以使用新版本。',
+    kitReinstallRequiredDetail:
+      '已安装版本 v{installedVersion}，当前版本 v{currentVersion}。请先卸载后重新安装以使用新版本。',
     kitLoading: '加载中...',
     kitEmpty: '暂无套件',
     kitBack: '返回',
@@ -1933,6 +2008,147 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // MCP 服务
     mcpServers: 'MCP',
+    // 站点
+    sitesTitle: '站点',
+    sitesSubtitle: '将你的想法一键部署成真实网站',
+    sitesCreate: '新建站点',
+    sitesCreateShort: '新建',
+    sitesCreatePrompt:
+      '请帮我创建一个网站。先询问网站用途和内容需求，再根据我的回答完成网站；创建完成后，启动本地服务并提供可访问的本地预览。',
+    sitesSearchPlaceholder: '搜索站点名称或地址',
+    sitesMySites: '我的站点',
+    sitesRecentlyUpdated: '最近更新',
+    sitesFilterAll: '全部',
+    sitesFilterOnline: '在线',
+    sitesFilterUnavailable: '不可访问',
+    sitesNoResults: '没有找到匹配的站点',
+    sitesPageIndicator: '第 {current} / {total} 页',
+    sitesPreviousPage: '上一页',
+    sitesNextPage: '下一页',
+    sitesViewAnalytics: '查看分析',
+    sitesOpenSettings: '站点设置',
+    sitesActions: '站点操作',
+    sitesShare: '分享',
+    sitesShareTitle: '分享站点',
+    sitesShareDescription: '快速设置访问方式，并复制链接分享给其他人。',
+    sitesWhoCanAccess: '谁可以访问',
+    sitesShareAccessHint: '选择不会立即生效，点击“更新访问方式”后提交变更。',
+    sitesCopyLink: '复制链接',
+    sitesCopyLinkAndCode: '复制链接和分享码',
+    sitesUpdateAccessMode: '更新访问方式',
+    sitesLinkCopied: '链接已复制',
+    sitesShareLoadFailed: '访问设置加载失败，请重试。',
+    sitesShareCodeCopyUnavailable: '当前分享码无法获取，请更新访问方式后重试。',
+    sitesNodeService: 'Node 服务',
+    sitesStaticSite: '静态站点',
+    sitesPublicAccess: '公开访问',
+    sitesCodeAccess: '分享码访问',
+    sitesStatus_online: '在线',
+    sitesStatus_deploying: '部署中',
+    sitesStatus_access_stopped: '已停止访问',
+    sitesStatus_redeploy_required: '需要重新部署',
+    sitesStatus_blocked: '已受限',
+    sitesStatus_failed: '部署失败',
+    sitesEmptyTitle: '暂无站点',
+    sitesCreateFromTemplate: '从示例开始',
+    sitesTemplateResume: '个人简历',
+    sitesTemplateResumeDescription: '在线简历与作品集页面',
+    sitesTemplateResumePrompt:
+      '请帮我创建一个简洁专业的个人简历和作品集网站。先询问我的个人信息、经历、项目和风格偏好，再根据我的回答完成网站；创建完成后，启动本地服务并提供可访问的本地预览。',
+    sitesTemplateShop: '店铺主页',
+    sitesTemplateShopDescription: '小型店铺或工作室展示页',
+    sitesTemplateShopPrompt:
+      '请帮我创建一个店铺主页。先询问品牌定位、产品或服务、营业信息、联系方式和视觉风格，再根据我的回答完成网站；创建完成后，启动本地服务并提供可访问的本地预览。',
+    sitesTemplateEvent: '活动邀请函',
+    sitesTemplateEventDescription: '聚会、婚礼或活动的在线邀请页',
+    sitesTemplateEventPrompt:
+      '请帮我创建一个活动邀请函网站。先询问活动类型、活动介绍、时间地点、日程、报名方式和视觉风格，再根据我的回答完成网站；创建完成后，启动本地服务并提供可访问的本地预览。',
+    sitesTemplateSurvey: '调查问卷',
+    sitesTemplateSurveyDescription: '在线表单与问卷收集页',
+    sitesTemplateSurveyPrompt:
+      '请帮我创建一个在线调查问卷网站。先询问调研目标、目标人群、需要收集的问题和提交后的反馈方式，再根据我的回答完成网站；创建完成后，启动本地服务并提供可访问的本地预览。',
+    sitesLoginTitle: '登录后管理站点',
+    sitesLoginDescription: '查看你部署的服务、变更访问方式并了解访问表现。',
+    sitesLoadFailed: '站点加载失败，请重试',
+    sitesUpdateFailed: '站点更新失败，请重试',
+    sitesAnalyticsLoadFailed: '访问分析加载失败，请重试',
+    sitesAnalyticsDateRange: '分析日期范围',
+    sitesPerformance: '站点表现',
+    sitesPast7Days: '过去 7 天',
+    sitesPast30Days: '过去 30 天',
+    sitesBack: '返回站点',
+    sitesVisit: '访问',
+    sitesVisitUnavailable: '当前站点不可访问',
+    sitesTab_analytics: '分析',
+    sitesTab_settings: '设置',
+    sitesNever: '暂无',
+    sitesTraffic: '流量趋势',
+    sitesTrafficTrend: '站点流量折线趋势图',
+    sitesDailyGranularity: '每日',
+    sitesUniqueVisitors: '独立访客',
+    sitesPageViews: '页面浏览量',
+    sitesPopularPages: '热门页面',
+    sitesNoAnalyticsData: '暂无访问数据',
+    sitesPage: '页面',
+    sitesBasicInfo: '基本设置',
+    sitesName: '站点名称',
+    sitesAccessMode: '访问方式',
+    sitesAccessModeDescription: '先选择新的访问方式，确认无误后再提交变更。',
+    sitesPublicAccessDescription: '任何获得站点地址的人都可以访问。',
+    sitesCodeAccessDescription: '访客输入分享码后才能访问。',
+    sitesShareCode: '分享码',
+    sitesUnsavedChanges: '有尚未提交的变更',
+    sitesApplyChanges: '提交变更',
+    sitesDiscardChanges: '取消变更',
+    sitesDiscardConfirmTitle: '放弃未保存的变更？',
+    sitesDiscardConfirmDescription: '返回站点列表后，名称和访问方式的未保存变更将会丢失。',
+    sitesDiscardAndLeave: '放弃并返回',
+    sitesUrl: '站点地址',
+    sitesReadOnlyNotice: '企业策略将站点管理设为只读，当前只能查看站点和分析。',
+    sitesAccessControl: '访问控制',
+    sitesNodeStopDescription: '停止访问会同时释放动态服务的云资源。',
+    sitesStaticStopDescription: '停止访问后保留站点内容和原访问地址，可随时恢复。',
+    sitesStopAccess: '停止访问',
+    sitesReleaseResources: '停止服务',
+    sitesReleaseResourcesDescription:
+      '站点访问已受限，但动态服务仍占用云资源。停止服务并释放资源后即可删除站点。',
+    sitesResumeAccess: '恢复访问',
+    sitesConfirmStopAccess: '确认停止访问',
+    sitesConfirmReleaseResources: '停止服务',
+    sitesConfirmResumeAccess: '确认恢复访问',
+    sitesStopConfirmTitle: '确认停止访问？',
+    sitesReleaseResourcesConfirmTitle: '停止服务并释放云资源？',
+    sitesResumeConfirmTitle: '确认恢复访问？',
+    sitesNodeStopConfirm:
+      '停止后将释放云资源，站点地址会保留，但恢复访问需要重新部署。确定继续吗？',
+    sitesReleaseResourcesConfirm:
+      '停止后将释放动态服务的云资源。完成后可以永久删除站点；如需恢复，必须从原任务重新部署。',
+    sitesStaticStopConfirm: '停止后访客将无法打开站点，内容和原地址会继续保留，可稍后直接恢复。',
+    sitesResumeConfirm: '恢复后访客将可以通过原站点地址访问。',
+    sitesDeleteTitle: '删除站点',
+    sitesDeleteDescription: '永久删除站点、页面文件、访问分析和云端服务数据，删除后无法恢复。',
+    sitesDeleteRequiresStopped: '请先停止访问，并等待动态服务的云资源释放完成后再删除。',
+    sitesDeleteAction: '删除站点',
+    sitesDeleteConfirmTitle: '永久删除这个站点？',
+    sitesDeleteConfirmDescription:
+      '删除后，站点地址、页面文件、部署详情和访问分析将无法恢复。原站点地址不会分配给其他站点。',
+    sitesDeletePersistenceWarning: '此站点启用了服务数据保留，云端持久化数据也会被永久删除。',
+    sitesDeleteConfirmInputLabel: '请输入站点名称“{name}”确认删除',
+    sitesDeletePermanently: '永久删除',
+    sitesDeleting: '正在删除…',
+    sitesDeleteFailed: '站点删除失败，请稍后重试。',
+    sitesReason_site_blocked_admin: '站点已被管理员停止，暂时不能恢复。',
+    sitesReason_site_blocked_moderation: '站点未通过内容审核，暂时不能恢复。',
+    sitesReason_site_blocked_active_limit: '站点因在线数量限制停止，请先处理其他在线站点。',
+    sitesReason_site_blocked_system: '站点受系统策略限制，暂时不能恢复。',
+    sitesReason_site_redeploy_required: '动态服务资源已释放，请从原任务的服务卡片重新部署。',
+    sitesReason_site_access_stopped: '站点已停止访问。',
+    sitesReason_site_deployment_failed: '部署失败，请检查部署信息后重试。',
+    sitesReason_site_deploying: '站点正在部署。',
+    sitesReason_site_online: '站点在线。',
+    confirm: '确认',
+    retry: '重试',
+    refresh: '刷新',
     mcpDescription: '配置和管理 MCP（Model Context Protocol）服务器，为您的智能体扩展工具能力',
     searchMcpServers: '搜索 MCP 服务',
     addMcpServer: '自定义',
@@ -1981,7 +2197,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpFormModeForm: '表单',
     mcpFormModeJson: 'JSON',
     mcpJsonImport: '导入',
-    mcpJsonImportHint: '粘贴 MCP JSON 配置，支持 {"mcpServers": {...}} 或「服务名称 → 配置」映射格式，可一次导入多个服务',
+    mcpJsonImportHint:
+      '粘贴 MCP JSON 配置，支持 {"mcpServers": {...}} 或「服务名称 → 配置」映射格式，可一次导入多个服务',
     mcpJsonInvalid: 'JSON 解析失败，请检查格式',
     mcpJsonNoServers: '未找到可导入的 MCP 服务配置',
     mcpJsonMissingName: '缺少服务名称，请使用 {"服务名称": { ... }} 的形式',
@@ -2034,7 +2251,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpDesc_canva: 'Canva 设计平台：创建和管理设计、模板操作',
     mcpDesc_firecrawl: '网页抓取与数据提取：支持批处理、结构化提取和内容分析',
     mcpDesc_fetch: '网页内容抓取和 HTML 转 Markdown，适合 LLM 消费',
-    mcpDesc_qichacha: '通过企查查账号授权，自动配置企业工商、风险、知识产权、经营、人员和历史存档 MCP 服务',
+    mcpDesc_qichacha:
+      '通过企查查账号授权，自动配置企业工商、风险、知识产权、经营、人员和历史存档 MCP 服务',
 
     // 邮箱技能配置
     emailTab: '邮箱',
@@ -2061,7 +2279,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     emailHintGmail: '如果开启了两步验证，请使用应用专用密码（App Password）',
     emailHint163: '请使用授权码，而非账户密码。需先在网页端设置中开启 IMAP/SMTP 服务',
     emailHintQQ: '请使用授权码，而非账户密码。需先在网页端设置中开启 IMAP/SMTP 服务',
-    emailPasswordHelp: '在邮箱网页端开启 IMAP/SMTP 服务后生成的授权码（应用专用密码），不是邮箱登录密码',
+    emailPasswordHelp:
+      '在邮箱网页端开启 IMAP/SMTP 服务后生成的授权码（应用专用密码），不是邮箱登录密码',
     emailProviderGuideLink: '如何开启 IMAP/SMTP 并获取授权码',
 
     // 文件操作
@@ -2473,7 +2692,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserNetworkOpen: '优先保证网页能打开（推荐）',
     browserNetworkOpenDescription: '更适合日常浏览器任务，特别是开启系统代理时。',
     browserNetworkStrict: '严格保护本机和内网',
-    browserNetworkStrictDescription: '阻止访问本机、内网和特殊地址段；开启代理时可能导致部分网页打不开。',
+    browserNetworkStrictDescription:
+      '阻止访问本机、内网和特殊地址段；开启代理时可能导致部分网页打不开。',
     browserNetworkStrictProxyWarning: '当前已开启系统代理，严格模式可能重新触发网页打不开的问题。',
     browserWebFetchSectionTitle: '网页抓取',
     browserWebFetchEnable: '启用网页抓取',
@@ -2502,7 +2722,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserResetFailed: '清除独立浏览器数据失败',
     browserAdvancedTitle: '高级设置',
     browserFollowGlobalProxy: '浏览器跟随全局代理',
-    browserFollowGlobalProxyDescription: '默认开启。关闭后仅作为 LobsterAI 配置保留，当前版本仍受浏览器自身代理设置影响。',
+    browserFollowGlobalProxyDescription:
+      '默认开启。关闭后仅作为 LobsterAI 配置保留，当前版本仍受浏览器自身代理设置影响。',
     browserEvaluateEnabled: '允许页面内执行脚本',
     browserEvaluateEnabledDescription: '关闭后更保守，但部分复杂网页操作可能不可用。',
     browserEfficientSnapshot: '使用精简网页快照',
@@ -2532,7 +2753,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserExtraArgsDescription: '每行一个 Chrome 启动参数；配置错误可能导致浏览器无法启动。',
     browserWebFetchTimeout: '网页抓取超时（秒）',
     browserWebFetchFollowGlobalProxy: '网页抓取跟随全局代理',
-    browserWebFetchFollowGlobalProxyDescription: '开启后，仅当应用总开关“使用系统代理”已开启时，网页抓取才使用系统代理。',
+    browserWebFetchFollowGlobalProxyDescription:
+      '开启后，仅当应用总开关“使用系统代理”已开启时，网页抓取才使用系统代理。',
     browserWebFetchMaxRedirects: '最大重定向次数',
     browserWebFetchMaxChars: '最大返回字符数',
     browserWebFetchUserAgent: '网页抓取 User-Agent',
@@ -2554,14 +2776,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skipMissedJobs: '跳过未执行任务',
     skipMissedJobsDescription: '启动时跳过离线期间未触发的定时任务，不补充执行（保存后生效）',
     usageAnalyticsEnabled: '帮助改进 LobsterAI',
-    usageAnalyticsEnabledDescription: '允许发送基础使用统计，帮助我们改进功能体验。不会上传对话内容、文件内容或 API Key。',
+    usageAnalyticsEnabledDescription:
+      '允许发送基础使用统计，帮助我们改进功能体验。不会上传对话内容、文件内容或 API Key。',
     // 通用设置分组标题
     settingsGroupBasics: '常规',
     settingsGroupNotifications: '通知',
     settingsGroupDataPrivacy: '数据与隐私',
     coworkTempUsageTitle: '会话临时文件',
     coworkTempUsageLoading: '正在统计占用空间…',
-    coworkTempUsageLabel: '当前占用 {size}，可清理 {cleanable}（其余为 90 天内的附件原图等受保护内容）',
+    coworkTempUsageLabel:
+      '当前占用 {size}，可清理 {cleanable}（其余为 90 天内的附件原图等受保护内容）',
     coworkTempUsageManualNote: '不会自动删除任何文件，清理前会列出将删除的内容供确认。',
     coworkTempPreviewLoading: '正在扫描…',
     coworkTempCleanNow: '立即清理',
@@ -2569,12 +2793,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkTempCleanedResult: '已清理 {count} 个文件，释放 {size}',
     coworkTempCleanFailed: '清理临时文件失败',
     coworkTempCleanDialogTitle: '确认清理会话临时文件',
-    coworkTempCleanDialogIntro: '将删除以下勾选目录中的临时文件（AI 生成的脚本、草稿等中间产物，以及 90 天前的附件原图）。请确认这些目录中没有你需要保留的文件。',
+    coworkTempCleanDialogIntro:
+      '将删除以下勾选目录中的临时文件（AI 生成的脚本、草稿等中间产物，以及 90 天前的附件原图）。请确认这些目录中没有你需要保留的文件。',
     coworkTempCleanDialogEmpty: '没有可清理的临时文件',
     coworkTempCleanDialogPerDir: '可清理 {size}（{count} 个文件）',
     coworkTempCleanDialogActiveTag: '会话运行中，本次跳过',
     coworkTempCleanDialogProtectedOnly: '仅包含受保护内容（90 天内的附件原图等），不会删除',
-    coworkTempCleanDialogProtectedNote: '90 天内的附件原图、正在运行的会话目录不会被删除；只影响 .cowork-temp 目录内的文件。',
+    coworkTempCleanDialogProtectedNote:
+      '90 天内的附件原图、正在运行的会话目录不会被删除；只影响 .cowork-temp 目录内的文件。',
     coworkTempCleanDialogTotal: '合计可释放 {size}',
     coworkTempCleanDialogConfirm: '确认清理',
 
@@ -2701,7 +2927,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksFormCronTimezone: 'Cron 时区',
     scheduledTasksFormCronTimezonePlaceholder: '例如 Asia/Shanghai',
     scheduledTasksFormPrompt: '执行提示词',
-    scheduledTasksFormPromptPlaceholder: '描述要 AI 做的事，例如：搜集今天的 AI 行业新闻，整理成一份简报发给我',
+    scheduledTasksFormPromptPlaceholder:
+      '描述要 AI 做的事，例如：搜集今天的 AI 行业新闻，整理成一份简报发给我',
     scheduledTasksFormSessionTarget: '会话目标',
     scheduledTasksFormSessionTargetMain: '主会话',
     scheduledTasksFormSessionTargetIsolated: '隔离会话',
@@ -3155,8 +3382,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     contextWindowHint:
       'Maximum tokens the model can process at once. A larger window fits more conversation history and documents. A smaller window may limit features. Actual supported size depends on the model itself.',
     customParams: 'Custom Params',
-    customParamsHint: 'Extra parameters to pass through to the model API in JSON format, e.g. {"reasoning_effort": "high"}.',
+    customParamsHint:
+      'Extra parameters to pass through to the model API in JSON format, e.g. {"reasoning_effort": "high"}.',
     customParamsInvalidJson: 'Invalid JSON format. Please enter a valid JSON object.',
+    kimiK3CustomParamsConflict:
+      'These parameters are managed automatically for Kimi K3. Remove them from Custom Params: {keys}',
+    serverModelMetadataUnavailable: 'Package model information is temporarily unavailable. Refresh and try again.',
+    serverModelRuntimeProfileUnsupported: 'The package model compatibility profile is not supported.',
+    serverModelToolCallingUnavailable: 'Task tool calling is not yet available for this model.',
+    serverModelAgenticNotReady: 'This model is still undergoing task capability validation.',
     imageInput: 'Image',
     thinkingOutput: 'Thinking',
     modelSuffixSecure: '(Secure)',
@@ -3179,7 +3413,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     apiFormat: 'API Format',
     apiFormatNative: 'Anthropic Compatible',
     apiFormatOpenAI: 'OpenAI Compatible',
-    apiFormatHint: 'Must match the protocol behind your Base URL; OpenAI-compatible URLs usually end with /v1',
+    apiFormatHint:
+      'Must match the protocol behind your Base URL; OpenAI-compatible URLs usually end with /v1',
     zhipuCodingPlanHint: 'When enabled, uses the GLM Coding Plan dedicated API endpoint',
     zhipuCodingPlanEndpointHint:
       'When using GLM Coding Plan, the system will automatically switch to the dedicated Coding endpoint',
@@ -3269,15 +3504,18 @@ const translations: Record<LanguageType, Record<string, string>> = {
     xaiOAuthLoggedIn: 'Signed in with xAI',
     xaiOAuthRelogin: 'Re-login',
     xaiOAuthLogout: 'Sign out',
-    xaiOAuthHint: 'Use your SuperGrok / X Premium subscription to run Grok models — no API key required',
-    xaiOAuthConsentNote: 'The consent screen may show "Grok Build" — that is the name of xAI\'s shared OAuth app and is expected',
+    xaiOAuthHint:
+      'Use your SuperGrok / X Premium subscription to run Grok models — no API key required',
+    xaiOAuthConsentNote:
+      'The consent screen may show "Grok Build" — that is the name of xAI\'s shared OAuth app and is expected',
     addCustomProvider: '+ Add Custom',
     customBadge: 'Custom',
     customDisplayName: 'Display Name',
     customDisplayNamePlaceholder: 'Enter custom name...',
     deleteCustomProvider: 'Delete',
     deleteCustomProviderTitle: 'Delete Custom Provider',
-    confirmDeleteCustomProviderNamed: 'Are you sure you want to delete "{name}"? Its API configuration and models will be removed. This action cannot be undone.',
+    confirmDeleteCustomProviderNamed:
+      'Are you sure you want to delete "{name}"? Its API configuration and models will be removed. This action cannot be undone.',
     import: 'Import',
     export: 'Export',
     importProvidersFailed: 'Failed to import providers',
@@ -3313,7 +3551,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     sendMessageShortcut: 'Send Message',
     shortcutConflict: 'Shortcut "{0}" is already used by "{1}"',
     shortcutSearchPlaceholder: 'Search shortcuts',
-    shortcutScopeHint: 'Shortcuts only run while the LobsterAI window is focused; global shortcuts are ignored while editing text fields.',
+    shortcutScopeHint:
+      'Shortcuts only run while the LobsterAI window is focused; global shortcuts are ignored while editing text fields.',
     shortcutNoResults: 'No matching shortcuts',
     shortcutClear: 'Clear shortcut',
     shortcutEditCommand: 'Change {command} shortcut',
@@ -3504,12 +3743,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     copyToClipboard: 'Copy to Clipboard',
     coworkReEdit: 'Re-edit',
     coworkSelectedTextAddToChat: 'Add to chat',
+    coworkSelectedTextAskInSideChat: 'Ask in side chat',
     coworkSelectedTextSnippetCount: '{count} selected text excerpt(s)',
     coworkSelectedTextRemove: 'Remove text excerpt',
     coworkSelectedTextInvalid: 'Unable to add this text excerpt',
     coworkSelectedTextTooLong: 'Each text excerpt can contain up to 4000 characters',
     coworkSelectedTextTooMany: 'You can add up to 8 text excerpts',
-    coworkSelectedTextTotalTooLong: 'Selected text excerpts can contain up to 12000 characters in total',
+    coworkSelectedTextTotalTooLong:
+      'Selected text excerpts can contain up to 12000 characters in total',
     coworkSelectedTextDuplicate: 'This text excerpt has already been added',
     coworkSelectedTextSourceUnavailable: 'The source message is not currently visible',
     coworkSelectedTextArtifactMarkdownSource: 'Markdown file excerpt',
@@ -3587,12 +3828,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     htmlShareUploading: 'Sharing...',
     htmlShareViewHint: 'The share link is ready.',
     htmlShareSuccess: 'Share created',
-    htmlShareSuccessMessage: 'The share link is ready. You can copy the details for the selected access mode.',
+    htmlShareSuccessMessage:
+      'The share link is ready. You can copy the details for the selected access mode.',
     htmlShareFailed: 'Share failed',
     htmlShareCreateDialogTitle: 'Create share',
     htmlShareCreateAction: 'Create share',
     htmlShareManageDialogTitle: 'Share settings',
-    htmlShareExistingShareMessage: 'This file is already shared. Copy the share details, or update the share.',
+    htmlShareExistingShareMessage:
+      'This file is already shared. Copy the share details, or update the share.',
     htmlShareAccessMode: 'Access mode',
     htmlShareAccessModeCode: 'Share code',
     htmlShareAccessModeCodeHint: 'Viewers need the link and share code.',
@@ -3635,15 +3878,19 @@ const translations: Record<LanguageType, Record<string, string>> = {
     htmlShareStoppedByActiveLimitNotice:
       'This share was closed because the active share limit was reached. Click "Open sharing" to make it accessible again.',
     htmlShareStoppedByAdminNotice: 'This share was closed by an administrator',
-    htmlShareStoppedByModerationNotice: 'This share was closed because it did not pass content review',
+    htmlShareStoppedByModerationNotice:
+      'This share was closed because it did not pass content review',
     htmlShareActiveLimitUpdateSideEffect:
       'Updating will reopen this share and automatically close the oldest other share to keep the active share limit.',
     htmlShareResultStatusDisabled: 'Share closed',
     htmlShareResultStatusFailed: 'Failed',
-    htmlShareCodeUnavailable: 'The legacy share code cannot be shown again. Update the share to generate a new code.',
+    htmlShareCodeUnavailable:
+      'The legacy share code cannot be shown again. Update the share to generate a new code.',
     htmlShareReopenUnavailable: 'This share cannot be reopened.',
-    htmlShareActiveLimitReached: 'The active share limit has been reached. Close another share first.',
-    htmlShareDisabledCannotUpdate: 'This share is closed, so its content cannot be updated. Open the share first.',
+    htmlShareActiveLimitReached:
+      'The active share limit has been reached. Close another share first.',
+    htmlShareDisabledCannotUpdate:
+      'This share is closed, so its content cannot be updated. Open the share first.',
     htmlShareActiveLimitCannotUpdate:
       'This share is closed. Click "Open sharing" before updating the file.',
     htmlShareLoginRequiredTitle: 'Log in and subscribe to share content',
@@ -3670,8 +3917,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentProgressUpload: 'Upload',
     nodeDeploymentProgressDeploy: 'Deploy',
     nodeDeploymentProgressComplete: 'Complete',
-    nodeDeploymentStatusQueuedMessage: 'The deployment task has been submitted and is waiting to run.',
-    nodeDeploymentStatusDeployingMessage: 'Creating the service. A share link will be available when it finishes.',
+    nodeDeploymentStatusQueuedMessage:
+      'The deployment task has been submitted and is waiting to run.',
+    nodeDeploymentStatusDeployingMessage:
+      'Creating the service. A share link will be available when it finishes.',
     nodeDeploymentStatusLiveMessage: 'The service is ready. Copy the link to visit it.',
     nodeDeploymentStatusFailedMessage: 'The service could not be created.',
     nodeDeploymentPersistenceUnavailableMessage:
@@ -3681,6 +3930,28 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentStatusExpiredMessage: 'This service share has expired.',
     nodeDeploymentStatusStoppedMessage: 'This service share has been stopped.',
     nodeDeploymentDialogTitle: 'Website deployment',
+    siteQuotaTitle: 'Online site limit reached',
+    siteQuotaDescription:
+      'Your {plan} plan supports up to {limit} online sites. Stop one existing site to continue.',
+    siteQuotaUsage: 'Online sites',
+    siteQuotaUsageValue: '{used} / {limit}',
+    siteQuotaRequiredStops:
+      'Your current usage exceeds the new plan limit. Stop {count} sites before continuing.',
+    siteQuotaReservedHint:
+      '{count} deployment reservation(s) are also using capacity and will expire if not submitted.',
+    siteQuotaSearchPlaceholder: 'Search sites to stop',
+    siteQuotaChooseHint: 'Choose an online site. LobsterAI will never stop one automatically.',
+    siteQuotaNoCandidates: 'No online sites are available to stop',
+    siteQuotaStopAndContinue: 'Stop and continue',
+    siteQuotaConfirmTitle: 'Stop this site?',
+    siteQuotaConfirmDescription:
+      'Stopping “{name}” makes it unavailable. You will return to the current deployment settings and submit manually.',
+    siteQuotaNodeStopWarning:
+      'Stopping a dynamic service releases its cloud runtime. Restoring it requires redeployment.',
+    siteQuotaConfirmStop: 'Stop site',
+    siteQuotaLoadFailed: 'Could not load site usage. Try again later.',
+    siteQuotaStopFailed: 'Could not stop the site. Try again later.',
+    siteQuotaReservationFailed: 'Deployment availability changed. Choose a site to stop again.',
     nodeDeploymentLoginRequiredTitle: 'Log in and subscribe to deploy a website',
     nodeDeploymentLoginRequiredMessage:
       'Website deployment is available to subscribers. Log in and subscribe to continue.',
@@ -3691,7 +3962,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentAccessStatusApplyFailed:
       'The service was deployed, but its access status could not be updated: {message}',
     nodeDeploymentStoppedNotice: 'This service is stopped',
-    nodeDeploymentRedeployRequiredNotice: 'The service is stopped and its cloud runtime has been released. Redeploy to restore access.',
+    nodeDeploymentRedeployRequiredNotice:
+      'The service is stopped and its cloud runtime has been released. Redeploy to restore access.',
     nodeDeploymentButtonChecking: 'Checking…',
     nodeDeploymentButtonAnalyzing: 'Analyzing…',
     nodeDeploymentButtonBuildingUploading: 'Building and uploading…',
@@ -3699,14 +3971,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentButtonComplete: 'Deployment complete',
     nodeDeploymentStatusTitle: 'Service deployment status',
     nodeDeploymentConfirmTitle: 'Confirm service deployment',
-    nodeDeploymentConfirmMessage: 'Deployment details were filled automatically. Confirm the project directory and startup settings.',
+    nodeDeploymentConfirmMessage:
+      'Deployment details were filled automatically. Confirm the project directory and startup settings.',
     nodeDeploymentLoadingTitle: 'Service deployment',
     nodeDeploymentLoadingMessage: 'Loading service information...',
     nodeDeploymentAccessUpdating: 'Updating access...',
     nodeDeploymentPermissionUpdating: 'Updating access...',
     nodeDeploymentPermissionUpdated: 'Access updated.',
     nodeDeploymentUpdatePermissionAction: 'Update access',
-    nodeDeploymentStopDraftNotice: 'Submitting will stop the service and release its cloud runtime. Redeployment is required to open it again.',
+    nodeDeploymentStopDraftNotice:
+      'Submitting will stop the service and release its cloud runtime. Redeployment is required to open it again.',
     nodeDeploymentPreparingTitle: 'Prepare service deployment',
     nodeDeploymentAnalyzingProject: 'Checking the project directory.',
     nodeDeploymentFailedTitle: 'Service deployment failed',
@@ -3716,7 +3990,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentUploadingPackage: 'Building and uploading the service package.',
     nodeDeploymentLocalService: 'Local service',
     nodeDeploymentProjectDirectory: 'Project directory',
-    nodeDeploymentProjectDirectoryPlaceholder: 'Choose a project directory containing package.json or index.html',
+    nodeDeploymentProjectDirectoryPlaceholder:
+      'Choose a project directory containing package.json or index.html',
     nodeDeploymentChooseDirectory: 'Choose',
     nodeDeploymentAnalyzing: 'Checking...',
     nodeDeploymentAnalyzeAction: 'Refresh config',
@@ -3733,15 +4008,23 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentPersistenceTitle: 'Cloud data',
     nodeDeploymentCloudDataTitle: 'Cloud data',
     nodeDeploymentPersistenceEnable: 'Enable cloud storage',
-    nodeDeploymentPersistenceEnabledHint: 'Online service data in the selected locations will be kept when the service is updated.',
+    nodeDeploymentPersistenceEnabledHint:
+      'Online service data in the selected locations will be kept when the service is updated.',
     nodeDeploymentPersistenceResetPendingHint: 'Local data is selected to replace online data.',
-    nodeDeploymentPersistenceResetPendingRedeployHint: 'Deployment will delete the online data first, then reinitialize it from the corresponding data in this project.',
-    nodeDeploymentPersistenceResetPendingStatusHint: 'Replacing online service data with local data.',
-    nodeDeploymentPersistenceInitialHint: 'Selected local content initializes cloud data. Later redeployments do not overwrite it.',
-    nodeDeploymentPersistenceDisabledHint: 'No local data location was detected. Add a file or folder if this service saves runtime data inside the project.',
-    nodeDeploymentPersistenceDisabledWithLocationsHint: 'When turned off, the new version will not connect to this online data. Existing online data will not be deleted or overwritten.',
-    nodeDeploymentPersistenceDisabledStatus: 'Service data retention is off for this version, so online data actions are unavailable. You can turn it back on when redeploying.',
-    nodeDeploymentPersistenceAutoSelected: 'Likely service data locations have been selected for you. You can review or adjust them.',
+    nodeDeploymentPersistenceResetPendingRedeployHint:
+      'Deployment will delete the online data first, then reinitialize it from the corresponding data in this project.',
+    nodeDeploymentPersistenceResetPendingStatusHint:
+      'Replacing online service data with local data.',
+    nodeDeploymentPersistenceInitialHint:
+      'Selected local content initializes cloud data. Later redeployments do not overwrite it.',
+    nodeDeploymentPersistenceDisabledHint:
+      'No local data location was detected. Add a file or folder if this service saves runtime data inside the project.',
+    nodeDeploymentPersistenceDisabledWithLocationsHint:
+      'When turned off, the new version will not connect to this online data. Existing online data will not be deleted or overwritten.',
+    nodeDeploymentPersistenceDisabledStatus:
+      'Service data retention is off for this version, so online data actions are unavailable. You can turn it back on when redeploying.',
+    nodeDeploymentPersistenceAutoSelected:
+      'Likely service data locations have been selected for you. You can review or adjust them.',
     nodeDeploymentPersistenceShowItems: 'View kept items',
     nodeDeploymentPersistenceHideItems: 'Hide kept items',
     nodeDeploymentPersistenceAddData: 'Add data',
@@ -3752,13 +4035,18 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentPersistenceLimit: 'You can add up to 8 data locations.',
     nodeDeploymentPersistencePathConflict:
       'Data locations cannot overlap or contain one another. Adjust them and try again.',
-    nodeDeploymentPersistenceDataFileHint: 'A local data file was detected. Back up the online service data locally before deploying if its storage format changed.',
-    nodeDeploymentPersistenceRedeployHint: 'Data produced while the service runs is stored persistently in the cloud and is not overwritten by redeployments.',
+    nodeDeploymentPersistenceDataFileHint:
+      'A local data file was detected. Back up the online service data locally before deploying if its storage format changed.',
+    nodeDeploymentPersistenceRedeployHint:
+      'Data produced while the service runs is stored persistently in the cloud and is not overwritten by redeployments.',
     nodeDeploymentPersistenceReplace: 'Clear cloud data and replace it with local data',
-    nodeDeploymentPersistenceReplaceSelectedHint: 'This redeployment will replace online data with local data.',
-    nodeDeploymentPersistenceReplaceBackupHint: 'Cloud data cannot be recovered after overwrite. Back it up first.',
+    nodeDeploymentPersistenceReplaceSelectedHint:
+      'This redeployment will replace online data with local data.',
+    nodeDeploymentPersistenceReplaceBackupHint:
+      'Cloud data cannot be recovered after overwrite. Back it up first.',
     nodeDeploymentReplaceAndRedeploy: 'Replace data and redeploy',
-    nodeDeploymentPersistenceKeepRemoteHint: 'Data produced by the service is stored in the cloud and is not overwritten on redeployment.',
+    nodeDeploymentPersistenceKeepRemoteHint:
+      'Data produced by the service is stored in the cloud and is not overwritten on redeployment.',
     nodeDeploymentPersistenceLocations: 'Data locations',
     nodeDeploymentPersistenceDownload: 'Back up locally',
     nodeDeploymentPersistenceDownloading: 'Backing up',
@@ -3770,12 +4058,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentPersistenceRetry: 'Retry',
     nodeDeploymentPersistenceDownloadComplete: 'Service data backed up to {path}',
     nodeDeploymentPersistenceDownloadFailed: 'Failed to back up service data.',
-    nodeDeploymentPersistenceManagementUnavailable: 'Online service data management is not enabled. Contact your administrator and try again.',
+    nodeDeploymentPersistenceManagementUnavailable:
+      'Online service data management is not enabled. Contact your administrator and try again.',
     nodeDeploymentPersistenceShowInFolder: 'Show in folder',
     nodeDeploymentCurrentStatus: 'Current status',
     nodeDeploymentUpdateFile: 'Update files',
     nodeDeploymentAccessModeUpdateComplete: 'Access mode updated.',
-    nodeDeploymentShareDisabledMessage: 'Service sharing is closed. Viewers cannot access it through the link.',
+    nodeDeploymentShareDisabledMessage:
+      'Service sharing is closed. Viewers cannot access it through the link.',
     nodeDeploymentShareEnabledMessage: 'Service sharing is open. Copy the link to visit it.',
     nodeDeploymentRedeployAndShare: 'Redeploy and open',
     nodeDeploymentExpiresAt: 'Default expiration: {time}',
@@ -4001,13 +4291,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelGroupUser: 'Custom Models',
     modelSelectorCurrentModel: 'In use',
     modelSelectorLockedOverlay: 'Subscribe or purchase a booster pack to unlock more models',
-    modelSelectorLockedModelHint: 'Log in and subscribe or purchase a booster pack before selecting plan models',
+    modelSelectorLockedModelHint:
+      'Log in and subscribe or purchase a booster pack before selecting plan models',
     modelSelectorLoginTitle: 'Plan Models',
     modelSelectorLoginDesc: 'Log in and subscribe or purchase a booster pack to use plan models',
     modelSelectorLoginBtn: 'Log in',
     modelSelectorSubscribeTitle: 'Plan Models',
     modelSelectorSubscribeDesc: 'Subscribe or purchase a booster pack to unlock more models',
     modelSelectorSubscribeBtn: 'Purchase',
+    modelSelectorAgenticNotReadyTitle: 'Task capability validation in progress',
+    modelSelectorAgenticNotReadyBtn: 'Got it',
+    modelSelectorAgenticVerifyingBadge: 'Verifying',
     modelSelectorLearnMore: 'Learn about subscription',
     modelSupportsImageInputBadge: 'Reads images',
     modelSupportsThinkingBadge: 'Deep thinking',
@@ -4021,7 +4315,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mediaTokenPricingTextOutput: 'Text output',
     mediaTokenPricingImageOutput: 'Image output',
     mediaTokenPricingThinkingOutput: 'Thinking output',
-    mediaTokenBillingEstimateNote: 'Billed by actual tokens. List price is the estimate for the default 1-image output.',
+    mediaTokenBillingEstimateNote:
+      'Billed by actual tokens. List price is the estimate for the default 1-image output.',
     modelSelectorNoModels: 'Please configure models in settings first',
     coworkApiConfigTitle: 'API Configuration',
     coworkApiConfigHint:
@@ -4069,26 +4364,35 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkOpenClawStarting: 'AI engine is starting the gateway...',
     coworkOpenClawRunning: 'AI engine is ready',
     engineStartingTitle: 'Starting AI engine',
-    engineStartingSlowHint: 'First launch prepares the runtime environment and may take 1-2 minutes',
+    engineStartingSlowHint:
+      'First launch prepares the runtime environment and may take 1-2 minutes',
     engineStartingTipLabel: 'Tip',
-    engineStartingTip1: 'Ask AI for HTML, SVG, or Mermaid diagrams — the side panel previews them live',
-    engineStartingTip2: 'Enable Word, Excel, and PPT skills in Skills, and AI can generate office documents for you',
-    engineStartingTip3: 'Use Scheduled Tasks to have AI run routine work automatically at fixed times',
-    engineStartingTip4: 'Connect WeChat, Feishu, DingTalk and more to summon AI right from your IM apps',
-    engineStartingTip5: 'Tell AI to "remember..." and it saves key facts to long-term memory for future chats',
-    engineStartingTip6: 'AI asks for your approval before sensitive operations, so you stay in control',
+    engineStartingTip1:
+      'Ask AI for HTML, SVG, or Mermaid diagrams — the side panel previews them live',
+    engineStartingTip2:
+      'Enable Word, Excel, and PPT skills in Skills, and AI can generate office documents for you',
+    engineStartingTip3:
+      'Use Scheduled Tasks to have AI run routine work automatically at fixed times',
+    engineStartingTip4:
+      'Connect WeChat, Feishu, DingTalk and more to summon AI right from your IM apps',
+    engineStartingTip5:
+      'Tell AI to "remember..." and it saves key facts to long-term memory for future chats',
+    engineStartingTip6:
+      'AI asks for your approval before sensitive operations, so you stay in control',
     coworkOpenClawError: 'The AI engine gateway failed to become healthy in time.',
     coworkOpenClawQuickRepair: 'Quick Repair',
     coworkOpenClawErrorRepairHint:
       'Quick Repair backs up and rebuilds the OpenClaw config, then restarts the gateway. It resolves most startup failures and keeps chats, model settings, skills, and workspace files.',
-    coworkOpenClawRuntimeMissingError: 'AI engine runtime files are missing — the installation did not complete.',
+    coworkOpenClawRuntimeMissingError:
+      'AI engine runtime files are missing — the installation did not complete.',
     coworkOpenClawRuntimeMissingRepairHint:
       'This usually happens when security software blocks the installer or it exits early. Try Quick Repair first — it restores the runtime from leftover installer resources. If that fails, add the install directory to your security software allowlist, then download the installer again and reinstall. Chats, model settings, and workspace files are preserved.',
     coworkOpenClawErrorShort: 'Gateway failed to start',
     coworkOpenClawErrorDefer: 'Later',
     openClawMaintenanceTitle: 'Run Maintenance',
     openClawRepairGatewayStateTitle: 'Repair Startup',
-    openClawRepairGatewayStateDesc: 'Back up and rebuild the OpenClaw config, then restart the gateway.',
+    openClawRepairGatewayStateDesc:
+      'Back up and rebuild the OpenClaw config, then restart the gateway.',
     openClawRepairConfirmTitle: 'Repair OpenClaw startup?',
     openClawRepairConfirmDesc:
       'The app will stop the current gateway, back up openclaw.json, regenerate the config, and start the gateway.',
@@ -4121,12 +4425,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawDataBackupBlockingWarning:
       'Do not close the app. Closing it will interrupt the backup and may leave an incomplete backup file.',
     openClawDataMigrationTitle: 'Data Migration',
-    openClawDataMigrationDesc: 'Import a backup exported from another machine and replace current app data.',
+    openClawDataMigrationDesc:
+      'Import a backup exported from another machine and replace current app data.',
     openClawDataMigrationAction: 'Import Backup',
     openClawDataMigrationRunning: 'Importing...',
     openClawDataMigrationSuccess: 'Data migration completed.',
     openClawDataMigrationFailed: 'Data migration failed',
-    openClawDataMigrationRestarting: 'Backup file selected. The app will restart and import the data.',
+    openClawDataMigrationRestarting:
+      'Backup file selected. The app will restart and import the data.',
     openClawDataMigrationBlockingTitle: 'Preparing to import LobsterAI data',
     openClawDataMigrationBlockingDesc:
       'The app is temporarily locked during import preparation. After you choose a backup file, the app will restart and finish the import.',
@@ -4191,9 +4497,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryCrudContentLabel: 'Memory content',
     coworkMemoryCrudCreate: 'Create entry',
     coworkMemoryCrudUpdate: 'Update entry',
-    coworkMemoryCrudMultilineHint: 'Multi-line supported: extra lines are saved as part of the same memory. Start sub-points with "- ".',
+    coworkMemoryCrudMultilineHint:
+      'Multi-line supported: extra lines are saved as part of the same memory. Start sub-points with "- ".',
     coworkMemoryRawButton: 'Edit raw file',
-    coworkMemoryRawHint: 'Edit the entire MEMORY.md directly. The entry list refreshes after saving.',
+    coworkMemoryRawHint:
+      'Edit the entire MEMORY.md directly. The entry list refreshes after saving.',
     coworkMemoryRawLoadFailed: 'Failed to read the memory file',
     coworkMemoryRawSaveFailed: 'Failed to save the memory file',
     coworkMemoryExpand: 'Show more',
@@ -4341,6 +4649,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkToolResult: 'Result',
     coworkToolRunning: 'Running...',
     coworkContextMaintenanceRunning: 'Organizing context...',
+    coworkModelResponseWaitingLong: 'The model is still responding. This may take a little longer…',
     coworkToolNoErrorDetail: 'Failed (no error details)',
     coworkToolOutputLine: 'line',
     coworkToolOutputLines: 'lines',
@@ -4541,8 +4850,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentTabCollaboration: 'Collaboration',
     agentTabIM: 'IM Channels',
     agentSubagentsTitle: 'Allowed Agents',
-    agentSubagentsHint:
-      'After selection, this Agent can hand off tasks to these Agents for help.',
+    agentSubagentsHint: 'After selection, this Agent can hand off tasks to these Agents for help.',
     agentSubagentsEmpty: 'No other enabled Agents',
     agentIMConfigured: 'Configured',
     agentIMNotConfigured: 'Not configured',
@@ -4594,6 +4902,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     updateInstallIncomplete: 'The previous update did not finish. Please install it again.',
     updateReadyHint: 'The update installs automatically and the app restarts itself — no manual steps needed.',
     updateElevationDeclined: 'The update needs system authorization and was cancelled. Try again and choose Yes in the system prompt.',
+    updateUrlUntrusted: 'The update URL did not meet the HTTPS safety requirements, so the download was stopped. Try again later or use the official download page.',
+    updateFileInvalid: 'The update file failed validation. Download it again.',
     updateInstalledToast: 'Updated to',
     updateInstallingHint: 'The app will close and finish updating in the background, then relaunch automatically.',
     updateRetry: 'Retry',
@@ -4640,11 +4950,32 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkSteerPlaceholder: 'Steer the task currently in progress...',
     coworkSteerQueued: 'Queued',
     coworkSteerInterruptTooltip: 'Stop the current task and continue with this message',
-    coworkSteerQueueFull: 'The follow-up queue is full. Wait for the current task to continue before sending more.',
+    coworkSteerQueueFull:
+      'The follow-up queue is full. Wait for the current task to continue before sending more.',
     coworkSteerPending: 'Pending steer',
     coworkSteerRejected: 'Steer not delivered',
     coworkSteerNoActiveTurn: 'There is no active task to steer.',
-    coworkSteerUnavailable: 'Steer is unavailable in this runtime. Restart or update the runtime and try again.',
+    coworkSteerUnavailable:
+      'Steer is unavailable in this runtime. Restart or update the runtime and try again.',
+    coworkBtwPending: 'Answering…',
+    coworkBtwStopped: 'Stopped',
+    coworkBtwWindowTitle: 'Side chat',
+    coworkBtwWindowSubtitle: 'Temporary and not added to the main conversation',
+    coworkBtwCloseWindow: 'Close side chat',
+    coworkBtwEmptyThread: 'Enter a question below to start a temporary conversation.',
+    coworkBtwEmptyThreadWithSelection:
+      'Selected text added. Ask a question or send it directly.',
+    coworkBtwInputPlaceholder: 'Ask a question…',
+    coworkBtwSend: 'Send side question',
+    coworkBtwStop: 'Stop answer',
+    coworkBtwFollowUpHint: 'Enter to send, Shift+Enter for a new line',
+    coworkBtwEmptyQuestion: 'Enter a question, for example: /btw What does this error mean?',
+    coworkBtwMultilineUnsupported: 'BTW side questions currently support one line only.',
+    coworkBtwRequiresSession: 'Start a conversation before asking a /btw side question.',
+    coworkBtwAlreadyPending: 'This conversation already has a pending BTW side question.',
+    coworkBtwUnavailable: 'BTW side questions are unavailable in this runtime. Restart or update it and try again.',
+    coworkBtwFailed: 'The BTW side question failed. Please try again.',
+    coworkBtwStopFailed: 'Failed to stop the side answer. Please try again.',
     voiceInput: 'Click to start voice input',
     voiceInputStopRecording: 'Click to stop voice input',
     voiceInputRecognizing: 'Transcribing voice',
@@ -4653,7 +4984,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     voiceInputLoginTitle: 'Sign in required for voice input',
     voiceInputLoginDesc: 'Voice input is available only after you sign in.',
     voiceInputFailed: 'Voice input failed. Please try again later.',
-    voiceInputMicrophoneDenied: 'Microphone access is blocked. Check system microphone permissions.',
+    voiceInputMicrophoneDenied:
+      'Microphone access is blocked. Check system microphone permissions.',
     voiceInputMicrophoneUnavailable: 'No available microphone was detected.',
     voiceInputNoAudioCaptured: 'No valid audio was recorded. Please try again.',
     voiceInputAudioInvalid: 'The recording format is invalid. Please try again.',
@@ -4662,7 +4994,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     voiceInputDailyLimitExceeded: 'Today’s voice input quota has been used up. Try again tomorrow.',
     voiceInputQuotaExhausted: 'No voice input time available',
     voiceInputQuotaExhaustedTitle: 'Voice input time used up',
-    voiceInputQuotaExhaustedFreeDesc: 'Today’s {limit} voice input time has been used up. Upgrade to get 200 minutes per day.',
+    voiceInputQuotaExhaustedFreeDesc:
+      'Today’s {limit} voice input time has been used up. Upgrade to get 200 minutes per day.',
     voiceInputQuotaExhaustedSubscribedDesc: 'Today’s {limit} voice input time has been used up.',
     voiceInputUpgradeSubscription: 'Upgrade subscription',
     voiceInputQuotaAcknowledge: 'Got it',
@@ -4670,7 +5003,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     voiceInputQuotaHours: '{count} hours',
     voiceInputRateLimited: 'Voice recognition is busy. Please try again later.',
     voiceInputRecognitionFailed: 'No valid speech was recognized. Please try again.',
-    voiceInputServiceUnavailable: 'Voice recognition is temporarily unavailable. Please try again later.',
+    voiceInputServiceUnavailable:
+      'Voice recognition is temporarily unavailable. Please try again later.',
     coworkDropFileHint: 'Drop files here, or paste files directly',
     coworkAddImage: 'Add Image',
     coworkInputFileLabel: 'Input file',
@@ -4728,9 +5062,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Drive root directories are not supported as working directories. Please select a subfolder (e.g. D:\\Projects).',
     coworkOpenFolder: 'Open folder',
     coworkSessionStillRunning: 'The current task is still running. Please wait for it to finish.',
-    coworkImageAttachmentTooLarge: 'Image {name} is larger than {limit}. Compress it before sending.',
-    coworkImageAttachmentPreviewFailed: 'Could not create a preview for image {name}. Compress it before sending.',
-    coworkImageAttachmentOriginalMissing: 'Cannot re-edit this image message because the original image file is missing or unreadable.',
+    coworkImageAttachmentTooLarge:
+      'Image {name} is larger than {limit}. Compress it before sending.',
+    coworkImageAttachmentPreviewFailed:
+      'Could not create a preview for image {name}. Compress it before sending.',
+    coworkImageAttachmentOriginalMissing:
+      'Cannot re-edit this image message because the original image file is missing or unreadable.',
     coworkContextUsageUnknown: 'Context usage is unavailable',
     coworkContextUsagePercent: 'Context: {percent}% used',
     coworkContextUsageTokens: 'Used {used} tokens, total {total}',
@@ -4755,6 +5092,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Cowork error messages
     coworkErrorAuthInvalid:
       'Invalid or expired API key. Please check and update your API key in settings.',
+    coworkErrorLobsterAILoginExpired:
+      'Your login session has expired. Sign in again to continue using LobsterAI plan models.',
     coworkErrorOAuthInvalid:
       'OAuth authorization is invalid or missing required access. Re-authenticate and try again.',
     coworkErrorModelAccessDenied:
@@ -4782,6 +5121,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'AI engine connection lost. Please retry. If the issue persists, try restarting the app.',
     coworkErrorServiceRestart: 'AI engine is restarting. Please try again later.',
     coworkErrorGatewayDraining: 'AI engine is restarting. Please wait a moment and try again.',
+    coworkErrorModelResponseTimeout: 'The model response timed out. Please try again.',
     coworkErrorNetworkError:
       'Network connection failed. Please check your network settings and try again.',
     coworkErrorRateLimit: 'Too many requests. Please try again later.',
@@ -4815,7 +5155,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mediaNoModels: 'No models available',
     mediaLoadingModels: 'Loading models...',
     mediaLoginTitle: 'Image/Video Generation Service',
-    mediaLoginDesc: 'Exclusive for plan users. Log in and subscribe or purchase a booster pack to use',
+    mediaLoginDesc:
+      'Exclusive for plan users. Log in and subscribe or purchase a booster pack to use',
     mediaLoginBtn: 'Log in',
     mediaSubscribeTitle: 'Image/Video Generation Service',
     mediaSubscribeDesc: 'Exclusive for plan users. Subscribe or purchase a booster pack to use',
@@ -4988,7 +5329,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Kits
     kits: 'Kits',
     newFeatureBadge: 'NEW',
-    kitSearchPlaceholder: 'Search kits or capabilities, such as "design", "marketing", "data analysis"',
+    kitSearchPlaceholder:
+      'Search kits or capabilities, such as "design", "marketing", "data analysis"',
     kitInstall: 'Install',
     kitInstalling: 'Installing...',
     kitUninstall: 'Uninstall',
@@ -5003,7 +5345,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     kitBack: 'Back',
     kitTryAsking: 'Try asking...',
     kitSkills: 'Skills',
-    kitDescription: 'Install capability packs for common work scenarios and use their skills directly',
+    kitDescription:
+      'Install capability packs for common work scenarios and use their skills directly',
     kitMarketplace: 'Marketplace',
     kitSkillCount: '{count} skills',
     kitOfficial: 'Official',
@@ -5026,6 +5369,163 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // MCP Servers
     mcpServers: 'MCP',
+    // Sites
+    sitesTitle: 'Sites',
+    sitesSubtitle: 'Turn your ideas into real websites in one click',
+    sitesCreate: 'New site',
+    sitesCreateShort: 'New',
+    sitesCreatePrompt:
+      'Help me create a website. First ask about its purpose and content requirements, then build it based on my answers. When it is ready, start a local service and provide an accessible local preview.',
+    sitesSearchPlaceholder: 'Search site name or address',
+    sitesMySites: 'My sites',
+    sitesRecentlyUpdated: 'Recently updated',
+    sitesFilterAll: 'All',
+    sitesFilterOnline: 'Online',
+    sitesFilterUnavailable: 'Unavailable',
+    sitesNoResults: 'No matching sites',
+    sitesPageIndicator: 'Page {current} of {total}',
+    sitesPreviousPage: 'Previous page',
+    sitesNextPage: 'Next page',
+    sitesViewAnalytics: 'View analytics',
+    sitesOpenSettings: 'Site settings',
+    sitesActions: 'Site actions',
+    sitesShare: 'Share',
+    sitesShareTitle: 'Share site',
+    sitesShareDescription: 'Quickly choose how people can access this site, then copy its link.',
+    sitesWhoCanAccess: 'Who can access',
+    sitesShareAccessHint:
+      'Your selection is not applied immediately. Use “Update access mode” to submit it.',
+    sitesCopyLink: 'Copy link',
+    sitesCopyLinkAndCode: 'Copy link and code',
+    sitesUpdateAccessMode: 'Update access mode',
+    sitesLinkCopied: 'Link copied',
+    sitesShareLoadFailed: 'Access settings could not be loaded. Please try again.',
+    sitesShareCodeCopyUnavailable:
+      'The current share code is unavailable. Update the access mode and try again.',
+    sitesNodeService: 'Node service',
+    sitesStaticSite: 'Static site',
+    sitesPublicAccess: 'Public access',
+    sitesCodeAccess: 'Share-code access',
+    sitesStatus_online: 'Online',
+    sitesStatus_deploying: 'Deploying',
+    sitesStatus_access_stopped: 'Access stopped',
+    sitesStatus_redeploy_required: 'Redeploy required',
+    sitesStatus_blocked: 'Restricted',
+    sitesStatus_failed: 'Deployment failed',
+    sitesEmptyTitle: 'No sites yet',
+    sitesCreateFromTemplate: 'Start with an example',
+    sitesTemplateResume: 'Personal resume',
+    sitesTemplateResumeDescription: 'Online resume and portfolio',
+    sitesTemplateResumePrompt:
+      'Help me create a clean, professional resume and portfolio website. First ask about my profile, experience, projects, and visual preferences, then build it based on my answers. When it is ready, start a local service and provide an accessible local preview.',
+    sitesTemplateShop: 'Storefront',
+    sitesTemplateShopDescription: 'A page for a small store or studio',
+    sitesTemplateShopPrompt:
+      'Help me create a storefront. First ask about the brand, products or services, business information, contact details, and visual style, then build it based on my answers. When it is ready, start a local service and provide an accessible local preview.',
+    sitesTemplateEvent: 'Event invitation',
+    sitesTemplateEventDescription: 'An online invitation for an event',
+    sitesTemplateEventPrompt:
+      'Help me create an event invitation website. First ask about the event type, introduction, date, location, schedule, RSVP details, and visual style, then build it based on my answers. When it is ready, start a local service and provide an accessible local preview.',
+    sitesTemplateSurvey: 'Survey',
+    sitesTemplateSurveyDescription: 'An online form and response page',
+    sitesTemplateSurveyPrompt:
+      'Help me create an online survey website. First ask about the research goal, target audience, questions to collect, and the post-submission experience, then build it based on my answers. When it is ready, start a local service and provide an accessible local preview.',
+    sitesLoginTitle: 'Sign in to manage sites',
+    sitesLoginDescription:
+      'View deployed services, change access controls, and understand visitor activity.',
+    sitesLoadFailed: 'Could not load sites. Please try again.',
+    sitesUpdateFailed: 'Could not update the site. Please try again.',
+    sitesAnalyticsLoadFailed: 'Could not load analytics. Please try again.',
+    sitesAnalyticsDateRange: 'Analytics date range',
+    sitesPerformance: 'Site performance',
+    sitesPast7Days: 'Past 7 days',
+    sitesPast30Days: 'Past 30 days',
+    sitesBack: 'Back to sites',
+    sitesVisit: 'Visit',
+    sitesVisitUnavailable: 'This site is currently unavailable',
+    sitesTab_analytics: 'Analytics',
+    sitesTab_settings: 'Settings',
+    sitesNever: 'None yet',
+    sitesTraffic: 'Traffic',
+    sitesTrafficTrend: 'Site traffic line chart',
+    sitesDailyGranularity: 'Daily',
+    sitesUniqueVisitors: 'Unique visitors',
+    sitesPageViews: 'Page views',
+    sitesPopularPages: 'Popular pages',
+    sitesNoAnalyticsData: 'No visit data yet',
+    sitesPage: 'Page',
+    sitesBasicInfo: 'Basic settings',
+    sitesName: 'Site name',
+    sitesAccessMode: 'Access mode',
+    sitesAccessModeDescription: 'Choose a new access mode, then submit when you are ready.',
+    sitesPublicAccessDescription: 'Anyone with the site address can visit.',
+    sitesCodeAccessDescription: 'Visitors must enter the share code.',
+    sitesShareCode: 'Share code',
+    sitesUnsavedChanges: 'You have changes that have not been submitted',
+    sitesApplyChanges: 'Apply changes',
+    sitesDiscardChanges: 'Discard',
+    sitesDiscardConfirmTitle: 'Discard unsaved changes?',
+    sitesDiscardConfirmDescription:
+      'Returning to the site list will discard unsaved name and access mode changes.',
+    sitesDiscardAndLeave: 'Discard and return',
+    sitesUrl: 'Site URL',
+    sitesReadOnlyNotice:
+      'Your organization has made site management read-only. You can still view sites and analytics.',
+    sitesAccessControl: 'Access control',
+    sitesNodeStopDescription: 'Stopping access also releases the dynamic service cloud resources.',
+    sitesStaticStopDescription:
+      'Stopping access keeps the site content and URL, so it can be resumed later.',
+    sitesStopAccess: 'Stop access',
+    sitesReleaseResources: 'Stop service',
+    sitesReleaseResourcesDescription:
+      'Access is already restricted, but the dynamic service still uses cloud resources. Stop the service to release them before deleting the site.',
+    sitesResumeAccess: 'Resume access',
+    sitesConfirmStopAccess: 'Stop access',
+    sitesConfirmReleaseResources: 'Stop service',
+    sitesConfirmResumeAccess: 'Resume access',
+    sitesStopConfirmTitle: 'Stop access?',
+    sitesReleaseResourcesConfirmTitle: 'Stop service and release cloud resources?',
+    sitesResumeConfirmTitle: 'Resume access?',
+    sitesNodeStopConfirm:
+      'Stopping releases cloud resources. The site address is preserved, but resuming requires a new deployment. Continue?',
+    sitesReleaseResourcesConfirm:
+      'This releases the dynamic service cloud resources. You can permanently delete the site afterward; restoring it requires redeploying from the original task.',
+    sitesStaticStopConfirm:
+      'Visitors will no longer be able to open the site. Its content and URL are kept, and access can be resumed later.',
+    sitesResumeConfirm: 'Visitors will once again be able to use the original site address.',
+    sitesDeleteTitle: 'Delete site',
+    sitesDeleteDescription:
+      'Permanently delete the site, page files, analytics, and cloud service data. This cannot be undone.',
+    sitesDeleteRequiresStopped:
+      'Stop access first and wait for the dynamic service cloud resources to be released.',
+    sitesDeleteAction: 'Delete site',
+    sitesDeleteConfirmTitle: 'Permanently delete this site?',
+    sitesDeleteConfirmDescription:
+      'The site URL, page files, deployment details, and analytics cannot be recovered. The original URL will not be assigned to another site.',
+    sitesDeletePersistenceWarning:
+      'This site uses service data persistence. Its cloud data will also be permanently deleted.',
+    sitesDeleteConfirmInputLabel: 'Enter the site name “{name}” to confirm',
+    sitesDeletePermanently: 'Delete permanently',
+    sitesDeleting: 'Deleting…',
+    sitesDeleteFailed: 'The site could not be deleted. Try again later.',
+    sitesReason_site_blocked_admin:
+      'An administrator stopped this site, so it cannot be resumed here.',
+    sitesReason_site_blocked_moderation:
+      'This site did not pass content review and cannot be resumed.',
+    sitesReason_site_blocked_active_limit:
+      'This site was stopped by the online-site limit. Manage another online site first.',
+    sitesReason_site_blocked_system:
+      'A system policy currently prevents this site from being resumed.',
+    sitesReason_site_redeploy_required:
+      'The dynamic service resources were released. Redeploy from the original task service card.',
+    sitesReason_site_access_stopped: 'Site access is stopped.',
+    sitesReason_site_deployment_failed:
+      'Deployment failed. Review the deployment information and try again.',
+    sitesReason_site_deploying: 'The site is being deployed.',
+    sitesReason_site_online: 'The site is online.',
+    confirm: 'Confirm',
+    retry: 'Retry',
+    refresh: 'Refresh',
     mcpDescription:
       "Configure and manage MCP (Model Context Protocol) servers to extend your agent's tool capabilities",
     searchMcpServers: 'Search MCP servers',
@@ -5075,7 +5575,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpFormModeForm: 'Form',
     mcpFormModeJson: 'JSON',
     mcpJsonImport: 'Import',
-    mcpJsonImportHint: 'Paste an MCP JSON config. Supports {"mcpServers": {...}} or a name-to-config map; multiple servers can be imported at once.',
+    mcpJsonImportHint:
+      'Paste an MCP JSON config. Supports {"mcpServers": {...}} or a name-to-config map; multiple servers can be imported at once.',
     mcpJsonInvalid: 'Invalid JSON. Please check the format.',
     mcpJsonNoServers: 'No importable MCP server config found',
     mcpJsonMissingName: 'Missing server name. Use the {"server-name": { ... }} format.',
@@ -5220,7 +5721,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     pluginsSyncNone: 'No new plugins found',
     pluginsSyncNow: 'Sync Now',
     pluginsSyncSkip: 'Not Now',
-    pluginsSyncLater: 'You can always sync later from the "Install Plugin" dialog under the OpenClaw tab.',
+    pluginsSyncLater:
+      'You can always sync later from the "Install Plugin" dialog under the OpenClaw tab.',
     pluginsUnsavedTitle: 'Unsaved Changes',
     pluginsUnsavedMessage: 'Plugin setting changes will be lost. Leave anyway?',
     pluginsUnsavedStay: 'Keep Editing',
@@ -5541,7 +6043,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinQrExpired: 'QR code expired, please try again',
     imWeixinQrAccountMissing:
       'WeChat is already connected to this OpenClaw, but no local account ID was found. Refresh status and try again.',
-    imWeixinCredentialsMissing: 'WeChat login credentials are missing. Please scan the QR code again.',
+    imWeixinCredentialsMissing:
+      'WeChat login credentials are missing. Please scan the QR code again.',
     imPopoCredentialHint: 'Get AppKey, AppSecret and AES Key from the POPO Developer Portal',
     imPopoGuideStep1: 'Click "Scan to Bind POPO Bot" or enter credentials manually',
     imPopoGuideStep2: 'Scan the QR code with POPO to bind the bot',
@@ -5580,7 +6083,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     autoLaunchRequiresApproval: 'Launch at login requires approval in System Settings',
     autoLaunchUpdateFailed: 'Failed to update launch at login setting',
     useSystemProxy: 'Use System Proxy',
-    useSystemProxyDescription: 'When enabled, network requests follow system proxy settings (applies after Save)',
+    useSystemProxyDescription:
+      'When enabled, network requests follow system proxy settings (applies after Save)',
     browserWebAccessTab: 'Browser',
     browserWebAccessTitle: 'Browser',
     browserWebAccessDescription: 'Use the LobsterAI separate browser and manage page access rules.',
@@ -5588,24 +6092,34 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserEnableTool: 'Enable browser',
     browserEnableToolDescription: 'Allow the agent to open and operate web pages.',
     browserProfileManaged: 'Separate browser (recommended)',
-    browserProfileManagedDescription: 'LobsterAI starts a dedicated browser that is stable and clean.',
+    browserProfileManagedDescription:
+      'LobsterAI starts a dedicated browser that is stable and clean.',
     browserProfileUser: 'My Chrome',
-    browserProfileUserDescription: 'Use this for sites that need your login state, such as X, Google, or internal systems.',
+    browserProfileUserDescription:
+      'Use this for sites that need your login state, such as X, Google, or internal systems.',
     browserNetworkSectionTitle: 'Network access mode',
-    browserSystemProxyOn: 'System proxy is enabled for the app, and the browser follows that global switch.',
-    browserSystemProxyOff: 'System proxy is not enabled for the app; this page will not turn it on automatically.',
+    browserSystemProxyOn:
+      'System proxy is enabled for the app, and the browser follows that global switch.',
+    browserSystemProxyOff:
+      'System proxy is not enabled for the app; this page will not turn it on automatically.',
     browserNetworkOpen: 'Prefer opening pages successfully (recommended)',
-    browserNetworkOpenDescription: 'Better for everyday browser tasks, especially when system proxy is enabled.',
+    browserNetworkOpenDescription:
+      'Better for everyday browser tasks, especially when system proxy is enabled.',
     browserNetworkStrict: 'Strictly protect local and private networks',
-    browserNetworkStrictDescription: 'Blocks localhost, private networks, and special address ranges; some pages may fail when proxy is enabled.',
-    browserNetworkStrictProxyWarning: 'System proxy is currently enabled, so strict mode may make some pages fail again.',
+    browserNetworkStrictDescription:
+      'Blocks localhost, private networks, and special address ranges; some pages may fail when proxy is enabled.',
+    browserNetworkStrictProxyWarning:
+      'System proxy is currently enabled, so strict mode may make some pages fail again.',
     browserWebFetchSectionTitle: 'Web fetch',
     browserWebFetchEnable: 'Enable web fetch',
-    browserWebFetchEnableDescription: 'Read regular articles, documentation pages, and lightweight web pages.',
+    browserWebFetchEnableDescription:
+      'Read regular articles, documentation pages, and lightweight web pages.',
     browserWebFetchReadability: 'Extract main content',
-    browserWebFetchReadabilityDescription: 'Try to remove navigation, ads, and unrelated page content.',
+    browserWebFetchReadabilityDescription:
+      'Try to remove navigation, ads, and unrelated page content.',
     browserDiagnosticsTitle: 'Diagnostics',
-    browserDiagnosticsDescription: 'Automatically checks whether the browser can start and open a test page.',
+    browserDiagnosticsDescription:
+      'Automatically checks whether the browser can start and open a test page.',
     browserDiagnosticsRun: 'Test browser',
     browserDiagnosticsRunning: 'Testing...',
     browserDiagnosticFailed: 'Browser diagnostic failed',
@@ -5622,23 +6136,31 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserDiagnosticOpenPageFailed: 'Failed to open test page',
     browserResetManagedData: 'Clear separate browser data',
     browserResetting: 'Clearing...',
-    browserResetConfirm: 'Clear separate browser data? This removes website data and cache from that browser.',
+    browserResetConfirm:
+      'Clear separate browser data? This removes website data and cache from that browser.',
     browserResetFailed: 'Failed to clear separate browser data',
     browserAdvancedTitle: 'Advanced settings',
     browserFollowGlobalProxy: 'Browser follows global proxy',
-    browserFollowGlobalProxyDescription: 'Enabled by default. Turning it off is stored for LobsterAI, but this version can still be affected by the browser proxy settings.',
+    browserFollowGlobalProxyDescription:
+      'Enabled by default. Turning it off is stored for LobsterAI, but this version can still be affected by the browser proxy settings.',
     browserEvaluateEnabled: 'Allow scripts inside pages',
-    browserEvaluateEnabledDescription: 'Turning this off is more conservative, but some complex page actions may stop working.',
+    browserEvaluateEnabledDescription:
+      'Turning this off is more conservative, but some complex page actions may stop working.',
     browserEfficientSnapshot: 'Use compact page snapshots',
-    browserEfficientSnapshotDescription: 'Reduces page content size and works better for everyday tasks.',
+    browserEfficientSnapshotDescription:
+      'Reduces page content size and works better for everyday tasks.',
     browserHeadless: 'Run browser without a visible window',
-    browserHeadlessDescription: 'Useful for automation environments; not recommended for normal desktop use.',
+    browserHeadlessDescription:
+      'Useful for automation environments; not recommended for normal desktop use.',
     browserAttachOnly: 'Only connect to an already running browser',
-    browserAttachOnlyDescription: 'Does not start a browser automatically. Intended for advanced debugging.',
+    browserAttachOnlyDescription:
+      'Does not start a browser automatically. Intended for advanced debugging.',
     browserExecutablePath: 'Browser executable path',
-    browserExecutablePathDescription: 'Specify the Chrome, Brave, or Edge executable path. Leave empty to auto-detect.',
+    browserExecutablePathDescription:
+      'Specify the Chrome, Brave, or Edge executable path. Leave empty to auto-detect.',
     browserCdpUrl: 'Remote browser URL',
-    browserCdpUrlDescription: 'Connect to remote Chrome DevTools or Browserless. Most users do not need this.',
+    browserCdpUrlDescription:
+      'Connect to remote Chrome DevTools or Browserless. Most users do not need this.',
     browserCdpUrlInvalid: 'Enter a URL starting with http, https, ws, or wss.',
     browserAllowedHostnames: 'Allowed domains',
     browserAllowedHostnamesDescription: 'Domains that can be opened without asking',
@@ -5653,20 +6175,24 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserRemoteCdpTimeout: 'Remote connection timeout (ms)',
     browserRemoteCdpHandshakeTimeout: 'Remote handshake timeout (ms)',
     browserExtraArgs: 'Browser launch arguments',
-    browserExtraArgsDescription: 'One Chrome launch argument per line. Incorrect values may prevent the browser from starting.',
+    browserExtraArgsDescription:
+      'One Chrome launch argument per line. Incorrect values may prevent the browser from starting.',
     browserWebFetchTimeout: 'Web fetch timeout (seconds)',
     browserWebFetchFollowGlobalProxy: 'Web fetch follows global proxy',
-    browserWebFetchFollowGlobalProxyDescription: 'When enabled, web fetch uses the system proxy only if the app-wide Use System Proxy switch is on.',
+    browserWebFetchFollowGlobalProxyDescription:
+      'When enabled, web fetch uses the system proxy only if the app-wide Use System Proxy switch is on.',
     browserWebFetchMaxRedirects: 'Maximum redirects',
     browserWebFetchMaxChars: 'Maximum returned characters',
     browserWebFetchUserAgent: 'Web fetch User-Agent',
     browserWebFetchAllowFakeIp: 'Allow fake-IP proxy range',
-    browserWebFetchAllowFakeIpDescription: 'Only enable this when using proxy setups such as Clash TUN or Surge.',
+    browserWebFetchAllowFakeIpDescription:
+      'Only enable this when using proxy setups such as Clash TUN or Surge.',
     sqliteAutoBackupEnabled: 'Enable Auto Backup and Recovery',
     sqliteAutoBackupEnabledDescription:
       'When enabled, the app automatically backs up data and tries to restore corrupted data on startup',
     taskCompletionNotificationMode: 'Task Completion Notifications',
-    taskCompletionNotificationModeDescription: 'Set when to show a system alert after a task completes',
+    taskCompletionNotificationModeDescription:
+      'Set when to show a system alert after a task completes',
     taskCompletionNotificationModeAlways: 'Always',
     taskCompletionNotificationModeUnfocused: 'When unfocused',
     taskCompletionNotificationModeOff: 'Never',
@@ -6245,7 +6771,9 @@ class I18nService {
   private persistLanguageHint(language: LanguageType): void {
     try {
       localStorage.setItem(LANGUAGE_HINT_STORAGE_KEY, language);
-    } catch { /* storage unavailable */ }
+    } catch {
+      /* storage unavailable */
+    }
   }
 
   // 根据系统语言推断应用语言

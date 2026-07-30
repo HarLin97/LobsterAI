@@ -16,12 +16,20 @@ import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
+import type {
+  ModelRuntimeProfile as ModelRuntimeProfileType,
+} from '../../shared/providers';
 import {
   AuthType,
+  findKimiK3ReservedCustomParamKeys,
+  getModelRuntimeProfileDefinition,
+  ModelRuntimeProfile,
+  ModelRuntimeProfileSource,
   OpenClawApi as OpenClawApiConst,
   OpenClawProviderId,
   ProviderName,
   ProviderRegistry,
+  resolveModelRuntimeProfile,
 } from '../../shared/providers';
 import type { Agent, CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { DiscordInstanceConfig, IMSettings, TelegramInstanceConfig } from '../im/types';
@@ -92,10 +100,53 @@ const mapExecutionModeToSandboxMode = (
  * Also used by the runtime adapter's client-side timeout watchdog.
  */
 export const OPENCLAW_AGENT_TIMEOUT_SECONDS = 3600;
+export const OPENCLAW_LOBSTERAI_MODEL_TIMEOUT_SECONDS = 330;
 export const OPENCLAW_HEARTBEAT_EVERY_ENABLED = '1h';
 export const OPENCLAW_HEARTBEAT_EVERY_DISABLED = '0m';
 const DINGTALK_OPENCLAW_CHANNEL = 'dingtalk-connector';
 const OPENCLAW_MEMORY_CORE_PLUGIN_ID = 'memory-core';
+const OPENCLAW_MODEL_COMPAT_PLUGIN_ID = 'lobsterai-model-compat';
+
+const asConfigRecord = (value: unknown): Record<string, unknown> | undefined => (
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+);
+
+const buildModelCompatRestartFingerprint = (config: unknown): string => {
+  const root = asConfigRecord(config);
+  const models = asConfigRecord(root?.models);
+  const providers = asConfigRecord(models?.providers);
+  const ownerProviderIds = Object.entries(providers ?? {})
+    .filter(([, value]) => (
+      asConfigRecord(value)?.api === OPENCLAW_MODEL_COMPAT_PLUGIN_ID
+    ))
+    .map(([providerId]) => providerId)
+    .sort();
+
+  const plugins = asConfigRecord(root?.plugins);
+  const entries = asConfigRecord(plugins?.entries);
+  const compatEntry = asConfigRecord(entries?.[OPENCLAW_MODEL_COMPAT_PLUGIN_ID]);
+  const compatConfig = asConfigRecord(compatEntry?.config);
+  const modelProfiles = asConfigRecord(compatConfig?.modelProfiles);
+  const sortedModelProfiles = Object.fromEntries(
+    Object.entries(modelProfiles ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+  );
+
+  return JSON.stringify({
+    ownerProviderIds,
+    pluginEnabled: compatEntry?.enabled === true,
+    modelProfiles: sortedModelProfiles,
+  });
+};
+
+export const modelCompatConfigChangeRequiresRestart = (
+  previousConfig: unknown,
+  nextConfig: unknown,
+): boolean => (
+  buildModelCompatRestartFingerprint(previousConfig)
+  !== buildModelCompatRestartFingerprint(nextConfig)
+);
 export const OPENCLAW_BINDING_ANY_ACCOUNT_ID = '*';
 const OPENCLAW_DEFAULT_MODEL_MAX_TOKENS = 8192;
 const CHROME_PROXY_SERVER_ARG_PREFIX = '--proxy-server=';
@@ -110,7 +161,7 @@ const OpenClawContextCacheMode = {
 } as const;
 
 const EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = '********************';
-const CUSTOM_PROVIDER_NAME_PATTERN = /^custom_[0-9]$/;
+const CUSTOM_PROVIDER_NAME_PATTERN = /^custom_[0-9]+$/;
 
 function deriveNimAccountId(instance: Pick<NimInstanceConfig, 'nimToken' | 'appKey' | 'account'>): string | null {
   const nimToken = instance.nimToken?.trim();
@@ -162,7 +213,7 @@ const mapApiTypeToOpenClawApi = (
   apiType: 'anthropic' | 'openai' | undefined,
   providerName?: string,
   baseURL?: string,
-): OpenClawProviderApi => {
+): OpenClawTransportApi => {
   // Qwen/DashScope Anthropic-compatible endpoint auto-injects web_search and
   // web_extractor built-in tools that cannot be disabled from the client side,
   // causing HTTP 400 errors. Force OpenAI format for any URL pointing to DashScope.
@@ -536,24 +587,44 @@ const sessionSnapshotContainsDisabledManagedSkill = (entry: Record<string, unkno
   return DISABLED_MANAGED_SKILL_NAMES.some(name => prompt.includes(`<name>${name}</name>`));
 };
 
-type OpenClawProviderApi =
+type OpenClawTransportApi =
   | 'anthropic-messages'
   | 'openai-completions'
   | 'openai-responses'
   | 'openai-chatgpt-responses'
   | 'google-generative-ai';
 
+type OpenClawProviderApi =
+  | OpenClawTransportApi
+  | typeof OPENCLAW_MODEL_COMPAT_PLUGIN_ID;
+
+type OpenClawThinkingLevelMap = Partial<Record<
+  'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max',
+  string | null
+>>;
+
+type OpenClawModelCompat = {
+  maxTokensField?: 'max_completion_tokens' | 'max_tokens';
+  supportsUsageInStreaming?: boolean;
+  requiresStringContent?: boolean;
+  supportsReasoningEffort?: boolean;
+  supportedReasoningEfforts?: string[];
+};
+
 type OpenClawProviderSelection = {
   providerId: string;
   legacyModelId: string;
   sessionModelId: string;
   primaryModel: string;
+  runtimeProfile?: ModelRuntimeProfileType;
+  compatibilityOwnerProfile?: ModelRuntimeProfileType;
   providerConfig: {
     baseUrl: string;
     api: OpenClawProviderApi;
     apiKey?: string;
     auth: typeof AuthType[keyof typeof AuthType];
     headers?: Record<string, string>;
+    timeoutSeconds?: number;
     request?: {
       proxy: {
         mode: 'env-proxy';
@@ -562,9 +633,10 @@ type OpenClawProviderSelection = {
     models: Array<{
       id: string;
       name: string;
-      api: OpenClawProviderApi;
+      api: OpenClawTransportApi;
       input: string[];
       reasoning?: boolean;
+      thinkingLevelMap?: OpenClawThinkingLevelMap;
       cost?: {
         input: number;
         output: number;
@@ -573,6 +645,7 @@ type OpenClawProviderSelection = {
       };
       contextWindow?: number;
       maxTokens?: number;
+      compat?: OpenClawModelCompat;
     }>;
   };
 };
@@ -671,7 +744,7 @@ type ProviderDescriptor = {
   resolveApi: (ctx: {
     apiType: 'anthropic' | 'openai' | undefined;
     baseURL: string;
-  }) => OpenClawProviderApi;
+  }) => OpenClawTransportApi;
   normalizeBaseUrl: (rawBaseUrl: string) => string;
   resolveApiKey?: (ctx: { apiKey: string; providerName: string }) => string | undefined;
   resolveSessionModelId?: (modelId: string) => string;
@@ -749,7 +822,8 @@ const resolveCatalogModelMaxTokens = (
 };
 
 const resolveModelMaxTokensForOpenClaw = (options: {
-  api: OpenClawProviderApi;
+  api: OpenClawTransportApi;
+  maxTokens?: number;
   modelId: string;
   sessionModelId: string;
   descriptor: ProviderDescriptor;
@@ -762,7 +836,8 @@ const resolveModelMaxTokensForOpenClaw = (options: {
       options.sessionModelId,
     )
     : undefined;
-  const rawMaxTokens = catalogMaxTokens
+  const rawMaxTokens = options.maxTokens
+    ?? catalogMaxTokens
     ?? options.descriptor.modelDefaults?.maxTokens
     ?? (
       options.api === OpenClawApiConst.AnthropicMessages
@@ -799,7 +874,7 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
 
   [ProviderName.Gemini]: {
     providerId: OpenClawProviderId.Google,
-    resolveApi: () => OpenClawApiConst.GoogleGenerativeAI as OpenClawProviderApi,
+    resolveApi: () => OpenClawApiConst.GoogleGenerativeAI as OpenClawTransportApi,
     normalizeBaseUrl: normalizeGeminiBaseUrl,
     modelDefaults: {
       reasoning: true,
@@ -810,7 +885,7 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     providerId: OpenClawProviderId.Xai,
     // The bundled xai extension expects the Responses API; it also unlocks
     // Grok server-side tools (x-search etc.) that openai-completions lacks.
-    resolveApi: () => OpenClawApiConst.OpenAIResponses as OpenClawProviderApi,
+    resolveApi: () => OpenClawApiConst.OpenAIResponses as OpenClawTransportApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
@@ -820,14 +895,14 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
   // emitted into the provider config.
   [`${ProviderName.Xai}:oauth`]: {
     providerId: OpenClawProviderId.Xai,
-    resolveApi: () => OpenClawApiConst.OpenAIResponses as OpenClawProviderApi,
+    resolveApi: () => OpenClawApiConst.OpenAIResponses as OpenClawTransportApi,
     normalizeBaseUrl: () => XAI_BASE_URL,
     resolveApiKey: () => undefined,
   },
 
   [ProviderName.Anthropic]: {
     providerId: OpenClawProviderId.Anthropic,
-    resolveApi: () => OpenClawApiConst.AnthropicMessages as OpenClawProviderApi,
+    resolveApi: () => OpenClawApiConst.AnthropicMessages as OpenClawTransportApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
@@ -835,14 +910,14 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     providerId: OpenClawProviderId.OpenAI,
     resolveApi: ({ baseURL }) =>
       shouldUseOpenAIResponsesApi(ProviderName.OpenAI, baseURL)
-        ? (OpenClawApiConst.OpenAIResponses as OpenClawProviderApi)
-        : (OpenClawApiConst.OpenAICompletions as OpenClawProviderApi),
+        ? (OpenClawApiConst.OpenAIResponses as OpenClawTransportApi)
+        : (OpenClawApiConst.OpenAICompletions as OpenClawTransportApi),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
   [`${ProviderName.OpenAI}:oauth`]: {
     providerId: OpenClawProviderId.OpenAI,
-    resolveApi: () => OpenClawApiConst.OpenAIChatGPTResponses as OpenClawProviderApi,
+    resolveApi: () => OpenClawApiConst.OpenAIChatGPTResponses as OpenClawTransportApi,
     normalizeBaseUrl: () => OPENAI_CODEX_BASE_URL,
     resolveApiKey: () => undefined,
   },
@@ -885,13 +960,13 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
 
   [ProviderName.Youdaozhiyun]: {
     providerId: OpenClawProviderId.Youdaozhiyun,
-    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawTransportApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
   [ProviderName.StepFun]: {
     providerId: OpenClawProviderId.StepFun,
-    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawTransportApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
@@ -910,7 +985,7 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
 
   [ProviderName.Ollama]: {
     providerId: OpenClawProviderId.Ollama,
-    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawTransportApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
@@ -922,7 +997,7 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
 
   [ProviderName.Copilot]: {
     providerId: OpenClawProviderId.LobsteraiCopilot,
-    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawTransportApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
     resolveRuntimeBaseUrl: () => {
       const proxyBase = getCoworkOpenAICompatProxyBaseURL('local');
@@ -976,9 +1051,12 @@ export const buildProviderSelection = (options: {
   authType?: 'apikey' | 'oauth';
   codingPlanEnabled?: boolean;
   supportsImage?: boolean;
+  supportsVideo?: boolean;
   supportsThinking?: boolean;
   modelName?: string;
   contextWindow?: number;
+  maxTokens?: number;
+  runtimeProfile?: unknown;
 }): OpenClawProviderSelection => {
   const providerName = options.providerName ?? '';
   const descriptor = resolveDescriptor(providerName, !!options.codingPlanEnabled, options.authType);
@@ -1003,17 +1081,43 @@ export const buildProviderSelection = (options: {
     : options.modelId;
 
   const providerModelName = resolveModelDisplayName(sessionModelId, options.modelName);
-  const supportsImage = ProviderRegistry.resolveModelSupportsImage(
+  const runtimeProfileSource = providerName === ProviderName.LobsteraiServer
+    ? ModelRuntimeProfileSource.Server
+    : CUSTOM_PROVIDER_NAME_PATTERN.test(providerName)
+      ? ModelRuntimeProfileSource.Custom
+      : ModelRuntimeProfileSource.BuiltIn;
+  const runtimeProfile = resolveModelRuntimeProfile({
+    source: runtimeProfileSource,
+    providerId: descriptor.providerId,
+    modelId: options.modelId,
+    api,
+    serverRuntimeProfile: options.runtimeProfile,
+  });
+  const runtimeProfileDefinition = runtimeProfile
+    ? getModelRuntimeProfileDefinition(runtimeProfile)
+    : undefined;
+  const resolvedSupportsImage = ProviderRegistry.resolveModelSupportsImage(
     providerName,
     options.modelId,
     options.supportsImage,
   );
-  const supportsThinking = ProviderRegistry.resolveModelSupportsThinking(
+  const resolvedSupportsVideo = ProviderRegistry.resolveModelSupportsVideo(
+    providerName,
+    options.modelId,
+    options.supportsVideo,
+  );
+  const resolvedSupportsThinking = ProviderRegistry.resolveModelSupportsThinking(
     providerName,
     options.modelId,
     options.supportsThinking,
   );
-  const modelInput: string[] = supportsImage ? ['text', 'image'] : ['text'];
+  const modelInput: string[] = runtimeProfileDefinition
+    ? [...runtimeProfileDefinition.input]
+    : [
+        'text',
+        ...(resolvedSupportsImage ? ['image'] : []),
+        ...(resolvedSupportsVideo ? ['video'] : []),
+      ];
   const auth = (
     (
       options.providerName === ProviderName.Minimax
@@ -1029,14 +1133,24 @@ export const buildProviderSelection = (options: {
   const descriptorReasoning = descriptor.resolveModelReasoning
     ? descriptor.resolveModelReasoning(options.modelId, !!options.codingPlanEnabled)
     : descriptor.modelDefaults?.reasoning;
-  const reasoning = supportsThinking ? true : descriptorReasoning;
-  const contextWindow = ProviderRegistry.resolveModelContextWindow(
-    providerName,
-    options.modelId,
-    options.contextWindow,
-  ) ?? descriptor.modelDefaults?.contextWindow;
+  const reasoning = runtimeProfileDefinition?.reasoning
+    ?? (resolvedSupportsThinking ? true : descriptorReasoning);
+  const contextWindow = runtimeProfileDefinition?.contextWindow
+    ?? ProviderRegistry.resolveModelContextWindow(
+      providerName,
+      options.modelId,
+      options.contextWindow,
+    )
+    ?? descriptor.modelDefaults?.contextWindow;
+  const resolvedMaxTokens = runtimeProfileDefinition?.maxTokens
+    ?? ProviderRegistry.resolveModelMaxTokens(
+      providerName,
+      options.modelId,
+      options.maxTokens,
+    );
   const modelMaxTokens = resolveModelMaxTokensForOpenClaw({
     api,
+    maxTokens: resolvedMaxTokens,
     modelId: options.modelId,
     sessionModelId,
     descriptor,
@@ -1050,11 +1164,18 @@ export const buildProviderSelection = (options: {
     legacyModelId: options.modelId,
     sessionModelId,
     primaryModel: `${descriptor.providerId}/${sessionModelId}`,
+    ...(runtimeProfile ? { runtimeProfile } : {}),
+    ...(runtimeProfile && runtimeProfileSource !== ModelRuntimeProfileSource.BuiltIn
+      ? { compatibilityOwnerProfile: runtimeProfile }
+      : {}),
     providerConfig: {
       baseUrl,
       api,
       ...(apiKey ? { apiKey } : {}),
       auth,
+      ...(descriptor.providerId === OpenClawProviderId.LobsteraiServer
+        ? { timeoutSeconds: OPENCLAW_LOBSTERAI_MODEL_TIMEOUT_SECONDS }
+        : {}),
       ...(request ? { request } : {}),
       models: [
         {
@@ -1063,6 +1184,17 @@ export const buildProviderSelection = (options: {
           api,
           input: modelInput,
           ...(reasoning !== undefined ? { reasoning } : {}),
+          ...(runtimeProfileDefinition
+            ? {
+                thinkingLevelMap: { ...runtimeProfileDefinition.thinkingLevelMap },
+                compat: {
+                  ...runtimeProfileDefinition.compat,
+                  supportedReasoningEfforts: [
+                    ...runtimeProfileDefinition.compat.supportedReasoningEfforts,
+                  ],
+                },
+              }
+            : {}),
           ...(descriptor.modelDefaults?.cost ? { cost: descriptor.modelDefaults.cost } : {}),
           ...(contextWindow !== undefined ? { contextWindow } : {}),
           ...(modelMaxTokens !== undefined
@@ -1218,6 +1350,122 @@ const upsertProviderModel = (
   providerConfig.models.push(model);
 };
 
+const OPENCLAW_TRANSPORT_APIS = new Set<OpenClawTransportApi>([
+  'anthropic-messages',
+  'openai-completions',
+  'openai-responses',
+  'openai-chatgpt-responses',
+  'google-generative-ai',
+]);
+
+export type FinalizedModelCompatibilityOwners = {
+  modelProfiles: Record<string, ModelRuntimeProfileType>;
+  rejectedModelRefs: string[];
+};
+
+/**
+ * Provider ownership is provider-wide in OpenClaw, while the transport remains
+ * model-specific. Resolve ownership after all model merges so mixed providers
+ * produce the same config regardless of model insertion order.
+ */
+export const finalizeModelCompatibilityOwners = (
+  providers: Record<string, OpenClawProviderSelection['providerConfig']>,
+  candidateProfiles: Record<string, ModelRuntimeProfileType>,
+): FinalizedModelCompatibilityOwners => {
+  const acceptedProfiles: Record<string, ModelRuntimeProfileType> = {};
+  const rejectedModelRefs: string[] = [];
+  const acceptedRefsByProvider = new Map<string, Array<[string, ModelRuntimeProfileType]>>();
+
+  for (const [modelRef, profile] of Object.entries(candidateProfiles).sort(([a], [b]) =>
+    a.localeCompare(b))) {
+    const separatorIndex = modelRef.indexOf('/');
+    const providerId = separatorIndex > 0 ? modelRef.slice(0, separatorIndex) : '';
+    const modelId = separatorIndex > 0 ? modelRef.slice(separatorIndex + 1) : '';
+    const provider = providerId ? providers[providerId] : undefined;
+    const model = provider?.models.find(candidate => candidate.id === modelId);
+    if (
+      !provider
+      || !model
+      || profile !== ModelRuntimeProfile.MoonshotKimiK3
+      || model.api !== OpenClawApiConst.OpenAICompletions
+    ) {
+      rejectedModelRefs.push(modelRef);
+      continue;
+    }
+    const refs = acceptedRefsByProvider.get(providerId) ?? [];
+    refs.push([modelRef, profile]);
+    acceptedRefsByProvider.set(providerId, refs);
+  }
+
+  for (const [providerId, refs] of acceptedRefsByProvider) {
+    const provider = providers[providerId];
+    const hasExplicitTransportApis = provider.models.every(model =>
+      OPENCLAW_TRANSPORT_APIS.has(model.api));
+    if (!hasExplicitTransportApis) {
+      rejectedModelRefs.push(...refs.map(([modelRef]) => modelRef));
+      continue;
+    }
+    provider.api = OPENCLAW_MODEL_COMPAT_PLUGIN_ID;
+    for (const [modelRef, profile] of refs) {
+      acceptedProfiles[modelRef] = profile;
+    }
+  }
+
+  return {
+    modelProfiles: Object.fromEntries(
+      Object.entries(acceptedProfiles).sort(([a], [b]) => a.localeCompare(b)),
+    ),
+    rejectedModelRefs: Array.from(new Set(rejectedModelRefs)).sort(),
+  };
+};
+
+export const sanitizeModelCustomParams = (
+  customParams: Record<string, unknown>,
+  runtimeProfile: ModelRuntimeProfileType | undefined,
+): { customParams: Record<string, unknown>; removedKeys: string[] } => {
+  if (runtimeProfile !== ModelRuntimeProfile.MoonshotKimiK3) {
+    return { customParams: { ...customParams }, removedKeys: [] };
+  }
+  const removedKeys = findKimiK3ReservedCustomParamKeys(customParams);
+  if (removedKeys.length === 0) {
+    return { customParams: { ...customParams }, removedKeys };
+  }
+  const removedKeySet = new Set(removedKeys);
+  return {
+    customParams: Object.fromEntries(
+      Object.entries(customParams).filter(([key]) => !removedKeySet.has(key)),
+    ),
+    removedKeys,
+  };
+};
+
+const collectCompatibilityOwnerProfile = (
+  profiles: Record<string, ModelRuntimeProfileType>,
+  selection: OpenClawProviderSelection,
+): void => {
+  if (!selection.compatibilityOwnerProfile) return;
+  profiles[selection.primaryModel] = selection.compatibilityOwnerProfile;
+};
+
+type ServerModelTransportMetadata = {
+  modelId: string;
+  apiFormat?: string;
+  runtimeProfile?: unknown;
+};
+
+export const findInvalidKimiK3ServerTransports = (
+  serverModels: ServerModelTransportMetadata[],
+): Array<{ modelId: string; apiFormat: string }> => (
+  serverModels
+    .filter(model => model.runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3)
+    .map(model => ({
+      modelId: model.modelId,
+      apiFormat: model.apiFormat?.trim().toLowerCase() || 'missing',
+    }))
+    .filter(model => model.apiFormat !== 'openai')
+    .sort((a, b) => a.modelId.localeCompare(b.modelId))
+);
+
 const normalizeServerApiType = (apiFormat?: string): 'anthropic' | 'openai' => (
   apiFormat === 'anthropic' ? 'anthropic' : 'openai'
 );
@@ -1262,7 +1510,7 @@ const shouldApplyProviderExplicitContextCacheDefault = (providerName?: string): 
 };
 
 const resolveExplicitContextCacheDefault = (options: {
-  api: OpenClawProviderApi;
+  api: OpenClawTransportApi;
   modelId: string;
   provider?: string;
   explicitContextCache?: boolean;
@@ -1635,6 +1883,19 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
     const configPath = this.engineManager.getConfigPath();
     const coworkConfig = this.getCoworkConfig();
     const browserWebAccess = normalizeBrowserWebAccessConfig(this.getBrowserWebAccessConfig());
+    const serverModels = getAllServerModelMetadata();
+    const invalidKimiK3Transports = findInvalidKimiK3ServerTransports(serverModels);
+    if (invalidKimiK3Transports.length > 0) {
+      const invalidRefs = invalidKimiK3Transports
+        .map(model => `${model.modelId} (${model.apiFormat})`)
+        .join(', ');
+      return {
+        ok: false,
+        changed: false,
+        configPath,
+        error: `OpenClaw config sync failed: Kimi K3 package models require apiFormat "openai": ${invalidRefs}.`,
+      };
+    }
     const apiResolution = resolveRawApiConfig();
 
     if (!apiResolution.config) {
@@ -1663,6 +1924,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
 
     let allProvidersMap: Record<string, OpenClawProviderSelection['providerConfig']> = {};
     const perModelCustomDefaults: Record<string, OpenClawAgentModelDefault> = {};
+    const candidateModelProfiles: Record<string, ModelRuntimeProfileType> = {};
     let primaryModel = '';
     let providerSelection: OpenClawProviderSelection | null = null;
 
@@ -1687,10 +1949,14 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         authType: apiResolution.providerMetadata?.authType,
         codingPlanEnabled: apiResolution.providerMetadata?.codingPlanEnabled,
         supportsImage: apiResolution.providerMetadata?.supportsImage,
+        supportsVideo: apiResolution.providerMetadata?.supportsVideo,
         supportsThinking: apiResolution.providerMetadata?.supportsThinking,
         modelName: apiResolution.providerMetadata?.modelName,
         contextWindow: apiResolution.providerMetadata?.contextWindow,
+        maxTokens: apiResolution.providerMetadata?.maxTokens,
+        runtimeProfile: apiResolution.providerMetadata?.runtimeProfile,
       });
+      collectCompatibilityOwnerProfile(candidateModelProfiles, providerSelection);
       primaryModel = providerSelection.primaryModel;
       if (providerSelection.providerId === OpenClawProviderId.LobsteraiServer) {
         addExplicitContextCacheDefault(perModelCustomDefaults, providerSelection, {
@@ -1709,10 +1975,13 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
             authType: p.authType,
             codingPlanEnabled: p.codingPlanEnabled,
             supportsImage: m.supportsImage,
+            supportsVideo: m.supportsVideo,
             supportsThinking: m.supportsThinking,
             modelName: m.name,
             contextWindow: m.contextWindow,
+            maxTokens: m.maxTokens,
           });
+          collectCompatibilityOwnerProfile(candidateModelProfiles, sel);
           if (!allProvidersMap[sel.providerId]) {
             allProvidersMap[sel.providerId] = { ...sel.providerConfig, models: [] };
           }
@@ -1731,10 +2000,22 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
           // Wrap in extra_body so OpenClaw's streamWithPayloadPatch merges them
           // directly into the outgoing API request body, bypassing the whitelist.
           if (m.customParams && Object.keys(m.customParams).length > 0) {
+            const sanitizedParams = sanitizeModelCustomParams(
+              m.customParams,
+              sel.runtimeProfile,
+            );
+            if (sanitizedParams.removedKeys.length > 0) {
+              console.warn(
+                `[OpenClawConfigSync] Ignored reserved Kimi K3 custom parameter keys for ${sel.primaryModel}: ${sanitizedParams.removedKeys.join(', ')}`,
+              );
+            }
+            if (Object.keys(sanitizedParams.customParams).length === 0) {
+              continue;
+            }
             const modelKey = `${sel.providerId}/${sel.sessionModelId}`;
             perModelCustomDefaults[modelKey] = mergeAgentModelDefault(
               perModelCustomDefaults[modelKey],
-              { params: { extra_body: { ...m.customParams } } },
+              { params: { extra_body: sanitizedParams.customParams } },
             );
           }
         }
@@ -1754,7 +2035,6 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
 
       const proxyPort = getOpenClawTokenProxyPort();
       if (proxyPort) {
-        const serverModels = getAllServerModelMetadata();
         const providerId = OpenClawProviderId.LobsteraiServer;
 
         if (serverModels.length > 0 || !allProvidersMap[providerId]) {
@@ -1766,10 +2046,14 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
             apiType: normalizeServerApiType(serverModels[0]?.apiFormat),
             providerName: ProviderName.LobsteraiServer,
             supportsImage: serverModels[0]?.supportsImage,
+            supportsVideo: serverModels[0]?.supportsVideo,
             supportsThinking: serverModels[0]?.supportsThinking,
             modelName: serverModels[0]?.modelName,
             contextWindow: serverModels[0]?.contextWindow,
+            maxTokens: serverModels[0]?.maxTokens,
+            runtimeProfile: serverModels[0]?.runtimeProfile,
           });
+          collectCompatibilityOwnerProfile(candidateModelProfiles, firstServerSel);
           const lobsteraiProviderConfig =
             allProvidersMap[providerId] ?? {
               ...firstServerSel.providerConfig,
@@ -1789,10 +2073,14 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
                 apiType: serverApiType,
                 providerName: ProviderName.LobsteraiServer,
                 supportsImage: sm.supportsImage,
+                supportsVideo: sm.supportsVideo,
                 supportsThinking: sm.supportsThinking,
                 modelName: sm.modelName || sm.modelId,
                 contextWindow: sm.contextWindow,
+                maxTokens: sm.maxTokens,
+                runtimeProfile: sm.runtimeProfile,
               });
+              collectCompatibilityOwnerProfile(candidateModelProfiles, serverSel);
               addExplicitContextCacheDefault(perModelCustomDefaults, serverSel, {
                 modelId: sm.modelId,
                 provider: sm.provider,
@@ -1803,6 +2091,29 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
           }
         }
       }
+    }
+
+    const hasModelCompatPlugin = isBundledPluginAvailable(OPENCLAW_MODEL_COMPAT_PLUGIN_ID);
+    const candidateModelRefs = Object.keys(candidateModelProfiles).sort();
+    if (candidateModelRefs.length > 0 && !hasModelCompatPlugin) {
+      return {
+        ok: false,
+        changed: false,
+        configPath,
+        error: `OpenClaw config sync failed: required ${OPENCLAW_MODEL_COMPAT_PLUGIN_ID} extension is unavailable for ${candidateModelRefs.join(', ')}.`,
+      };
+    }
+    const finalizedCompatibility = finalizeModelCompatibilityOwners(
+      allProvidersMap,
+      candidateModelProfiles,
+    );
+    if (finalizedCompatibility.rejectedModelRefs.length > 0) {
+      return {
+        ok: false,
+        changed: false,
+        configPath,
+        error: `OpenClaw config sync failed: invalid Kimi K3 compatibility ownership for ${finalizedCompatibility.rejectedModelRefs.join(', ')}.`,
+      };
     }
 
     const sandboxMode = mapExecutionModeToSandboxMode(
@@ -2031,6 +2342,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         ];
         const transientPluginIds = [
           ...(hasPreinstalledPlugin('openclaw-lark') ? ['feishu'] : []),
+          OPENCLAW_MODEL_COMPAT_PLUGIN_ID,
         ];
         const cleanedExistingEntries = Object.fromEntries(
           Object.entries(existingPluginEntries).filter(([id]) => (
@@ -2076,6 +2388,16 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
             : {}),
           ...(hasAskUserPlugin ? { 'ask-user-question': { enabled: true } } : {}),
           ...(hasMediaGenPlugin ? { 'lobster-media-generation': { enabled: true } } : {}),
+          ...(Object.keys(finalizedCompatibility.modelProfiles).length > 0
+            ? {
+                [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]: {
+                  enabled: true,
+                  config: {
+                    modelProfiles: finalizedCompatibility.modelProfiles,
+                  },
+                },
+              }
+            : {}),
           // Some OpenClaw versions auto-inject qwen-portal-auth for
           // Qwen/DashScope URLs. Declare it only when the plugin actually
           // exists, otherwise it becomes a stale entry on every startup.
@@ -2096,6 +2418,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         const existingAllow = Array.isArray((existingPlugins as Record<string, unknown>).allow)
           ? ((existingPlugins as Record<string, unknown>).allow as unknown[])
               .filter((id): id is string => typeof id === 'string' && id.length > 0)
+              .filter(id => id !== OPENCLAW_MODEL_COMPAT_PLUGIN_ID)
           : [];
         const trustedPluginAllow = Array.from(new Set([
           ...existingAllow,
@@ -2106,6 +2429,9 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
           // plugins we rely on must be listed here explicitly or they never
           // load — entries.enabled alone is not enough.
           ...(hasXaiPlugin ? ['xai'] : []),
+          ...(Object.keys(finalizedCompatibility.modelProfiles).length > 0
+            ? [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]
+            : []),
           ...preinstalledPlugins.map(plugin => plugin.pluginId),
           ...userPlugins.filter(plugin => plugin.enabled).map(plugin => plugin.pluginId),
         ])).sort();
@@ -2710,6 +3036,20 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         return currentContent !== nextContent;
       }
     })();
+    const modelCompatRestartRequired = (() => {
+      if (!configChanged) return false;
+      let previousConfig: unknown = {};
+      try {
+        previousConfig = currentContent ? JSON.parse(currentContent) : {};
+      } catch {
+        // Treat an unreadable previous config as having no trusted managed
+        // compatibility ownership. The next generated config remains valid.
+      }
+      return modelCompatConfigChangeRequiresRestart(
+        previousConfig,
+        JSON.parse(nextContent),
+      );
+    })();
 
     let changedTopLevelKeys: string[] = [];
     if (configChanged) {
@@ -2783,7 +3123,9 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
       configPath,
       ...(bindingsChanged ? { bindingsChanged } : {}),
       ...(changedTopLevelKeys.length > 0 ? { changedTopLevelKeys } : {}),
-      ...(changedTopLevelKeys.includes('mcp') ? { restartImpact: OpenClawConfigImpact.Restart } : {}),
+      ...(changedTopLevelKeys.includes('mcp') || modelCompatRestartRequired
+        ? { restartImpact: OpenClawConfigImpact.Restart }
+        : {}),
       ...(agentsMdWarning ? { agentsMdWarning } : {}),
     };
   }

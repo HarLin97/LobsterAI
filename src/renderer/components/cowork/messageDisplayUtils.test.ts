@@ -96,3 +96,31 @@ test('streaming activity status keeps unresolved tool progress visible', () => {
 test('streaming activity status shows context maintenance state', () => {
   expect(getStreamingActivityStatusText([], true)).toBe('正在整理上下文...');
 });
+
+test('streaming activity status shows a patient waiting hint after prolonged model silence', () => {
+  const messages: CoworkMessage[] = [{
+    id: 'user-1',
+    type: 'user',
+    content: 'hello',
+    timestamp: 1,
+  }];
+
+  expect(getStreamingActivityStatusText(messages, false, true))
+    .toBe('模型仍在响应，请耐心等待…');
+});
+
+test('streaming activity status keeps unresolved tool progress during a prolonged wait', () => {
+  const messages: CoworkMessage[] = [{
+    id: 'tool-1',
+    type: 'tool_use',
+    content: '',
+    timestamp: 1,
+    metadata: {
+      toolUseId: 'tool-use-1',
+      toolName: 'exec_command',
+    },
+  }];
+
+  expect(getStreamingActivityStatusText(messages, false, true))
+    .toBe('执行中 exec_command...');
+});

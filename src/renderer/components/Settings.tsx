@@ -15,8 +15,18 @@ import {
   TaskCompletionNotificationMode,
 } from '../../shared/notifications/constants';
 import { OpenClawEnginePhase, OpenClawGatewayRepairErrorCode } from '../../shared/openclawEngine/constants';
-import { ProviderAuthType, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
-import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, normalizeFontPreference, ShortcutAction, type ShortcutConfig } from '../config';
+import {
+  applyModelRuntimeProfileMetadata,
+  findKimiK3ReservedCustomParamKeys,
+  ModelRuntimeProfileSource,
+  OpenClawApi,
+  ProviderAuthType,
+  ProviderName,
+  ProviderRegistry,
+  resolveCodingPlanBaseUrl,
+  resolveModelRuntimeProfile,
+} from '../../shared/providers';
+import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, ShortcutAction, type ShortcutConfig } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import { useSkin } from '../providers/SkinProvider';
 import { apiService } from '../services/api';
@@ -60,6 +70,7 @@ import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle 
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
   buildOpenAICompatibleChatCompletionsUrl,
+  buildOpenAIConnectionTestRequestBody,
   buildOpenAIResponsesUrl,
   CONNECTIVITY_TEST_TOKEN_BUDGET,
   CUSTOM_PROVIDER_KEYS,
@@ -68,6 +79,7 @@ import {
   getEffectiveApiFormat,
   getOpenClawProviderIdForConfig,
   getProviderDefaultBaseUrl,
+  hasEquivalentProviderModelId,
   hasProviderAuthConfigured,
   type Model,
   type ProviderConfig,
@@ -78,7 +90,6 @@ import {
   resolveBaseUrl,
   resolveModelSupportsImageForProvider,
   shouldAutoSwitchProviderBaseUrl,
-  shouldUseMaxCompletionTokensForOpenAI,
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
@@ -283,9 +294,11 @@ const serializeProviderModelsForAnalyticsDiff = (providerConfig?: ProviderConfig
     contextWindow: model.contextWindow,
     customParams: sortAnalyticsObject(model.customParams),
     id: model.id,
+    maxTokens: model.maxTokens,
     name: model.name,
     supportsImage: model.supportsImage === true,
     supportsThinking: model.supportsThinking === true,
+    supportsVideo: model.supportsVideo === true,
   })))
 );
 
@@ -2327,6 +2340,9 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelName('');
     setNewModelId('');
     setNewModelSupportsImage(false);
+    setNewModelSupportsThinking(false);
+    setNewModelContextWindow(undefined);
+    setNewModelCustomParams('');
     setModelFormError(null);
   };
 
@@ -3752,7 +3768,14 @@ const Settings: React.FC<SettingsProps> = ({
     setModelFormError(null);
   };
 
-  const handleEditModel = (modelId: string, modelName: string, supportsImage?: boolean, supportsThinking?: boolean, contextWindow?: number, customParams?: Record<string, unknown>) => {
+  const handleEditModel = (
+    modelId: string,
+    modelName: string,
+    supportsImage?: boolean,
+    supportsThinking?: boolean,
+    contextWindow?: number,
+    customParams?: Record<string, unknown>,
+  ) => {
     setIsAddingModel(false);
     setIsEditingModel(true);
     setEditingModelId(modelId);
@@ -3808,10 +3831,12 @@ const Settings: React.FC<SettingsProps> = ({
       : newModelName.trim();
 
     const currentModels = providers[activeProvider].models ?? [];
-    const duplicateModel = currentModels.find(
-      model => model.id === modelId && (!isEditingModel || model.id !== editingModelId)
+    const hasDuplicateModel = hasEquivalentProviderModelId(
+      currentModels,
+      modelId,
+      isEditingModel ? editingModelId : null,
     );
-    if (duplicateModel) {
+    if (hasDuplicateModel) {
       setModelFormError(i18nService.t('modelIdExists'));
       return;
     }
@@ -3832,20 +3857,70 @@ const Settings: React.FC<SettingsProps> = ({
       }
     }
 
-    const nextModel = {
-      id: modelId,
-      name: modelName,
+    const providerConfig = providers[activeProvider];
+    const effectiveApiFormat = getEffectiveApiFormat(
+      activeProvider,
+      providerConfig.apiFormat,
+    );
+    const runtimeProfile = resolveModelRuntimeProfile({
+      source: isCustomProvider(activeProvider)
+        ? ModelRuntimeProfileSource.Custom
+        : ModelRuntimeProfileSource.BuiltIn,
+      providerId: activeProvider,
+      modelId,
+      api: effectiveApiFormat === 'openai'
+        ? OpenClawApi.OpenAICompletions
+        : OpenClawApi.AnthropicMessages,
+    });
+    const conflictingCustomParamKeys = runtimeProfile
+      ? findKimiK3ReservedCustomParamKeys(parsedCustomParams)
+      : [];
+    if (conflictingCustomParamKeys.length > 0) {
+      setModelFormError(
+        i18nService.t('kimiK3CustomParamsConflict').replace(
+          '{keys}',
+          conflictingCustomParamKeys.join(', '),
+        ),
+      );
+      return;
+    }
+
+    const editingModel = currentModels.find(model => model.id === editingModelId);
+    const resolvedProfileMetadata = applyModelRuntimeProfileMetadata({
       supportsImage: ProviderRegistry.resolveModelSupportsImage(
         activeProvider,
         modelId,
         newModelSupportsImage,
       ),
-      ...(ProviderRegistry.resolveModelSupportsThinking(
+      supportsVideo: ProviderRegistry.resolveModelSupportsVideo(
+        activeProvider,
+        modelId,
+        editingModel?.supportsVideo,
+      ),
+      supportsThinking: ProviderRegistry.resolveModelSupportsThinking(
         activeProvider,
         modelId,
         newModelSupportsThinking,
-      ) ? { supportsThinking: true } : {}),
-      ...(newModelContextWindow !== undefined ? { contextWindow: newModelContextWindow } : {}),
+      ),
+      contextWindow: newModelContextWindow,
+      maxTokens: ProviderRegistry.resolveModelMaxTokens(
+        activeProvider,
+        modelId,
+        editingModel?.maxTokens,
+      ),
+    }, runtimeProfile);
+    const nextModel = {
+      id: modelId,
+      name: modelName,
+      supportsImage: resolvedProfileMetadata.supportsImage ?? false,
+      ...(resolvedProfileMetadata.supportsThinking ? { supportsThinking: true } : {}),
+      ...(resolvedProfileMetadata.contextWindow !== undefined
+        ? { contextWindow: resolvedProfileMetadata.contextWindow }
+        : {}),
+      ...(resolvedProfileMetadata.supportsVideo ? { supportsVideo: true } : {}),
+      ...(resolvedProfileMetadata.maxTokens !== undefined
+        ? { maxTokens: resolvedProfileMetadata.maxTokens }
+        : {}),
       ...(parsedCustomParams && Object.keys(parsedCustomParams).length > 0
         ? { customParams: parsedCustomParams }
         : {}),
@@ -3869,6 +3944,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelId('');
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
+    setNewModelContextWindow(undefined);
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -4041,23 +4117,11 @@ const Settings: React.FC<SettingsProps> = ({
           headers['User-Agent'] = 'GitHubCopilotChat/0.26.7';
           headers['Openai-Intent'] = 'conversation-panel';
         }
-        const openAIRequestBody: Record<string, unknown> = useResponsesApi
-          ? {
-              model: firstModel.id,
-              input: [{ role: 'user', content: [{ type: 'input_text', text: 'Hi' }] }],
-              max_output_tokens: CONNECTIVITY_TEST_TOKEN_BUDGET,
-            }
-          : {
-              model: firstModel.id,
-              messages: [{ role: 'user', content: 'Hi' }],
-            };
-        if (!useResponsesApi && shouldUseMaxCompletionTokensForOpenAI(testingProvider, firstModel.id)) {
-          openAIRequestBody.max_completion_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
-        } else {
-          if (!useResponsesApi) {
-            openAIRequestBody.max_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
-          }
-        }
+        const openAIRequestBody = buildOpenAIConnectionTestRequestBody({
+          provider: testingProvider,
+          model: firstModel,
+          useResponsesApi,
+        });
         response = await window.electron.api.fetch({
           url: openaiUrl,
           method: 'POST',
@@ -5910,6 +5974,7 @@ const Settings: React.FC<SettingsProps> = ({
           setNewModelContextWindow={setNewModelContextWindow}
           newModelCustomParams={newModelCustomParams}
           setNewModelCustomParams={setNewModelCustomParams}
+          activeProviderConfig={providers[activeProvider]}
           modelFormError={modelFormError}
           setModelFormError={setModelFormError}
           handleSaveNewModel={handleSaveNewModel}

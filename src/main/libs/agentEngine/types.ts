@@ -1,5 +1,10 @@
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
 import type { CoworkBrowserAnnotationMessageBatch } from '../../../shared/cowork/browserAnnotations';
+import type {
+  CoworkBtwAbortResponse,
+  CoworkBtwEntry,
+  CoworkBtwSubmitResponse,
+} from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import type { CoworkImageAttachmentPayload } from '../../../shared/cowork/imageAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
@@ -40,6 +45,7 @@ export interface CoworkRuntimeEvents {
   message: (sessionId: string, message: CoworkMessage, beforeMessageId?: string) => void;
   messageUpdate: (sessionId: string, messageId: string, content: string, metadata?: Record<string, unknown>) => void;
   sessionStatus: (sessionId: string, status: CoworkSessionStatus) => void;
+  btwResult: (sessionId: string, result: CoworkBtwEntry) => void;
   goalUpdate: (sessionId: string, goal: CoworkGoal | null) => void;
   contextUsageUpdate: (sessionId: string, usage: CoworkContextUsage) => void;
   contextMaintenance: (sessionId: string, active: boolean) => void;
@@ -150,6 +156,8 @@ export interface CoworkRuntime {
   ): this;
   startSession(sessionId: string, prompt: string, options?: CoworkStartOptions): Promise<void>;
   continueSession(sessionId: string, prompt: string, options?: CoworkContinueOptions): Promise<void>;
+  submitBtw?(sessionId: string, question: string, runId: string): Promise<CoworkBtwSubmitResponse>;
+  abortBtw?(sessionId: string, runId: string): Promise<CoworkBtwAbortResponse>;
   submitSteer?(sessionId: string, text: string, clientSteerId: string): Promise<CoworkSteerResponse>;
   runGoalCommand?(sessionId: string, command: string): Promise<CoworkGoal | null>;
   patchSession?(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSessionPatchResult | void>;

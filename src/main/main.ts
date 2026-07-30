@@ -37,7 +37,16 @@ import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
-import { AuthIpcChannel } from '../shared/auth/constants';
+import {
+  AuthIpcChannel,
+  type AuthLifecycleEvent,
+  AuthLifecycleEventType,
+  AuthRefreshOutcome,
+  AuthRefreshReason,
+  type AuthSessionChangedEvent,
+  AuthSessionChangeReason,
+  AuthSessionStatus,
+} from '../shared/auth/constants';
 import {
   type BrowserDiagnosticResultStep,
   BrowserDiagnosticStatus,
@@ -52,6 +61,17 @@ import {
   type CoworkBrowserAnnotationMessageBatch,
   normalizeBrowserAnnotationBatches,
 } from '../shared/cowork/browserAnnotations';
+import {
+  COWORK_BTW_EVENT_QUESTION_MAX_CHARS,
+  COWORK_BTW_IDENTIFIER_MAX_CHARS,
+  COWORK_BTW_RESULT_MAX_CHARS,
+  type CoworkBtwAbortRequest,
+  type CoworkBtwAbortResponse,
+  type CoworkBtwEntry,
+  type CoworkBtwSubmitRequest,
+  type CoworkBtwSubmitResponse,
+  normalizeCoworkBtwQuestion,
+} from '../shared/cowork/btw';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SESSION_PAGE_SIZE,
@@ -117,7 +137,11 @@ import {
   OpenClawGatewayRepairErrorCode,
 } from '../shared/openclawEngine/constants';
 import { PlatformRegistry } from '../shared/platform';
-import { OpenClawProviderId, ProviderName } from '../shared/providers';
+import {
+  ModelRuntimeProfile,
+  OpenClawProviderId,
+  ProviderName,
+} from '../shared/providers';
 import {
   ShareDeploymentCandidateSource,
   type ShareDeploymentCreateNodeInput,
@@ -191,6 +215,7 @@ import {
   registerScheduledTaskHandlers,
 } from './ipcHandlers/scheduledTask';
 import { registerSessionDiagnosticsHandlers } from './ipcHandlers/sessionDiagnostics';
+import { registerSiteIpcHandlers } from './ipcHandlers/site';
 import { registerSkillHandlers } from './ipcHandlers/skills';
 import {
   type CoworkAgentEngine,
@@ -205,15 +230,24 @@ import {
   appendLoginParams,
   startAuthLocalCallback,
 } from './libs/authLocalCallbackServer';
+import {
+  AuthSessionManager,
+  resolveAuthSessionStatusFromError,
+} from './libs/authSessionManager';
 import type { BrowserAnnotationAssetIdentity, SaveBrowserAnnotationAssetInput } from './libs/browserAnnotationAssetStore';
 import { BrowserAnnotationAssetStore } from './libs/browserAnnotationAssetStore';
 import {
   clearServerModelMetadata,
+  evaluateServerModelRunGate,
   getAllServerModelMetadata,
   getCurrentApiConfig,
+  getServerModelMetadata,
+  isKnownPackageKimiK3ModelId,
   resolveAllEnabledProviderConfigs,
   resolveCurrentApiConfig,
   resolveRawApiConfig,
+  type ServerModelMetadataInput,
+  ServerModelRunGateReason,
   setAuthTokensGetter,
   setServerBaseUrlGetter,
   setStoreGetter,
@@ -288,7 +322,15 @@ import { packageHtmlFile } from './libs/htmlShare/htmlSharePackager';
 import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyfromAttribution';
 import { exportLogsZip } from './libs/logExport';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
-import { migrateAgentModelRefs, parsePrimaryModelRef, resolveQualifiedAgentModelRef } from './libs/openclawAgentModels';
+import {
+  migrateAgentModelRefs,
+  parsePrimaryModelRef,
+  resolveQualifiedAgentModelRef,
+  resolveServerModelRefForRun,
+  ServerModelRefResolutionStatus,
+  shouldSyncServerModelConfig,
+  syncServerModelConfigIfNeeded,
+} from './libs/openclawAgentModels';
 import {
   buildManagedSessionKey,
   DEFAULT_MANAGED_AGENT_ID,
@@ -357,7 +399,10 @@ import {
 } from './libs/shareDeployment/shareDeploymentOperationCoordinator';
 import { SqliteBackupTrigger } from './libs/sqliteBackup/constants';
 import { SqliteBackupManager } from './libs/sqliteBackup/sqliteBackupManager';
-import { runStartupCacheWarmup } from './libs/startupCacheWarmup';
+import {
+  buildServerModelCapabilityHeaders,
+  runStartupCacheWarmup,
+} from './libs/startupCacheWarmup';
 import {
   applySystemProxyEnv,
   resolveSystemProxyUrlForTargets,
@@ -982,6 +1027,11 @@ function sanitizeShareDeploymentCreateNodeInput(input: unknown): ShareDeployment
     ),
     targetShareStatus:
       sanitizeHtmlShareConfigurableStatus(source.targetShareStatus) ?? HtmlShareStatus.Live,
+    quotaReservationId: sanitizeOptionalHtmlShareString(
+      source.quotaReservationId,
+      'quotaReservationId',
+      64,
+    ),
   };
 }
 
@@ -1338,6 +1388,20 @@ const buildAvailableOpenClawProviders = (): Record<string, { models: Array<{ id:
         providerMap[selection.providerId].models.push({ id: selection.sessionModelId });
       }
     }
+  }
+
+  const serverModelIds = getAllServerModelMetadata()
+    .map(model => model.modelId.trim())
+    .filter(Boolean);
+  if (serverModelIds.length > 0) {
+    const serverProvider = providerMap[OpenClawProviderId.LobsteraiServer]
+      ?? { models: [] };
+    for (const modelId of serverModelIds) {
+      if (!serverProvider.models.some(model => model.id === modelId)) {
+        serverProvider.models.push({ id: modelId });
+      }
+    }
+    providerMap[OpenClawProviderId.LobsteraiServer] = serverProvider;
   }
 
   return providerMap;
@@ -1965,9 +2029,9 @@ const bootstrapOpenClawEngine = async (
   return promise;
 };
 
-// Module-level handle so ensureOpenClawRunningForCowork can await any in-flight
-// proactive token refresh before syncing config to the gateway.
-let pendingTokenRefresh: Promise<string | null> | null = null;
+// Injected after the auth session manager is created. This keeps gateway startup
+// able to await an in-flight refresh without exposing refresh internals globally.
+let waitForPendingTokenRefresh: () => Promise<void> = async () => {};
 
 const ensureOpenClawRunningForCowork = async () => {
   const configApplyStatus = await waitForOpenClawConfigApply('cowork engine startup');
@@ -1980,10 +2044,7 @@ const ensureOpenClawRunningForCowork = async () => {
   if (status.phase === 'running') {
     // Token proxy handles dynamic token injection — no need to restart
     // the gateway for token changes. Just wait for any in-flight refresh.
-    if (pendingTokenRefresh) {
-      console.log('[OpenClaw] ensureRunning: awaiting pending token refresh before proceeding');
-      await pendingTokenRefresh.catch(() => {});
-    }
+    await waitForPendingTokenRefresh();
     return manager.getStatus();
   }
   if (status.phase === 'starting') {
@@ -1992,10 +2053,7 @@ const ensureOpenClawRunningForCowork = async () => {
 
   // Wait for any in-flight token refresh so that the gateway starts with
   // a fresh token rather than the stale one that triggered the refresh.
-  if (pendingTokenRefresh) {
-    console.log('[OpenClaw] ensureRunning: awaiting pending token refresh before gateway start');
-    await pendingTokenRefresh.catch(() => {});
-  }
+  await waitForPendingTokenRefresh();
 
   // Ensure AskUser server is started and config is synced before launching the gateway,
   // so that mcp.servers config is available in openclaw.json when the gateway loads.
@@ -2412,11 +2470,7 @@ const _syncOpenClawConfigImpl = async (
     console.log(`${D()} SECRET ENV VARS CHANGED!`);
     if (added.length) console.log(`${D()}   added: ${added.join(', ')}`);
     if (removed.length) console.log(`${D()}   removed: ${removed.join(', ')}`);
-    for (const k of modified) {
-      const p = (effectivePrevSecretEnvVars[k] || '').slice(0, 12);
-      const n = (effectiveNextSecretEnvVars[k] || '').slice(0, 12);
-      console.log(`${D()}   modified: ${k} prev=${p}… next=${n}…`);
-    }
+    if (modified.length) console.log(`${D()}   modified: ${modified.join(', ')}`);
   } else {
     console.log(`${D()} secretEnvVars unchanged (${Object.keys(effectiveNextSecretEnvVars).length}/${Object.keys(nextSecretEnvVars).length} referenced keys)`);
   }
@@ -2755,6 +2809,32 @@ const bindCoworkRuntimeForwarder = (): void => {
     });
   });
 
+  runtime.on('btwResult', (sessionId: string, result: CoworkBtwEntry) => {
+    const safeResult: CoworkBtwEntry = {
+      ...result,
+      sessionId,
+      question: truncateIpcString(result.question, COWORK_BTW_EVENT_QUESTION_MAX_CHARS),
+      ...(result.answer !== undefined
+        ? { answer: truncateIpcString(result.answer, COWORK_BTW_RESULT_MAX_CHARS) }
+        : {}),
+      ...(result.error !== undefined
+        ? { error: truncateIpcString(result.error, IPC_STRING_MAX_CHARS) }
+        : {}),
+    };
+    const windows = BrowserWindow.getAllWindows();
+    windows.forEach(win => {
+      if (win.isDestroyed()) return;
+      try {
+        win.webContents.send(CoworkIpcChannel.StreamBtwResult, {
+          sessionId,
+          result: safeResult,
+        });
+      } catch (error) {
+        console.error('[CoworkBtw] failed to forward side-question result:', error);
+      }
+    });
+  });
+
   runtime.on('contextUsageUpdate', (sessionId: string, usage: unknown) => {
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
@@ -2841,7 +2921,7 @@ const bindCoworkRuntimeForwarder = (): void => {
         const windows = BrowserWindow.getAllWindows();
         windows.forEach(win => {
           if (win.isDestroyed()) return;
-          win.webContents.send('auth:quotaChanged');
+          win.webContents.send(AuthIpcChannel.QuotaChanged);
         });
       }
     } catch {
@@ -4243,6 +4323,15 @@ if (!gotTheLock) {
     )
   );
 
+  const getAuthUser = (): Record<string, unknown> | null => {
+    try {
+      return getStore().get<Record<string, unknown>>(AUTH_USER_STORE_KEY) || null;
+    } catch (error) {
+      console.warn('[Auth] failed to read cached auth user:', error);
+      return null;
+    }
+  };
+
   const saveAuthUser = (user: Record<string, unknown>) => {
     try {
       getStore().set(AUTH_USER_STORE_KEY, user);
@@ -4253,7 +4342,7 @@ if (!gotTheLock) {
 
   const getAuthUserId = (): string | null => {
     try {
-      const user = getStore().get<Record<string, unknown>>(AUTH_USER_STORE_KEY);
+      const user = getAuthUser();
       const yid = user?.yid;
       if (typeof yid === 'string' && yid.trim()) return yid;
       const userId = user?.userId;
@@ -4322,80 +4411,303 @@ if (!gotTheLock) {
     return parsed.toString();
   };
 
-  // refreshOnce() is the single entry-point for all token refresh paths
-  // (proactive, proxy 401/403 retry, and main-process authenticated API 401s).
-  // It deduplicates concurrent calls via pendingTokenRefresh so that rolling
-  // refresh tokens are never consumed twice.
-  const refreshOnce = async (reason: string): Promise<string | null> => {
-    if (pendingTokenRefresh) {
-      return pendingTokenRefresh;
+  const emitAuthLifecycleEvent = (event: AuthLifecycleEvent): void => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(AuthIpcChannel.LifecycleEvent, event);
     }
-    let resolvedToken: string | null = null;
-    pendingTokenRefresh = (async () => {
-      try {
-        const tokens = getAuthTokens();
-        if (!tokens?.refreshToken) return null;
-        const serverBaseUrl = getServerApiBaseUrl();
-        const refreshUrl = `${serverBaseUrl}/api/auth/refresh`;
-        console.log(`[Auth] requesting token refresh (reason: ${reason}) at ${refreshUrl}`);
-        const resp = await net.fetch(refreshUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...getEnterpriseAccountHeaders(),
-          },
-          body: JSON.stringify(withKeyfromBody({ refreshToken: tokens.refreshToken })),
-        });
-        if (resp.ok) {
-          const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
-          if (body.code === 0 && body.data) {
-            saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
-            console.log(`[Auth] token refresh succeeded (reason: ${reason})`);
-            resolvedToken = body.data.accessToken;
-            // Token proxy handles fresh tokens dynamically — no need
-            // to restart the gateway on token refresh.
-            syncOpenClawConfig({ reason: `token-refresh:${reason}`, restartGatewayIfRunning: false }).catch((err) => {
-              console.warn('[Auth] post-refresh OpenClaw config sync failed:', err);
-            });
-          }
-        }
-      } catch (err) {
-        console.warn(`[Auth] token refresh failed (reason: ${reason}):`, err);
-      } finally {
-        pendingTokenRefresh = null;
-      }
-      return resolvedToken;
-    })();
-    return pendingTokenRefresh;
   };
 
-  /**
-   * Helper: Fetch with Bearer token, auto-refresh on 401 and retry once.
-   */
-  const fetchWithAuth = async (url: string, options?: RequestInit): Promise<Response> => {
-    const tokens = getAuthTokens();
-    if (!tokens) throw new Error('No auth tokens');
-
-    const doFetch = (accessToken: string) =>
-      net.fetch(url, {
-        ...options,
-        headers: {
-          ...(options?.headers as Record<string, string>),
-          ...getEnterpriseAccountHeaders(),
-          Authorization: `Bearer ${accessToken}`,
-        },
-      });
-
-    let resp = await doFetch(tokens.accessToken);
-
-    if (resp.status === 401 && tokens.refreshToken) {
-      const refreshedAccessToken = await refreshOnce('passive');
-      if (refreshedAccessToken) {
-        resp = await doFetch(refreshedAccessToken);
+  const emitAuthSessionChanged = (event: AuthSessionChangedEvent): void => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) {
+        window.webContents.send(AuthIpcChannel.SessionChanged, event);
       }
     }
+  };
 
-    return resp;
+  const authSessionManager = new AuthSessionManager({
+    getTokens: getAuthTokens,
+    saveTokens: tokens => saveAuthTokens(tokens.accessToken, tokens.refreshToken),
+    fetch: (url, options) => {
+      const headers = new Headers(options?.headers);
+      for (const [name, value] of Object.entries(getEnterpriseAccountHeaders())) {
+        headers.set(name, value);
+      }
+      return net.fetch(url, {
+        ...options,
+        headers,
+      });
+    },
+    getRefreshUrl: () => `${getServerApiBaseUrl()}/api/auth/refresh`,
+    buildRefreshRequestBody: refreshToken => JSON.stringify(withKeyfromBody({ refreshToken })),
+    onTerminalFailure: () => {
+      clearLocalAuthSession({
+        reason: AuthSessionChangeReason.RefreshRejected,
+        notifyRenderer: true,
+      });
+    },
+    onRefreshSuccess: result => {
+      syncOpenClawConfig({
+        reason: `token-refresh:${result.reason}`,
+        restartGatewayIfRunning: false,
+      }).catch((error) => {
+        console.warn('[Auth] post-refresh OpenClaw config sync failed:', error);
+      });
+    },
+    onLifecycleEvent: emitAuthLifecycleEvent,
+    log: {
+      info: message => console.log(message),
+      warn: (message, error) => {
+        if (error === undefined) {
+          console.warn(message);
+        } else {
+          console.warn(message, error);
+        }
+      },
+    },
+  });
+  waitForPendingTokenRefresh = () => authSessionManager.waitForPendingRefresh();
+
+  const fetchWithAuth = (url: string, options?: RequestInit): Promise<Response> =>
+    authSessionManager.fetchWithAuth(url, options);
+
+  type AvailableServerModel = ServerModelMetadataInput & {
+    modelId: string;
+    modelName: string;
+    provider: string;
+    apiFormat: string;
+    costMultiplier?: number;
+    description?: string;
+    accessible?: boolean;
+    restrictionHint?: string;
+  };
+
+  const loadAvailableServerModels = async (options: {
+    reason: string;
+    awaitConfigSync?: boolean;
+    forceConfigSync?: boolean;
+  }): Promise<AvailableServerModel[]> => {
+    const serverBaseUrl = getServerApiBaseUrl();
+    const url = appendKeyfromQuery(`${serverBaseUrl}/api/models/available`);
+    console.log(`[Auth:getModels] requesting available models at ${url}`);
+    const resp = await fetchWithAuth(url, {
+      headers: buildServerModelCapabilityHeaders(app.getVersion()),
+    });
+    console.log('[Auth:getModels] Response status:', resp.status);
+    if (!resp.ok) {
+      throw new Error(`Server model request failed with HTTP ${resp.status}.`);
+    }
+
+    const data = (await resp.json()) as {
+      code: number;
+      message?: string;
+      data?: AvailableServerModel[];
+    };
+    console.log('[Auth:getModels] Response data:', JSON.stringify(data).slice(0, 500));
+    if (data.code !== 0 || !Array.isArray(data.data)) {
+      throw new Error(data.message || 'Server model response is invalid.');
+    }
+
+    const serverModelsChanged = updateServerModelMetadata(data.data);
+    const serverModelIds = data.data.map(model => model.modelId);
+    const serverModelsMissingFromConfig = !openClawConfigHasServerModels(serverModelIds);
+    const configSyncOptions = {
+      metadataChanged: serverModelsChanged,
+      modelsMissingFromConfig: serverModelsMissingFromConfig,
+      forceConfigSync: options.forceConfigSync,
+    };
+    if (shouldSyncServerModelConfig(configSyncOptions)) {
+      console.log(
+        `[Auth:getModels] syncing OpenClaw config for ${serverModelIds.length} server model(s); `
+        + `metadataChanged=${serverModelsChanged} missingFromConfig=${serverModelsMissingFromConfig} `
+        + `forced=${options.forceConfigSync === true}`,
+      );
+      const syncPromise = syncServerModelConfigIfNeeded({
+        ...configSyncOptions,
+        sync: () => syncOpenClawConfig({
+          reason: options.reason,
+          restartGatewayIfRunning: false,
+        }),
+      });
+      if (options.awaitConfigSync) {
+        await syncPromise;
+      } else {
+        syncPromise.catch((error) => {
+          console.warn('[Auth:getModels] failed to sync OpenClaw config after loading server models:', error);
+        });
+      }
+    } else {
+      console.debug('[Auth:getModels] server model metadata unchanged, skipping config sync');
+    }
+
+    return data.data.map((model) => {
+      const metadata = getServerModelMetadata(model.modelId);
+      return {
+        ...model,
+        runtimeProfile: metadata?.runtimeProfile,
+        supportsImage: metadata?.supportsImage,
+        supportsVideo: metadata?.supportsVideo,
+        supportsThinking: metadata?.supportsThinking,
+        supportsToolCalling: metadata?.supportsToolCalling,
+        agenticReady: metadata?.agenticReady,
+        contextWindow: metadata?.contextWindow,
+        maxTokens: metadata?.maxTokens,
+        explicitContextCache: metadata?.explicitContextCache,
+      };
+    });
+  };
+
+  let pendingServerModelPreflightRefresh: Promise<AvailableServerModel[]> | null = null;
+
+  const refreshServerModelsForRunPreflight = (): Promise<AvailableServerModel[]> => {
+    if (pendingServerModelPreflightRefresh) {
+      return pendingServerModelPreflightRefresh;
+    }
+    pendingServerModelPreflightRefresh = loadAvailableServerModels({
+      reason: 'server-model-run-preflight',
+      awaitConfigSync: true,
+      forceConfigSync: true,
+    }).finally(() => {
+      pendingServerModelPreflightRefresh = null;
+    });
+    return pendingServerModelPreflightRefresh;
+  };
+
+  const resolveCoworkRunModelRef = (options: {
+    sessionId?: string;
+    modelOverride?: string;
+    agentId?: string;
+  }): string => {
+    const session = options.sessionId
+      ? getCoworkStore().getSession(options.sessionId)
+      : null;
+    const agentId = options.agentId?.trim() || session?.agentId || 'main';
+    const rawModelRef = options.modelOverride?.trim()
+      || session?.modelOverride?.trim()
+      || getAgentManager().getAgent(agentId)?.model?.trim()
+      || resolveDefaultAgentModelRef();
+    return rawModelRef?.trim() || '';
+  };
+
+  const getServerModelRunGateError = (reason: ServerModelRunGateReason): string => {
+    switch (reason) {
+      case ServerModelRunGateReason.MetadataMissing:
+        return t('serverModelMetadataUnavailable');
+      case ServerModelRunGateReason.RuntimeProfileMissing:
+      case ServerModelRunGateReason.RuntimeProfileUnsupported:
+      case ServerModelRunGateReason.TransportUnsupported:
+        return t('serverModelRuntimeProfileUnsupported');
+      case ServerModelRunGateReason.ToolCallingUnavailable:
+        return t('serverModelToolCallingUnavailable');
+      case ServerModelRunGateReason.AgenticNotReady:
+        return t('serverModelAgenticNotReady');
+    }
+  };
+
+  const ensureServerModelReadyForRun = async (
+    modelRef: string,
+  ): Promise<{ allowed: true } | { allowed: false; error: string }> => {
+    const resolveRunModelRef = () => resolveServerModelRefForRun({
+      modelRef,
+      availableProviders: buildAvailableOpenClawProviders(),
+      isKnownServerModelCandidate: isKnownPackageKimiK3ModelId,
+    });
+    const blockForUnavailableIdentity = (
+      status: string,
+      modelId: string,
+      providerIds?: string[],
+    ): { allowed: false; error: string } => {
+      console.warn(
+        `[Cowork] blocked server model run for "${modelId}"; `
+        + `providerResolution=${status}`
+        + (providerIds?.length ? ` providers=${providerIds.join(',')}` : ''),
+      );
+      return {
+        allowed: false,
+        error: t('serverModelMetadataUnavailable'),
+      };
+    };
+
+    let resolution = resolveRunModelRef();
+    let refreshed = false;
+    if (resolution.status === ServerModelRefResolutionStatus.RefreshRequired) {
+      try {
+        await refreshServerModelsForRunPreflight();
+        refreshed = true;
+      } catch (error) {
+        console.warn(
+          `[Cowork] failed to refresh server model metadata before resolving "${resolution.modelId}":`,
+          error,
+        );
+        return {
+          allowed: false,
+          error: t('serverModelMetadataUnavailable'),
+        };
+      }
+      resolution = resolveRunModelRef();
+    }
+
+    if (resolution.status === ServerModelRefResolutionStatus.Ambiguous) {
+      return blockForUnavailableIdentity(
+        resolution.status,
+        resolution.modelId,
+        resolution.providerIds,
+      );
+    }
+    if (resolution.status === ServerModelRefResolutionStatus.RefreshRequired) {
+      return blockForUnavailableIdentity(resolution.status, resolution.modelId);
+    }
+    if (
+      resolution.status === ServerModelRefResolutionStatus.NonServer
+      || resolution.status === ServerModelRefResolutionStatus.Unresolved
+    ) {
+      return { allowed: true };
+    }
+
+    let gate = evaluateServerModelRunGate(resolution.modelId);
+    const requiresFreshK3Metadata = gate.allowed === true
+      && gate.metadata.runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3;
+    if (!refreshed && (gate.allowed === false || requiresFreshK3Metadata)) {
+      try {
+        await refreshServerModelsForRunPreflight();
+        refreshed = true;
+      } catch (error) {
+        console.warn(
+          `[Cowork] failed to refresh server model metadata before run for "${resolution.modelId}":`,
+          error,
+        );
+        return {
+          allowed: false,
+          error: t('serverModelMetadataUnavailable'),
+        };
+      }
+      const refreshedResolution = resolveRunModelRef();
+      if (
+        refreshedResolution.status !== ServerModelRefResolutionStatus.Server
+        || refreshedResolution.modelId !== resolution.modelId
+      ) {
+        return blockForUnavailableIdentity(
+          refreshedResolution.status,
+          refreshedResolution.modelId,
+          'providerIds' in refreshedResolution
+            ? refreshedResolution.providerIds
+            : undefined,
+        );
+      }
+      resolution = refreshedResolution;
+      gate = evaluateServerModelRunGate(resolution.modelId);
+    }
+    if (gate.allowed === true) {
+      return { allowed: true };
+    }
+
+    console.warn(
+      `[Cowork] blocked server model run for "${resolution.modelId}"; reason=${gate.reason}.`,
+    );
+    return {
+      allowed: false,
+      error: getServerModelRunGateError(gate.reason),
+    };
   };
 
   let pendingEnterpriseAccountContextRefresh: {
@@ -5219,7 +5531,7 @@ if (!gotTheLock) {
             emitMediaTaskMessage(tracker.sessionId, lines.join('\n'));
           }
           BrowserWindow.getAllWindows().forEach(win => {
-            if (!win.isDestroyed()) win.webContents.send('auth:quotaChanged');
+            if (!win.isDestroyed()) win.webContents.send(AuthIpcChannel.QuotaChanged);
           });
         }
       } catch {
@@ -5388,6 +5700,44 @@ if (!gotTheLock) {
     cachedMediaGenerationEntitled = defaultGateState.mediaGenerationEntitled;
   };
 
+  const clearLocalAuthSession = (options: {
+    reason: AuthSessionChangeReason;
+    notifyRenderer: boolean;
+  }): void => {
+    const previousQuotaGateState = getAuthQuotaGateState();
+    authAccountGeneration += 1;
+    clearAuthTokens();
+    clearAuthUser();
+    clearEnterpriseAccountContext(getStore());
+    clearServerModelMetadata();
+    resetAuthQuotaGateState();
+
+    const quotaGateSyncScheduled = syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
+    if (!quotaGateSyncScheduled) {
+      const syncReason = options.reason === AuthSessionChangeReason.RefreshRejected
+        ? 'auth-session-expired-server-models-cleared'
+        : 'auth-logout-server-models-cleared';
+      syncOpenClawConfig({
+        reason: syncReason,
+        restartGatewayIfRunning: false,
+      }).catch(error => {
+        console.warn('[Auth] failed to sync OpenClaw config after auth cleanup:', error);
+      });
+    }
+
+    if (options.notifyRenderer) {
+      emitAuthSessionChanged({
+        status: AuthSessionStatus.Expired,
+        reason: options.reason,
+      });
+      emitAuthLifecycleEvent({
+        eventType: AuthLifecycleEventType.TerminalExpired,
+        outcome: AuthSessionStatus.Expired,
+        reason: options.reason,
+      });
+    }
+  };
+
   /**
    * Normalize quota data from various server response formats into a unified shape.
    */
@@ -5444,7 +5794,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('auth:exchange', async (_event, { code }: { code: string }) => {
+  ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
     try {
       const serverBaseUrl = getServerApiBaseUrl();
       const exchangeUrl = `${serverBaseUrl}/api/auth/exchange`;
@@ -5470,14 +5820,20 @@ if (!gotTheLock) {
       if (body.code !== 0 || !body.data) {
         return { success: false, error: body.message || 'Exchange failed' };
       }
+      const previousQuotaGateState = getAuthQuotaGateState();
       authAccountGeneration += 1;
       clearEnterpriseAccountContext(getStore());
       clearServerModelMetadata();
+      // A login exchange can switch accounts without an explicit logout.
+      // Reset entitlement fallbacks before normalizing the new account so a
+      // partial quota payload cannot inherit the previous account's plan.
+      resetAuthQuotaGateState();
       saveAuthTokens(body.data.accessToken, body.data.refreshToken);
       saveAuthUser(body.data.user);
       const enterpriseContext = await syncEnterpriseAccountContextFromPayload(body.data);
-      console.log('[Auth] exchange user data:', JSON.stringify(body.data.user));
-      const previousQuotaGateState = getAuthQuotaGateState();
+      console.log(
+        `[Auth] exchange completed; enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
+      );
       const quota = normalizeQuota(body.data.quota);
       syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
       return {
@@ -5495,19 +5851,39 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('auth:getUser', async () => {
+  ipcMain.handle(AuthIpcChannel.GetUser, async () => {
     try {
       const tokens = getAuthTokens();
-      if (!tokens) return { success: false };
+      if (!tokens) {
+        return {
+          success: false,
+          status: AuthSessionStatus.Unauthenticated,
+          hasCredentials: false,
+        };
+      }
       const serverBaseUrl = getServerApiBaseUrl();
       // Fetch user profile
       const profileResp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile`);
-      if (!profileResp.ok) return { success: false };
+      if (!profileResp.ok) {
+        return {
+          success: false,
+          status: AuthSessionStatus.TemporarilyUnavailable,
+          hasCredentials: true,
+          cachedUser: getAuthUser(),
+        };
+      }
       const profileBody = (await profileResp.json()) as {
         code: number;
         data: Record<string, unknown>;
       };
-      if (profileBody.code !== 0 || !profileBody.data) return { success: false };
+      if (profileBody.code !== 0 || !profileBody.data) {
+        return {
+          success: false,
+          status: AuthSessionStatus.TemporarilyUnavailable,
+          hasCredentials: true,
+          cachedUser: getAuthUser(),
+        };
+      }
       saveAuthUser(profileBody.data);
       // Fetch quota separately
       const quotaResp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
@@ -5523,20 +5899,35 @@ if (!gotTheLock) {
           syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
         }
       }
-      console.log('[Auth] getUser profile data:', JSON.stringify(profileBody.data));
       const enterpriseContext = await syncEnterpriseAccountContextFromPayload(profileBody.data);
+      console.log(
+        `[Auth] profile refresh completed; quota=${quota ? 'present' : 'absent'}; `
+        + `enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
+      );
       return {
         success: true,
+        status: AuthSessionStatus.Authenticated,
         user: profileBody.data,
         quota,
         enterpriseContext,
       };
-    } catch {
-      return { success: false };
+    } catch (error) {
+      const status = resolveAuthSessionStatusFromError(error);
+      if (status === AuthSessionStatus.TemporarilyUnavailable) {
+        console.warn('[Auth] getUser temporarily unavailable:', error);
+      }
+      return {
+        success: false,
+        status,
+        hasCredentials: status !== AuthSessionStatus.Unauthenticated && Boolean(getAuthTokens()),
+        cachedUser: status === AuthSessionStatus.TemporarilyUnavailable
+          ? getAuthUser()
+          : null,
+      };
     }
   });
 
-  ipcMain.handle('auth:getQuota', async () => {
+  ipcMain.handle(AuthIpcChannel.GetQuota, async () => {
     try {
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
@@ -5559,7 +5950,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('auth:getProfileSummary', async () => {
+  ipcMain.handle(AuthIpcChannel.GetProfileSummary, async () => {
     try {
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
@@ -5576,7 +5967,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('auth:claimCreditsFinalReward', async (_event, payload: { campaignCode?: string }) => {
+  ipcMain.handle(AuthIpcChannel.ClaimCreditsFinalReward, async (_event, payload: { campaignCode?: string }) => {
     try {
       const campaignCode = payload?.campaignCode?.trim();
       if (!campaignCode) return { success: false, error: 'Missing campaign code' };
@@ -5604,7 +5995,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('auth:getActiveClientBanner', async () => {
+  ipcMain.handle(AuthIpcChannel.GetActiveClientBanner, async () => {
     try {
       const serverBaseUrl = getServerApiBaseUrl();
       const url = appendKeyfromQuery(`${serverBaseUrl}/api/client-banners/active?placement=desktop_sidebar`);
@@ -5618,7 +6009,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('auth:getActiveClientBanners', async () => {
+  ipcMain.handle(AuthIpcChannel.GetActiveClientBanners, async () => {
     try {
       const serverBaseUrl = getServerApiBaseUrl();
       const url = appendKeyfromQuery(`${serverBaseUrl}/api/client-banners/active-list?placement=desktop_sidebar`);
@@ -5632,8 +6023,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('auth:logout', async () => {
-    authAccountGeneration += 1;
+  ipcMain.handle(AuthIpcChannel.Logout, async () => {
     try {
       const tokens = getAuthTokens();
       if (tokens) {
@@ -5654,54 +6044,34 @@ if (!gotTheLock) {
             /* best-effort */
           });
       }
-      clearAuthTokens();
-      clearAuthUser();
-      clearEnterpriseAccountContext(getStore());
-      clearServerModelMetadata();
-      const previousQuotaGateState = getAuthQuotaGateState();
-      resetAuthQuotaGateState();
-      const quotaGateSyncScheduled = syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
-      if (!quotaGateSyncScheduled) {
-        syncOpenClawConfig({
-          reason: 'auth-logout-server-models-cleared',
-          restartGatewayIfRunning: false,
-        }).catch((error) => {
-          console.warn('[Auth] failed to sync OpenClaw config after logout:', error);
-        });
-      }
+      clearLocalAuthSession({
+        reason: AuthSessionChangeReason.UserLogout,
+        notifyRenderer: false,
+      });
       console.log('[Auth] cleared login state and scheduled server model config refresh');
       return { success: true };
     } catch (error) {
       console.warn('[Auth] logout cleanup encountered an error; clearing local state anyway:', error);
-      const previousQuotaGateState = getAuthQuotaGateState();
-      clearAuthTokens();
-      clearAuthUser();
-      clearEnterpriseAccountContext(getStore());
-      clearServerModelMetadata();
-      resetAuthQuotaGateState();
-      const quotaGateSyncScheduled = syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
-      if (!quotaGateSyncScheduled) {
-        syncOpenClawConfig({
-          reason: 'auth-logout-server-models-cleared',
-          restartGatewayIfRunning: false,
-        }).catch((syncError) => {
-          console.warn('[Auth] failed to sync OpenClaw config after logout cleanup:', syncError);
-        });
-      }
+      clearLocalAuthSession({
+        reason: AuthSessionChangeReason.UserLogout,
+        notifyRenderer: false,
+      });
       return { success: true };
     }
   });
 
-  ipcMain.handle('auth:refreshToken', async () => {
+  ipcMain.handle(AuthIpcChannel.RefreshToken, async () => {
     try {
-      const accessToken = await refreshOnce('manual');
-      return accessToken ? { success: true, accessToken } : { success: false };
+      const result = await authSessionManager.refresh(AuthRefreshReason.Manual);
+      return result.outcome === AuthRefreshOutcome.Success
+        ? { success: true, accessToken: result.accessToken, outcome: result.outcome }
+        : { success: false, outcome: result.outcome };
     } catch {
       return { success: false };
     }
   });
 
-  ipcMain.handle('auth:getAccessToken', async () => {
+  ipcMain.handle(AuthIpcChannel.GetAccessToken, async () => {
     const tokens = getAuthTokens();
     return tokens?.accessToken || null;
   });
@@ -5747,60 +6117,17 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('auth:getModels', async () => {
+  ipcMain.handle(AuthIpcChannel.GetModels, async () => {
     try {
       const tokens = getAuthTokens();
       if (!tokens) {
         console.log('[Auth:getModels] No auth tokens available');
         return { success: false };
       }
-      const serverBaseUrl = getServerApiBaseUrl();
-      const url = appendKeyfromQuery(`${serverBaseUrl}/api/models/available`);
-      console.log(`[Auth:getModels] requesting available models at ${url}`);
-      const resp = await fetchWithAuth(url);
-      console.log('[Auth:getModels] Response status:', resp.status);
-      if (!resp.ok) {
-        console.log('[Auth:getModels] Response not ok:', resp.status, resp.statusText);
-        return { success: false };
-      }
-      const data = (await resp.json()) as {
-        code: number;
-        data: Array<{
-          modelId: string;
-          modelName: string;
-          provider: string;
-          apiFormat: string;
-          supportsImage?: boolean;
-          supportsThinking?: boolean;
-          explicitContextCache?: boolean;
-          contextWindow?: number;
-          costMultiplier?: number;
-          description?: string;
-        }>;
-      };
-      console.log('[Auth:getModels] Response data:', JSON.stringify(data).slice(0, 500));
-      if (data.code !== 0) return { success: false };
-      // Cache server model metadata for use in OpenClaw config sync (supportsImage, etc.)
-      const serverModelsChanged = updateServerModelMetadata(data.data);
-      const serverModelIds = data.data.map(model => model.modelId);
-      const serverModelsMissingFromConfig = !openClawConfigHasServerModels(serverModelIds);
-      // Re-sync so the gateway picks up the correct supportsImage values for server models.
-      // This IPC can run after normal chat completion when the renderer refreshes quota/model
-      // state, so server model updates must not force a hard gateway restart.
-      if (serverModelsChanged || serverModelsMissingFromConfig) {
-        console.log(
-          `[Auth:getModels] scheduling OpenClaw config sync for ${serverModelIds.length} server model(s); metadataChanged=${serverModelsChanged} missingFromConfig=${serverModelsMissingFromConfig}`,
-        );
-        syncOpenClawConfig({
-          reason: serverModelsChanged ? 'server-models-updated' : 'server-models-restored',
-          restartGatewayIfRunning: false,
-        }).catch((error) => {
-          console.warn('[Auth:getModels] failed to sync OpenClaw config after loading server models:', error);
-        });
-      } else {
-        console.debug('[Auth:getModels] server model metadata unchanged, skipping config sync');
-      }
-      return { success: true, models: data.data };
+      const models = await loadAvailableServerModels({
+        reason: 'server-models-updated',
+      });
+      return { success: true, models };
     } catch (e) {
       console.error('[Auth:getModels] Error:', e);
       return { success: false };
@@ -6951,6 +7278,15 @@ if (!gotTheLock) {
           `Image attachments ${options.imageAttachments?.length ?? 0}.`,
           `Agent ${options.agentId || 'main'}.`,
         );
+        const modelRunGate = await ensureServerModelReadyForRun(
+          resolveCoworkRunModelRef({
+            modelOverride: options.modelOverride,
+            agentId: options.agentId,
+          }),
+        );
+        if (modelRunGate.allowed === false) {
+          return { success: false, error: modelRunGate.error };
+        }
         const engineStatus = await ensureOpenClawRunningForCowork();
         if (engineStatus.phase !== 'running') {
           return getEngineNotReadyResponse(engineStatus);
@@ -7161,6 +7497,12 @@ if (!gotTheLock) {
           `Prompt length ${options.prompt.length}.`,
           `Image attachments ${options.imageAttachments?.length ?? 0}.`,
         );
+        const modelRunGate = await ensureServerModelReadyForRun(
+          resolveCoworkRunModelRef({ sessionId: options.sessionId }),
+        );
+        if (modelRunGate.allowed === false) {
+          return { success: false, error: modelRunGate.error };
+        }
         const engineStatus = await ensureOpenClawRunningForCowork();
         if (engineStatus.phase !== 'running') {
           return getEngineNotReadyResponse(engineStatus);
@@ -7283,6 +7625,143 @@ if (!gotTheLock) {
     },
   );
 
+  ipcMain.handle(CoworkIpcChannel.SubmitBtw, async (
+    _event,
+    options: CoworkBtwSubmitRequest,
+  ): Promise<CoworkBtwSubmitResponse> => {
+    const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
+    const question = typeof options?.question === 'string'
+      ? normalizeCoworkBtwQuestion(options.question)
+      : '';
+    const runId = typeof options?.runId === 'string' ? options.runId.trim() : '';
+    if (!sessionId || !question || !runId) {
+      return {
+        success: false,
+        runId,
+        error: t('coworkBtwRequestRequired'),
+      };
+    }
+    if (
+      sessionId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+      || runId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+    ) {
+      return {
+        success: false,
+        runId: runId.slice(0, COWORK_BTW_IDENTIFIER_MAX_CHARS),
+        error: t('coworkBtwInvalidIdentifier'),
+      };
+    }
+    if (/[\r\n]/.test(question)) {
+      return {
+        success: false,
+        runId,
+        error: t('coworkBtwSingleLine'),
+      };
+    }
+    try {
+      console.debug(
+        '[CoworkBtw] side-question IPC received.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+        `Question chars ${question.length}.`,
+      );
+      const engineStatus = await ensureOpenClawRunningForCowork();
+      if (engineStatus.phase !== 'running') {
+        return {
+          ...getEngineNotReadyResponse(engineStatus),
+          runId,
+        };
+      }
+      const runtime = getCoworkEngineRouter();
+      if (!runtime.submitBtw) {
+        return {
+          success: false,
+          runId,
+          error: t('coworkBtwUnavailable'),
+        };
+      }
+      const result = await runtime.submitBtw(sessionId, question, runId);
+      console.debug(
+        '[CoworkBtw] side-question IPC completed.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+        `Success ${result.success ? 'yes' : 'no'}.`,
+      );
+      return result;
+    } catch (error) {
+      console.error(
+        '[CoworkBtw] side-question IPC failed.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+        error,
+      );
+      return {
+        success: false,
+        runId,
+        error: error instanceof Error ? error.message : t('coworkBtwSubmitFailed'),
+      };
+    }
+  });
+
+  ipcMain.handle(CoworkIpcChannel.AbortBtw, async (
+    _event,
+    options: CoworkBtwAbortRequest,
+  ): Promise<CoworkBtwAbortResponse> => {
+    const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
+    const runId = typeof options?.runId === 'string' ? options.runId.trim() : '';
+    if (
+      !sessionId
+      || !runId
+      || sessionId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+      || runId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+    ) {
+      return {
+        success: false,
+        aborted: false,
+        runId: runId.slice(0, COWORK_BTW_IDENTIFIER_MAX_CHARS),
+        error: t('coworkBtwInvalidIdentifier'),
+      };
+    }
+
+    try {
+      console.debug(
+        '[CoworkBtw] side-question stop IPC received.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+      );
+      const runtime = getCoworkEngineRouter();
+      if (!runtime.abortBtw) {
+        return {
+          success: false,
+          aborted: false,
+          runId,
+          error: t('coworkBtwUnavailable'),
+        };
+      }
+      const result = await runtime.abortBtw(sessionId, runId);
+      console.debug(
+        '[CoworkBtw] side-question stop IPC completed.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+        `Aborted ${result.aborted ? 'yes' : 'no'}.`,
+      );
+      return result;
+    } catch (error) {
+      console.error(
+        '[CoworkBtw] side-question stop IPC failed.',
+        `Session ${sessionId}.`,
+        `Run ${runId}.`,
+        error,
+      );
+      return {
+        success: false,
+        aborted: false,
+        runId,
+        error: t('coworkBtwStopFailed'),
+      };
+    }
+  });
+
   ipcMain.handle(CoworkIpcChannel.SubmitSteer, async (
     _event,
     options: { sessionId: string; text: string; clientSteerId: string },
@@ -7392,7 +7871,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:session:stop', async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.StopSession, async (_event, sessionId: string) => {
     try {
       const runtime = getCoworkEngineRouter();
       runtime.stopSession(sessionId);
@@ -10359,6 +10838,11 @@ if (!gotTheLock) {
     getServerApiBaseUrl,
   });
 
+  registerSiteIpcHandlers({
+    fetchWithAuth,
+    getServerApiBaseUrl,
+  });
+
   // ---- artifact file watching ----
   const fileWatchers = new Map<
     string,
@@ -11494,7 +11978,7 @@ if (!gotTheLock) {
         );
         const expiresAt = payload.exp * 1000;
         if (expiresAt - Date.now() < 5 * 60 * 1000) {
-          void refreshOnce('proactive'); // fire-and-forget
+          void authSessionManager.refresh(AuthRefreshReason.Proactive); // fire-and-forget
         }
       } catch {
         /* unable to parse JWT, return token as-is */
@@ -11524,46 +12008,28 @@ if (!gotTheLock) {
         });
     }
 
-    registerProxyTokenRefresher('lobsterai-server', async () => {
-      const tokens = getAuthTokens();
-      if (!tokens?.refreshToken) return null;
-      const serverBaseUrl = getServerApiBaseUrl();
-      try {
-        const refreshUrl = `${serverBaseUrl}/api/auth/refresh`;
-        console.log(`[Auth] requesting proxy token refresh at ${refreshUrl}`);
-        const resp = await net.fetch(refreshUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...getEnterpriseAccountHeaders(),
-          },
-          body: JSON.stringify(withKeyfromBody({ refreshToken: tokens.refreshToken })),
-        });
-        if (resp.ok) {
-          const body = (await resp.json()) as {
-            code: number;
-            data: { accessToken: string; refreshToken?: string };
-          };
-          if (body.code === 0 && body.data) {
-            saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
-            console.log('[Auth] proxy token refresh succeeded');
-            return body.data.accessToken;
-          }
-        }
-      } catch (err) {
-        console.warn('[Auth] proxy token refresh failed:', err);
+    registerProxyTokenRefresher(ProviderName.LobsteraiServer, async rejectedToken => {
+      const latestAccessToken = getAuthTokens()?.accessToken;
+      if (latestAccessToken && rejectedToken && latestAccessToken !== rejectedToken) {
+        return {
+          outcome: AuthRefreshOutcome.Success,
+          accessToken: latestAccessToken,
+        };
       }
-      return null;
+      return authSessionManager.refresh(AuthRefreshReason.CompatProxy);
     });
 
-    registerProxyTokenRefresher('github-copilot', async () => {
+    registerProxyTokenRefresher(ProviderName.Copilot, async () => {
       try {
         const { refreshCopilotTokenNow } = await import('./libs/copilotTokenManager');
         const refreshed = await refreshCopilotTokenNow();
-        return refreshed.copilotToken;
+        return {
+          outcome: AuthRefreshOutcome.Success,
+          accessToken: refreshed.copilotToken,
+        };
       } catch (err) {
         console.warn('[Auth] Copilot proxy token refresh failed:', err);
-        return null;
+        return { outcome: AuthRefreshOutcome.TransientFailure };
       }
     });
 
@@ -11573,9 +12039,10 @@ if (!gotTheLock) {
     try {
       await startOpenClawTokenProxy({
         getAuthTokens,
-        refreshToken: refreshOnce,
+        refreshToken: reason => authSessionManager.refresh(reason),
         getServerBaseUrl: getServerApiBaseUrl,
         getAccountContextHeaders: getEnterpriseAccountHeaders,
+        getClientVersion: () => app.getVersion(),
       });
       console.log('[Main] OpenClaw token proxy started');
     } catch (err) {
@@ -11707,6 +12174,7 @@ if (!gotTheLock) {
         fetchWithAuth,
         appendKeyfromQuery,
         cachedSubscriptionStatus,
+        clientVersion: app.getVersion(),
         t,
       });
       cachedSubscriptionStatus = warmupResult.subscriptionStatus;

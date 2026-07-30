@@ -1,4 +1,4 @@
-import { type ProviderConfig,ProviderRegistry } from '@shared/providers';
+import { type ProviderConfig, ProviderRegistry } from '@shared/providers';
 
 import {
   type BrowserWebAccessConfig,
@@ -95,6 +95,10 @@ export interface AppConfig {
       id: string;
       name: string;
       supportsImage?: boolean;
+      supportsVideo?: boolean;
+      supportsThinking?: boolean;
+      contextWindow?: number;
+      maxTokens?: number;
     }>;
     defaultModel: string;
     defaultModelProvider?: string;

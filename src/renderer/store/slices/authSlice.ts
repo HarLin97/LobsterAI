@@ -1,4 +1,8 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import {
+  AuthSessionStatus,
+  type AuthSessionStatus as AuthSessionStatusValue,
+} from '@shared/auth/constants';
 
 export interface UserProfile {
   yid: string;
@@ -85,6 +89,7 @@ export interface ProfileSummary {
 interface AuthState {
   isLoggedIn: boolean;
   isLoading: boolean;
+  sessionStatus: AuthSessionStatusValue;
   user: UserProfile | null;
   quota: UserQuota | null;
   profileSummary: ProfileSummary | null;
@@ -93,6 +98,7 @@ interface AuthState {
 const initialState: AuthState = {
   isLoggedIn: false,
   isLoading: true,
+  sessionStatus: AuthSessionStatus.Unauthenticated,
   user: null,
   quota: null,
   profileSummary: null,
@@ -108,15 +114,41 @@ const authSlice = createSlice({
     setLoggedIn(state, action: PayloadAction<{ user: UserProfile; quota: UserQuota | null }>) {
       state.isLoggedIn = true;
       state.isLoading = false;
+      state.sessionStatus = AuthSessionStatus.Authenticated;
       state.user = action.payload.user;
       state.quota = action.payload.quota;
     },
     setLoggedOut(state) {
       state.isLoggedIn = false;
       state.isLoading = false;
+      state.sessionStatus = AuthSessionStatus.Unauthenticated;
       state.user = null;
       state.quota = null;
       state.profileSummary = null;
+    },
+    setAuthExpired(state) {
+      state.isLoggedIn = false;
+      state.isLoading = false;
+      state.sessionStatus = AuthSessionStatus.Expired;
+      state.user = null;
+      state.quota = null;
+      state.profileSummary = null;
+    },
+    setAuthTemporarilyUnavailable(
+      state,
+      action: PayloadAction<{
+        hasCredentials: boolean;
+        cachedUser?: UserProfile | null;
+      }>,
+    ) {
+      state.isLoading = false;
+      state.sessionStatus = AuthSessionStatus.TemporarilyUnavailable;
+      if (action.payload.hasCredentials) {
+        state.isLoggedIn = true;
+      }
+      if (action.payload.cachedUser) {
+        state.user = action.payload.cachedUser;
+      }
     },
     updateQuota(state, action: PayloadAction<UserQuota>) {
       state.quota = action.payload;
@@ -132,7 +164,9 @@ const authSlice = createSlice({
 
 export const {
   clearProfileSummary,
+  setAuthExpired,
   setAuthLoading,
+  setAuthTemporarilyUnavailable,
   setLoggedIn,
   setLoggedOut,
   setProfileSummary,

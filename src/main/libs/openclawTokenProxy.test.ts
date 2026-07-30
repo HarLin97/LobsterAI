@@ -3,6 +3,8 @@ import { PassThrough } from 'node:stream';
 import http from 'http';
 import { beforeEach, expect, test, vi } from 'vitest';
 
+import { AuthRefreshOutcome } from '../../shared/auth/constants';
+
 vi.mock('electron', () => ({
   net: { fetch: vi.fn() },
 }));
@@ -18,23 +20,60 @@ beforeEach(() => {
   consumeRecentOpenClawTokenProxyQuotaError();
 });
 
+test('refreshes LobsterAI credentials for 401 but not 403', () => {
+  expect(testUtils.shouldRefreshLobsterAIToken(401)).toBe(true);
+  expect(testUtils.shouldRefreshLobsterAIToken(403)).toBe(false);
+});
+
+test('turns only transient refresh failures into temporary service errors', () => {
+  expect(testUtils.isTemporaryAuthRefreshFailure({
+    outcome: AuthRefreshOutcome.TransientFailure,
+  })).toBe(true);
+  expect(testUtils.isTemporaryAuthRefreshFailure({
+    outcome: AuthRefreshOutcome.TerminalFailure,
+  })).toBe(false);
+});
+
 type MockProxyResponse = {
   write: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
+  emitClose: () => void;
   destroyed: boolean;
+  writableEnded: boolean;
+  writableFinished: boolean;
 };
 
 function createMockProxyResponse(): MockProxyResponse {
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
   const res: MockProxyResponse = {
     write: vi.fn(),
-    end: vi.fn(),
+    end: vi.fn(() => {
+      res.writableEnded = true;
+      res.writableFinished = true;
+    }),
     destroy: vi.fn(() => {
       res.destroyed = true;
+      for (const listener of listeners.get('close') ?? []) {
+        listener();
+      }
     }),
-    on: vi.fn(),
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      const eventListeners = listeners.get(event) ?? [];
+      eventListeners.push(listener);
+      listeners.set(event, eventListeners);
+      return res;
+    }),
+    emitClose: () => {
+      res.destroyed = true;
+      for (const listener of listeners.get('close') ?? []) {
+        listener();
+      }
+    },
     destroyed: false,
+    writableEnded: false,
+    writableFinished: false,
   };
   return res;
 }
@@ -235,6 +274,56 @@ test('leaves non-Gemini package model request bodies unchanged', () => {
   expect(testUtils.hydrateGeminiChatCompletionsBody(requestBody)).toBe(requestBody);
 });
 
+test('keeps Kimi K3 package payloads byte-for-byte transparent', () => {
+  const requestBody = Buffer.from(JSON.stringify({
+    model: 'kimi-k3-YoudaoInner',
+    reasoning_effort: 'max',
+    messages: [
+      {
+        role: 'assistant',
+        reasoning_content: 'private reasoning replay',
+        tool_calls: [{
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'read', arguments: '{"path":"README.md"}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: 'result',
+      },
+    ],
+  }));
+
+  expect(testUtils.hydrateGeminiChatCompletionsBody(requestBody)).toBe(requestBody);
+});
+
+test('adds fixed capability, client version, and enterprise context headers without trusting incoming values', () => {
+  expect(testUtils.buildUpstreamRequestHeaders(
+    'access-token',
+    {
+      accept: 'text/event-stream',
+      'content-type': 'application/json',
+      'x-lobsterai-client-capabilities': 'attacker-controlled',
+      'x-lobsterai-client-version': '0.0.0',
+    },
+    '2026.7.23',
+    {
+      'X-LobsterAI-Account-Mode': 'enterprise',
+      'X-LobsterAI-Enterprise-Id': '1001',
+    },
+  )).toEqual({
+    Authorization: 'Bearer access-token',
+    Accept: 'text/event-stream',
+    'Content-Type': 'application/json',
+    'X-LobsterAI-Client-Capabilities': 'kimi-k3-agentic-v1',
+    'X-LobsterAI-Client-Version': '2026.7.23',
+    'X-LobsterAI-Account-Mode': 'enterprise',
+    'X-LobsterAI-Enterprise-Id': '1001',
+  });
+});
+
 test('classifies SSE packets as terminal only on [DONE], finish_reason, or error payloads', () => {
   const terminalPackets = [
     'data: [DONE]',
@@ -260,6 +349,29 @@ test('classifies SSE packets as terminal only on [DONE], finish_reason, or error
   }
 });
 
+test('classifies the specific SSE terminal packet kind', () => {
+  const cases = [
+    ['data: [DONE]', testUtils.ProxySSETerminalKind.Done],
+    [
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+      testUtils.ProxySSETerminalKind.FinishReason,
+    ],
+    [
+      'event: message_stop\ndata: {"type":"message_stop"}',
+      testUtils.ProxySSETerminalKind.MessageStop,
+    ],
+    [
+      'event: error\ndata: {"type":"error","error":{"message":"boom"}}',
+      testUtils.ProxySSETerminalKind.Error,
+    ],
+  ] as const;
+
+  for (const [packet, expectedKind] of cases) {
+    expect(testUtils.classifyTerminalProxySSEPacket(testUtils.parseProxySSEPacket(packet)))
+      .toBe(expectedKind);
+  }
+});
+
 test('scan state observes a terminal packet split across chunk boundaries', () => {
   const scanState = testUtils.createProxySSEStreamScanState();
 
@@ -273,12 +385,15 @@ test('scan state observes a terminal packet split across chunk boundaries', () =
   buffer = testUtils.scanProxySSEBufferForQuotaError(`${buffer}NE]\n\n`, 1_001, scanState);
   expect(buffer).toBe('');
   expect(scanState.sawTerminalPacket).toBe(true);
+  expect(scanState.terminalKind).toBe(testUtils.ProxySSETerminalKind.Done);
+  expect(scanState.eventCount).toBe(2);
 });
 
 test('flush detects a terminal packet in a trailing partial SSE frame', () => {
   const scanState = testUtils.createProxySSEStreamScanState();
   testUtils.flushProxySSEBufferForQuotaError('data: [DONE]', 1_000, scanState);
   expect(scanState.sawTerminalPacket).toBe(true);
+  expect(scanState.terminalKind).toBe(testUtils.ProxySSETerminalKind.Done);
 });
 
 test('node stream: complete SSE response ends the proxied response cleanly', async () => {
@@ -340,6 +455,28 @@ test('node stream: upstream SSE error payload still passes through and ends clea
   });
 });
 
+test('node stream: cancels the upstream when the downstream closes', async () => {
+  const upstream = new PassThrough();
+  const res = createMockProxyResponse();
+  const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+
+  try {
+    testUtils.pipeStreamingResponseWithQuotaScan(upstream, asServerResponse(res));
+    upstream.write('data: {"choices":[{"delta":{"content":"working"},"finish_reason":null}]}\n\n');
+    res.emitClose();
+    await flushStreamEvents();
+
+    expect(upstream.destroyed).toBe(true);
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining('outcome=downstream_closed_upstream_cancelled'),
+    );
+    expect(res.end).not.toHaveBeenCalled();
+    expect(res.destroy).not.toHaveBeenCalled();
+  } finally {
+    debugSpy.mockRestore();
+  }
+});
+
 test('web stream: truncated SSE response is aborted on clean close', async () => {
   const res = createMockProxyResponse();
   const webStream = new ReadableStream<Uint8Array>({
@@ -380,6 +517,48 @@ test('web stream: read failure aborts the proxied response', async () => {
     expect(res.destroy).toHaveBeenCalledTimes(1);
   });
   expect(res.end).not.toHaveBeenCalled();
+});
+
+test('web stream: cancels the reader when the downstream closes', async () => {
+  const res = createMockProxyResponse();
+  const cancel = vi.fn();
+  const webStream = new ReadableStream<Uint8Array>({
+    pull() {
+      // Keep the read pending until the downstream response closes.
+    },
+    cancel,
+  });
+
+  testUtils.pipeWebReadableResponseWithQuotaScan(
+    webStream,
+    asServerResponse(res),
+    testUtils.createProxySSEStreamScanState(),
+  );
+  res.emitClose();
+
+  await vi.waitFor(() => {
+    expect(cancel).toHaveBeenCalledWith('Downstream response closed');
+  });
+  expect(res.end).not.toHaveBeenCalled();
+  expect(res.destroy).not.toHaveBeenCalled();
+});
+
+test('web stream: cancels after downstream close even when completion scanning is disabled', async () => {
+  const res = createMockProxyResponse();
+  const cancel = vi.fn();
+  const webStream = new ReadableStream<Uint8Array>({
+    pull() {
+      // Keep the read pending until the downstream response closes.
+    },
+    cancel,
+  });
+
+  testUtils.pipeWebReadableResponseWithQuotaScan(webStream, asServerResponse(res));
+  res.emitClose();
+
+  await vi.waitFor(() => {
+    expect(cancel).toHaveBeenCalledWith('Downstream response closed');
+  });
 });
 
 test('web stream: completion check is skipped when no scan state is provided', async () => {

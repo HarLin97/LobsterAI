@@ -28,6 +28,7 @@ export const LogReporterAction = {
   AppStarted: 'lobsterai_app_started',
   AppearanceSettingChanged: 'lobsterai_appearance_setting_changed',
   ArtifactPreviewAction: 'lobsterai_artifact_preview_action',
+  AuthLifecycle: 'lobsterai_auth_lifecycle',
   BrowserSettingChanged: 'lobsterai_browser_setting_changed',
   CustomModelConnectionTested: 'lobsterai_custom_model_connection_tested',
   CustomModelSettingsSaved: 'lobsterai_custom_model_settings_saved',
