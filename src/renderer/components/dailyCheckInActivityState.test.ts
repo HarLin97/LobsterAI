@@ -52,6 +52,18 @@ describe('dailyCheckInActivityState', () => {
     expect(isDailyCheckInState(claimed.state)).toBe(true);
   });
 
+  test('never shows a completed activity after every configured day is claimed', () => {
+    const completed = context({
+      claimedDays: 7,
+      remainingDays: 0,
+      completed: true,
+    });
+
+    expect(canClaimDailyCheckIn(completed)).toBe(false);
+    expect(shouldShowDailyCheckInSidebar(completed)).toBe(false);
+    expect(isDailyCheckInState(completed.state)).toBe(true);
+  });
+
   test('rejects malformed remote state and formats decimal credits', () => {
     expect(isDailyCheckInState({
       ...context().state,
