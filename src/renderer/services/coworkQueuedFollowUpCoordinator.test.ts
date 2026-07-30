@@ -18,6 +18,8 @@ import { CoworkQueuedFollowUpCoordinator } from './coworkQueuedFollowUpCoordinat
 const makeSteer = (id: string, sessionId = 'session-a'): CoworkPendingSteer => ({
   id,
   sessionId,
+  ownerAccountKey: 'personal:6',
+  accountGeneration: 1,
   text: `message-${id}`,
   status: CoworkSteerStatus.Pending,
   createdAt: 1,
@@ -51,13 +53,22 @@ const createHarness = (
   preparePromptPayload?: typeof prepareCoworkPromptPayload,
 ) => {
   let coworkState = coworkReducer(undefined, { type: 'test/init' });
+  let authState = {
+    isLoggedIn: true,
+    isLoading: false,
+    user: null,
+    quota: null,
+    profileSummary: null,
+    ownerAccountKey: 'personal:6' as string | null,
+    accountGeneration: 1,
+  };
   const continueSession = vi.fn(async (_options: CoworkContinueOptions) => continueResult);
   const stopSession = vi.fn(async () => true);
   const dispatch = vi.fn((action: Parameters<AppDispatch>[0]) => {
     coworkState = coworkReducer(coworkState, action);
     return action;
   }) as unknown as AppDispatch;
-  const getState = () => ({ cowork: coworkState }) as RootState;
+  const getState = () => ({ cowork: coworkState, auth: authState }) as RootState;
   const coordinator = new CoworkQueuedFollowUpCoordinator({
     getState,
     dispatch,
@@ -72,6 +83,14 @@ const createHarness = (
     continueSession,
     stopSession,
     getCoworkState: () => coworkState,
+    setAuthScope: (ownerAccountKey: string | null, accountGeneration: number) => {
+      authState = {
+        ...authState,
+        isLoggedIn: ownerAccountKey !== null,
+        ownerAccountKey,
+        accountGeneration,
+      };
+    },
     enqueue: (steer: CoworkPendingSteer) => dispatch(addPendingSteer(steer)),
     openSession: (
       sessionId: string,
@@ -269,5 +288,33 @@ describe('CoworkQueuedFollowUpCoordinator', () => {
 
     await expect(submission).resolves.toBe(false);
     expect(harness.continueSession).not.toHaveBeenCalled();
+  });
+
+  test('discards an entire queued turn when the account changes during preparation', async () => {
+    type PreparationResult = Awaited<ReturnType<typeof prepareCoworkPromptPayload>>;
+    let resolvePreparation: ((result: PreparationResult) => void) | undefined;
+    const preparePromptPayload = vi.fn(() => new Promise<PreparationResult>(
+      resolve => {
+        resolvePreparation = resolve;
+      },
+    ));
+    const harness = createHarness(true, preparePromptPayload);
+    harness.enqueue({
+      ...makeSteer('steer-1'),
+      text: 'generate an image for account A',
+      mediaSelection: { mode: 'image', modelId: 'image-a' },
+    });
+
+    const submission = harness.coordinator.submitSelected('session-a', 'steer-1');
+    await vi.waitFor(() => expect(preparePromptPayload).toHaveBeenCalledTimes(1));
+    harness.setAuthScope('enterprise:6:1002', 2);
+    resolvePreparation?.({
+      success: true,
+      payload: { finalPrompt: 'generate an image for account A' },
+    });
+
+    await expect(submission).resolves.toBe(false);
+    expect(harness.continueSession).not.toHaveBeenCalled();
+    expect(harness.getCoworkState().pendingSteers['session-a']).toBeUndefined();
   });
 });

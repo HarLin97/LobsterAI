@@ -1776,6 +1776,7 @@ interface IElectronAPI {
       enterpriseId: number,
       requestType: EnterpriseQuotaRequestType,
     ) => Promise<EnterpriseQuotaRequestResult>;
+    onContextInvalidated: (callback: () => void) => () => void;
   };
   networkStatus: {
     send: (status: 'online' | 'offline') => void;

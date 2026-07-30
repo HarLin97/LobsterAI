@@ -140,6 +140,7 @@ describe('enterprise account context refresh', () => {
 
   test('clears persisted context when the server rejects the selected account', async () => {
     const store = createStore();
+    const onAccountModeMismatch = vi.fn();
     persistEnterpriseAccountContext(store, createContext());
     const result = await fetchEnterpriseAccountContext({
       getServerBaseUrl: () => 'https://example.test',
@@ -148,11 +149,13 @@ describe('enterprise account context refresh', () => {
         message: 'Account changed',
       }),
       store,
+      onAccountModeMismatch,
     });
 
     expect(result.success).toBe(false);
     expect(result.context).toBeNull();
     expect(getPersistedEnterpriseAccountContext(store)).toBeNull();
+    expect(onAccountModeMismatch).toHaveBeenCalledOnce();
   });
 
   test('does not overwrite a newer account after auth state changes', async () => {

@@ -107,6 +107,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Auth quota
     authPlanFree: '免费',
     authPlanStandard: '标准',
+    enterpriseAccountContextMismatchTitle: '企业身份已失效',
+    enterpriseAccountContextMismatchMessage:
+      '当前企业身份与登录凭证不一致。相关图片和视频任务已停止轮询，请重新登录或重新选择企业身份后再试。',
 
     // Data migration dialogs
     dataMigrationBackupDialogTitle: '备份 LobsterAI 数据',
@@ -409,6 +412,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Auth quota
     authPlanFree: 'Free',
     authPlanStandard: 'Standard',
+    enterpriseAccountContextMismatchTitle: 'Enterprise identity expired',
+    enterpriseAccountContextMismatchMessage:
+      'Your enterprise identity no longer matches the login credentials. Related image and video polling has stopped. Sign in again or choose an enterprise identity before retrying.',
 
     // Data migration dialogs
     dataMigrationBackupDialogTitle: 'Back Up LobsterAI Data',

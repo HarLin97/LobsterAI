@@ -9,6 +9,7 @@ export type AuthIpcChannel = typeof AuthIpcChannel[keyof typeof AuthIpcChannel];
 
 export const AuthSubscriptionStatus = {
   Active: 'active',
+  Enterprise: 'enterprise',
   Free: 'free',
 } as const;
 

@@ -54,6 +54,7 @@ export const EnterpriseAccountIpcChannel = {
   GetContext: 'enterpriseAccount:getContext',
   GetIdentities: 'enterpriseAccount:getIdentities',
   RequestQuotaIncrease: 'enterpriseAccount:requestQuotaIncrease',
+  ContextInvalidated: 'enterpriseAccount:contextInvalidated',
 } as const;
 
 export type EnterpriseAccountIpcChannel =

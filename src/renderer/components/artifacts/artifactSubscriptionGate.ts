@@ -11,6 +11,7 @@ export type ArtifactSubscriptionFeature =
 export const ArtifactSubscriptionBlockReason = {
   LoginRequired: 'login_required',
   SubscriptionRequired: 'subscription_required',
+  EnterpriseUnavailable: 'enterprise_unavailable',
 } as const;
 
 export type ArtifactSubscriptionBlockReason =
@@ -24,6 +25,9 @@ export interface ArtifactSubscriptionPromptState {
 export interface ArtifactSubscriptionSnapshot {
   isLoggedIn: boolean;
   subscriptionStatus?: string | null;
+  accountMode?: string | null;
+  shareEntitled?: boolean;
+  deploymentEntitled?: boolean;
 }
 
 export type ArtifactSubscriptionDecision =
@@ -51,6 +55,10 @@ const ARTIFACT_SUBSCRIPTION_PROMPT_COPY_KEYS: Record<
       titleKey: 'htmlShareSubscriptionRequiredTitle',
       messageKey: 'htmlShareSubscriptionRequiredMessage',
     },
+    [ArtifactSubscriptionBlockReason.EnterpriseUnavailable]: {
+      titleKey: 'htmlShareEnterpriseUnavailableTitle',
+      messageKey: 'htmlShareEnterpriseUnavailableMessage',
+    },
   },
   [ArtifactSubscriptionFeature.Deployment]: {
     [ArtifactSubscriptionBlockReason.LoginRequired]: {
@@ -61,11 +69,16 @@ const ARTIFACT_SUBSCRIPTION_PROMPT_COPY_KEYS: Record<
       titleKey: 'nodeDeploymentSubscriptionRequiredTitle',
       messageKey: 'nodeDeploymentSubscriptionRequiredMessage',
     },
+    [ArtifactSubscriptionBlockReason.EnterpriseUnavailable]: {
+      titleKey: 'nodeDeploymentEnterpriseUnavailableTitle',
+      messageKey: 'nodeDeploymentEnterpriseUnavailableMessage',
+    },
   },
 };
 
 export function getArtifactSubscriptionDecision(
   snapshot: ArtifactSubscriptionSnapshot,
+  feature: ArtifactSubscriptionFeature,
 ): ArtifactSubscriptionDecision {
   if (!snapshot.isLoggedIn) {
     return {
@@ -73,7 +86,21 @@ export function getArtifactSubscriptionDecision(
       reason: ArtifactSubscriptionBlockReason.LoginRequired,
     };
   }
-  if (snapshot.subscriptionStatus !== AuthSubscriptionStatus.Active) {
+  const entitled = feature === ArtifactSubscriptionFeature.Share
+    ? snapshot.shareEntitled
+    : snapshot.deploymentEntitled;
+  if (entitled === true) {
+    return { allowed: true };
+  }
+  const isEnterprise = snapshot.accountMode === 'enterprise'
+    || snapshot.subscriptionStatus === AuthSubscriptionStatus.Enterprise;
+  if (isEnterprise) {
+    return {
+      allowed: false,
+      reason: ArtifactSubscriptionBlockReason.EnterpriseUnavailable,
+    };
+  }
+  if (entitled === false || snapshot.subscriptionStatus !== AuthSubscriptionStatus.Active) {
     return {
       allowed: false,
       reason: ArtifactSubscriptionBlockReason.SubscriptionRequired,
@@ -85,10 +112,11 @@ export function getArtifactSubscriptionDecision(
 export async function resolveArtifactSubscriptionDecision(
   snapshot: ArtifactSubscriptionSnapshot,
   refreshSnapshot: () => Promise<ArtifactSubscriptionSnapshot>,
+  feature: ArtifactSubscriptionFeature,
 ): Promise<ArtifactSubscriptionDecision> {
-  const initialDecision = getArtifactSubscriptionDecision(snapshot);
+  const initialDecision = getArtifactSubscriptionDecision(snapshot, feature);
   if (initialDecision.allowed) return initialDecision;
-  return getArtifactSubscriptionDecision(await refreshSnapshot());
+  return getArtifactSubscriptionDecision(await refreshSnapshot(), feature);
 }
 
 export function getArtifactSubscriptionPromptCopyKeys(

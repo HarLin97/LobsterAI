@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   authService,
+  isAuthAccountRequestCurrent,
   mapPricingCatalogTextModelsToServerModels,
   mapPricingCatalogToPublicServerModels,
 } from './auth';
@@ -67,6 +68,28 @@ describe('pricing catalog model mapping', () => {
 
     expect(models.map(model => model.id)).toEqual(['MiniMax-M3']);
     expect(models[0].accessible).toBe(false);
+  });
+});
+
+describe('auth-scoped renderer requests', () => {
+  test('rejects late model, profile, and public-catalog responses after auth changes', () => {
+    const personalA = {
+      isLoggedIn: true,
+      ownerAccountKey: 'personal:6',
+      accountGeneration: 3,
+    };
+
+    expect(isAuthAccountRequestCurrent(personalA, { ...personalA })).toBe(true);
+    expect(isAuthAccountRequestCurrent(personalA, {
+      isLoggedIn: true,
+      ownerAccountKey: 'enterprise:6:1001',
+      accountGeneration: 4,
+    })).toBe(false);
+    expect(isAuthAccountRequestCurrent({
+      isLoggedIn: false,
+      ownerAccountKey: null,
+      accountGeneration: 4,
+    }, personalA)).toBe(false);
   });
 });
 

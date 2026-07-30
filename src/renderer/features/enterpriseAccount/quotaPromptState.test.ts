@@ -22,6 +22,24 @@ const createErrorMessage = (
   },
 });
 
+const createToolErrorMessage = (
+  id: string,
+  reason?: EnterpriseQuotaReason,
+): CoworkMessage => ({
+  id,
+  type: 'tool_result',
+  content: 'Media generation failed',
+  timestamp: Date.now(),
+  metadata: {
+    error: 'Media generation failed',
+    isError: true,
+    toolResultDetails: {
+      status: 'failed',
+      ...(reason ? { [EnterpriseQuotaMessageMetadataKey.Reason]: reason } : {}),
+    },
+  },
+});
+
 const createSession = (
   status: CoworkSession['status'],
   messages: CoworkMessage[],
@@ -76,5 +94,38 @@ describe('findCurrentEnterpriseQuotaSignal', () => {
     ));
 
     expect(signal).toBeNull();
+  });
+
+  test('shows a structured media tool quota error while the turn is active', () => {
+    const signal = findCurrentEnterpriseQuotaSignal(createSession(
+      CoworkSessionStatusValue.Running,
+      [createToolErrorMessage(
+        'media-quota-error',
+        EnterpriseQuotaReason.MemberMonthlyQuotaExhausted,
+      )],
+    ));
+
+    expect(signal).toEqual({
+      messageId: 'media-quota-error',
+      reason: EnterpriseQuotaReason.MemberMonthlyQuotaExhausted,
+    });
+  });
+
+  test('does not revive a media quota prompt after a new user turn', () => {
+    const session = createSession(
+      CoworkSessionStatusValue.Running,
+      [createToolErrorMessage(
+        'old-media-quota',
+        EnterpriseQuotaReason.EnterprisePoolExhausted,
+      )],
+    );
+    session.messages.push({
+      id: 'next-turn',
+      type: 'user',
+      content: 'Try another task',
+      timestamp: Date.now(),
+    });
+
+    expect(findCurrentEnterpriseQuotaSignal(session)).toBeNull();
   });
 });

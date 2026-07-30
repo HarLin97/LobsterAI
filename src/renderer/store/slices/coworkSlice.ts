@@ -93,6 +93,8 @@ interface CoworkState {
   config: CoworkConfig;
   /** Media generation models fetched from server */
   mediaModels: { image: MediaModel[]; video: MediaModel[] };
+  /** Account that owns the current media model cache */
+  mediaModelsOwnerAccountKey: string | null;
   /** Media generation mode selection per draft key */
   mediaSelection: Record<string, MediaGenerationSelection>;
   pendingMediaStatusUpdates: Record<string, Array<{ toolCallId: string; details: Record<string, unknown> }>>;
@@ -154,6 +156,7 @@ const initialState: CoworkState = {
     },
   },
   mediaModels: { image: [], video: [] },
+  mediaModelsOwnerAccountKey: null,
   mediaSelection: {},
   pendingMediaStatusUpdates: {},
 };
@@ -1064,8 +1067,16 @@ const coworkSlice = createSlice({
       }
     },
 
-    setMediaModels(state, action: PayloadAction<{ image: MediaModel[]; video: MediaModel[] }>) {
-      state.mediaModels = action.payload;
+    setMediaModels(state, action: PayloadAction<{
+      image: MediaModel[];
+      video: MediaModel[];
+      ownerAccountKey: string;
+    }>) {
+      state.mediaModels = {
+        image: action.payload.image,
+        video: action.payload.video,
+      };
+      state.mediaModelsOwnerAccountKey = action.payload.ownerAccountKey;
     },
 
     setMediaSelection(state, action: PayloadAction<{ draftKey: string; selection: MediaGenerationSelection }>) {
@@ -1075,6 +1086,14 @@ const coworkSlice = createSlice({
       } else {
         state.mediaSelection[draftKey] = selection;
       }
+    },
+
+    clearMediaAccountState(state) {
+      state.mediaModels = { image: [], video: [] };
+      state.mediaModelsOwnerAccountKey = null;
+      state.mediaSelection = {};
+      state.pendingSteers = {};
+      state.rejectedSteers = {};
     },
   },
 });
@@ -1138,6 +1157,7 @@ export const {
   setDraftKitIds,
   setDraftSkillIds,
   setDraftCollaborationMode,
+  clearMediaAccountState,
   setMediaModels,
   setMediaSelection,
 } = coworkSlice.actions;

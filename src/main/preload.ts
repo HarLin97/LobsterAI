@@ -173,6 +173,11 @@ contextBridge.exposeInMainWorld('electron', {
     requestQuotaIncrease: (enterpriseId: number, requestType: EnterpriseQuotaRequestType) => (
       ipcRenderer.invoke(EnterpriseAccountIpcChannel.RequestQuotaIncrease, enterpriseId, requestType)
     ),
+    onContextInvalidated: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(EnterpriseAccountIpcChannel.ContextInvalidated, handler);
+      return () => ipcRenderer.removeListener(EnterpriseAccountIpcChannel.ContextInvalidated, handler);
+    },
   },
   api: {
     // 普通 API 请求（非流式）
