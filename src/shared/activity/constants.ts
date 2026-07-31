@@ -114,6 +114,8 @@ export interface StartupCreditDescriptor extends ActivityDescriptorBase {
   actionText: string;
   posterUrl: string;
   posterAlt: string;
+  autoPopupStartAt: string;
+  autoPopupEndAt: string;
 }
 
 export type ActivityDescriptor = DailyCheckInDescriptor | StartupCreditDescriptor;

@@ -25,10 +25,7 @@ import type {
 import CreditsFinalRewardModal from './CreditsFinalRewardModal';
 import { DailyCheckInProfileCard } from './DailyCheckInActivity';
 import UserAvatarIcon from './icons/UserAvatarIcon';
-import {
-  openStartupCreditCampaign,
-  useStartupCreditCampaignEntry,
-} from './startupCreditCampaignBridge';
+import { useStartupCreditCampaignEntry } from './startupCreditCampaignBridge';
 import { useDailyCheckInActivity } from './useDailyCheckInActivity';
 
 const ACCOUNT_MENU_ANALYTICS_SOURCE = 'home_account_menu';
@@ -214,7 +211,6 @@ const UserMenu: React.FC<UserMenuProps> = ({
   const user = useSelector((state: RootState) => state.auth.user);
   const profileSummary = useSelector((state: RootState) => state.auth.profileSummary);
   const [creditsExpanded, setCreditsExpanded] = useState(false);
-  const startupCreditEntry = useStartupCreditCampaignEntry();
   const {
     snapshot: dailyCheckIn,
     claiming: dailyCheckInClaiming,
@@ -330,16 +326,6 @@ const UserMenu: React.FC<UserMenuProps> = ({
     });
     onClose();
     onOpenFinalReward();
-  };
-
-  const handleStartupCreditCampaign = () => {
-    reportAccountMenuAction('open_startup_credit_campaign', {
-      creditItemCount: creditItems.length,
-      hasCredits,
-      result: 'success',
-    });
-    onClose();
-    openStartupCreditCampaign();
   };
 
   const phoneSuffix = user?.phone ? user.phone.slice(-4) : '';
@@ -465,14 +451,6 @@ const UserMenu: React.FC<UserMenuProps> = ({
 
       {/* Actions */}
       <div className="py-1">
-        {startupCreditEntry.available && (
-          <AccountMenuAction
-            icon={<PortalMenuIcon src={inviteCreditsIconUrl} darkInvert />}
-            label={startupCreditEntry.label
-              || i18nService.t('startupCreditMenuEntry')}
-            onClick={handleStartupCreditCampaign}
-          />
-        )}
         {campaignActionLabel && (
           <AccountMenuAction
             icon={<PortalMenuIcon src={promoSubscriptionIconUrl} darkInvert />}

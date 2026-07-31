@@ -1,5 +1,10 @@
 import { useSyncExternalStore } from 'react';
 
+import {
+  StartupCreditCampaignSource,
+  type StartupCreditCampaignSource as StartupCreditCampaignSourceType,
+} from './startupCreditCampaignAnalytics';
+
 export const STARTUP_CREDIT_OPEN_EVENT = 'lobster:startup-credit-campaign-open';
 
 export interface StartupCreditCampaignEntry {
@@ -27,8 +32,12 @@ export function setStartupCreditCampaignEntry(
   listeners.forEach(listener => listener());
 }
 
-export function openStartupCreditCampaign(): void {
-  window.dispatchEvent(new Event(STARTUP_CREDIT_OPEN_EVENT));
+export function openStartupCreditCampaign(
+  source: StartupCreditCampaignSourceType = StartupCreditCampaignSource.HomeNewConversation,
+): void {
+  window.dispatchEvent(new CustomEvent(STARTUP_CREDIT_OPEN_EVENT, {
+    detail: { source },
+  }));
 }
 
 export function useStartupCreditCampaignEntry(): StartupCreditCampaignEntry {

@@ -40,6 +40,10 @@ const isPositiveFiniteNumber = (value: unknown): value is number => (
   typeof value === 'number' && Number.isFinite(value) && value > 0
 );
 
+const isValidDateTime = (value: unknown): value is string => (
+  isNonEmptyString(value) && Number.isFinite(Date.parse(value))
+);
+
 export function isStartupCreditDescriptor(
   value: unknown,
 ): value is StartupCreditDescriptor {
@@ -52,8 +56,8 @@ export function isStartupCreditDescriptor(
     && descriptor.activityType === ActivityType.OneTimeCreditReward
     && descriptor.placement === ActivityPlacement.DesktopStartupModal
     && descriptor.templateKey === ActivityTemplate.NativeStartupCreditV1
-    && isNonEmptyString(descriptor.startAt)
-    && isNonEmptyString(descriptor.endAt)
+    && isValidDateTime(descriptor.startAt)
+    && isValidDateTime(descriptor.endAt)
     && isNonEmptyString(descriptor.timezone)
     && typeof descriptor.loginRequired === 'boolean'
     && isNonEmptyString(descriptor.periodLabel)
@@ -62,7 +66,24 @@ export function isStartupCreditDescriptor(
     && isNonEmptyString(descriptor.modalDescription)
     && isNonEmptyString(descriptor.actionText)
     && isNonEmptyString(descriptor.posterUrl)
-    && isNonEmptyString(descriptor.posterAlt);
+    && isNonEmptyString(descriptor.posterAlt)
+    && isValidDateTime(descriptor.autoPopupStartAt)
+    && isValidDateTime(descriptor.autoPopupEndAt)
+    && Date.parse(descriptor.startAt) <= Date.parse(descriptor.autoPopupStartAt)
+    && Date.parse(descriptor.autoPopupStartAt) < Date.parse(descriptor.autoPopupEndAt)
+    && Date.parse(descriptor.autoPopupEndAt) <= Date.parse(descriptor.endAt);
+}
+
+export function isStartupCreditAutoPopupActive(
+  descriptor: StartupCreditDescriptor,
+  now = Date.now(),
+): boolean {
+  const startAt = Date.parse(descriptor.autoPopupStartAt);
+  const endAt = Date.parse(descriptor.autoPopupEndAt);
+  return Number.isFinite(startAt)
+    && Number.isFinite(endAt)
+    && now >= startAt
+    && now < endAt;
 }
 
 export function isOneTimeCreditState(

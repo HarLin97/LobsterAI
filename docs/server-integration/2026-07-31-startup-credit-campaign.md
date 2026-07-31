@@ -39,6 +39,8 @@ descriptor includes:
     "templateKey": "native_startup_credit_v1",
     "startAt": "2026-07-31T00:00:00Z",
     "endAt": "2026-08-31T00:00:00Z",
+    "autoPopupStartAt": "2026-07-31T00:00:00Z",
+    "autoPopupEndAt": "2026-08-15T00:00:00Z",
     "timezone": "Asia/Shanghai",
     "loginRequired": true,
     "periodLabel": "测试服活动",
@@ -113,8 +115,12 @@ Relevant activity error codes:
   binding and idempotency key before opening browser login.
 - After the browser callback restores authentication, resolve the slot and
   context again, then execute `claim` with the original idempotency key.
+- Show the manual entry only in the new-conversation home header while the
+  activity window is active and the reward remains unclaimed.
+- Auto-open only during `[autoPopupStartAt, autoPopupEndAt)`. The entry remains
+  available after that window until the activity ends.
 - Keep device-level auto-popup dismissal keyed by activity code. Dismissal must
-  not hide the manual entry under “我的”.
+  not hide the new-conversation home entry.
 - Map `51104` to the already-claimed result and `51100`/`51101` to an ended or
   unavailable result.
 
@@ -130,6 +136,10 @@ permission.
 - Eligibility is intentionally all authenticated LobsterAI users. There is no
   employee, acquisition-channel, registration-date, subscription, or
   enterprise-plan filter.
+- Both authenticated and guest clients may auto-open the offer. Guests claim
+  through the existing browser-login continuation.
+- Older revisions without an explicit auto-popup window use the activity
+  `startAt` and `endAt` values as a compatibility fallback.
 - Publish the server first, then configure the activity in Admin, and publish
   the compatible desktop client before activating the activity time window.
 - The legacy World Cup credit-reset service is not used by this template.

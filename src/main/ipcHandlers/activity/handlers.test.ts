@@ -84,6 +84,8 @@ const startupDescriptor = {
   actionText: 'Claim now',
   posterUrl: 'https://example.com/reward.png',
   posterAlt: 'LobsterAI user reward',
+  autoPopupStartAt: '2026-07-30T00:00:00Z',
+  autoPopupEndAt: '2026-08-15T00:00:00Z',
 };
 
 const startupContext: ActivityContextResponse = {

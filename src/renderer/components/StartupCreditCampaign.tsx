@@ -20,7 +20,13 @@ import { useSelector } from 'react-redux';
 import { authService } from '../services/auth';
 import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
+import { LogReporterAction } from '../services/logReporter';
 import type { RootState } from '../store';
+import {
+  reportStartupCreditCampaignEvent,
+  StartupCreditCampaignSource,
+  type StartupCreditCampaignSource as StartupCreditCampaignSourceType,
+} from './startupCreditCampaignAnalytics';
 import {
   setStartupCreditCampaignEntry,
   STARTUP_CREDIT_OPEN_EVENT,
@@ -34,6 +40,7 @@ import {
   formatStartupCreditAmount,
   isActiveStartupCreditContext,
   isStartupCreditAutoDismissed,
+  isStartupCreditAutoPopupActive,
   isStartupCreditContext,
   isStartupCreditDescriptor,
   readPendingStartupCreditClaim,
@@ -132,6 +139,23 @@ const showToast = (message: string): void => {
   window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
 };
 
+const reportClaimFailure = (
+  snapshot: StartupCreditSnapshot,
+  source: StartupCreditCampaignSourceType,
+  errorCode: string | number,
+  retryable: boolean,
+): void => {
+  reportStartupCreditCampaignEvent(
+    LogReporterAction.ActivityClaimFail,
+    snapshot.descriptor,
+    {
+      source,
+      error_code: errorCode,
+      retryable,
+    },
+  );
+};
+
 const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   enabled = true,
 }) => {
@@ -162,12 +186,30 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   const loadRequestRef = useRef(0);
   const continuationInFlightRef = useRef(false);
   const actionInFlightRef = useRef(false);
+  const modalOpenRef = useRef(false);
+  const offerSourceRef = useRef<StartupCreditCampaignSourceType>(
+    StartupCreditCampaignSource.AutoPopup,
+  );
+  const exposureReportedRef = useRef(false);
+  const exposureStartedAtRef = useRef<number | null>(null);
+  const reportedLoginSuccessRef = useRef(new Set<string>());
   const posterUrl = snapshot
     ? buildStartupCreditPosterUrl(
         snapshot.descriptor.posterUrl,
         snapshot.descriptor.configRevision,
       )
     : null;
+
+  const openOffer = useCallback((source: StartupCreditCampaignSourceType): void => {
+    offerSourceRef.current = source;
+    exposureReportedRef.current = false;
+    exposureStartedAtRef.current = null;
+    setResult(null);
+    setFailureMessage('');
+    setModalView(CampaignModalView.Offer);
+    modalOpenRef.current = true;
+    setModalOpen(true);
+  }, []);
 
   const applySnapshot = useCallback((
     next: StartupCreditSnapshot | null,
@@ -176,21 +218,27 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     snapshotRef.current = next;
     if (!mountedRef.current) return;
     setSnapshot(next);
-    setStartupCreditCampaignEntry(next
+    setStartupCreditCampaignEntry(next && !next.context.state.claimed
       ? { available: true, label: next.descriptor.cardTitle }
       : null);
-    if (!autoOpen || !next || next.context.state.claimed) return;
+    if (!next) {
+      modalOpenRef.current = false;
+      exposureStartedAtRef.current = null;
+      setModalOpen(false);
+      return;
+    }
+    if (!autoOpen || next.context.state.claimed) return;
+    if (!isStartupCreditAutoPopupActive(next.descriptor) || modalOpenRef.current) {
+      return;
+    }
     if (isStartupCreditAutoDismissed(
       localStorage,
       next.descriptor.activityCode,
     )) {
       return;
     }
-    setResult(null);
-    setFailureMessage('');
-    setModalView(CampaignModalView.Offer);
-    setModalOpen(true);
-  }, []);
+    openOffer(StartupCreditCampaignSource.AutoPopup);
+  }, [openOffer]);
 
   const fetchCurrentSnapshot = useCallback(async (
     retryRevision = true,
@@ -257,6 +305,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     setResult(nextResult);
     setFailureMessage(message);
     setModalView(view);
+    modalOpenRef.current = true;
     setModalOpen(true);
   }, []);
 
@@ -281,6 +330,12 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
         });
         if (!response.success) {
           if (response.code === ActivityServerErrorCode.AlreadyClaimed) {
+            reportClaimFailure(
+              current,
+              offerSourceRef.current,
+              ActivityServerErrorCode.AlreadyClaimed,
+              false,
+            );
             clearPendingStartupCreditClaim(localStorage);
             const refreshed = await fetchCurrentSnapshot();
             if (refreshed) applySnapshot(refreshed, false);
@@ -307,11 +362,23 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           }
           if (response.code === ActivityServerErrorCode.NotActive
               || response.code === ActivityServerErrorCode.NotFound) {
+            reportClaimFailure(
+              current,
+              offerSourceRef.current,
+              response.code,
+              false,
+            );
             clearPendingStartupCreditClaim(localStorage);
             applySnapshot(null, false);
             showTerminalView(CampaignModalView.Ended);
             return;
           }
+          reportClaimFailure(
+            current,
+            offerSourceRef.current,
+            response.code ?? 'request_failed',
+            true,
+          );
           showTerminalView(
             CampaignModalView.Failed,
             null,
@@ -321,6 +388,12 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
         }
         const data = response.data;
         if (!isValidClaimResponse(data, current)) {
+          reportClaimFailure(
+            current,
+            offerSourceRef.current,
+            'invalid_response',
+            true,
+          );
           showTerminalView(
             CampaignModalView.Failed,
             null,
@@ -334,6 +407,16 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           context: data.context,
         };
         applySnapshot(next, false);
+        reportStartupCreditCampaignEvent(
+          LogReporterAction.ActivityClaimSuccess,
+          current.descriptor,
+          {
+            source: offerSourceRef.current,
+            reward_points: data.result.creditsGranted,
+            validity_days: data.context.state.rewardValidityDays,
+            replayed: data.replayed,
+          },
+        );
         showTerminalView(CampaignModalView.Success, {
           credits: data.result.creditsGranted,
           expiresAt: data.result.expiresAt,
@@ -344,6 +427,12 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
       await execute(target, true);
     } catch (error) {
       console.warn('[StartupCreditCampaign] failed to claim activity:', error);
+      reportClaimFailure(
+        target,
+        offerSourceRef.current,
+        'network_error',
+        true,
+      );
       showTerminalView(
         CampaignModalView.Failed,
         null,
@@ -372,7 +461,26 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
         showTerminalView(CampaignModalView.Ended);
         return;
       }
+      offerSourceRef.current = StartupCreditCampaignSource.LoginReturn;
+      if (!reportedLoginSuccessRef.current.has(pending.idempotencyKey)) {
+        reportedLoginSuccessRef.current.add(pending.idempotencyKey);
+        reportStartupCreditCampaignEvent(
+          LogReporterAction.ActivityLoginSuccess,
+          current.descriptor,
+          {
+            source: StartupCreditCampaignSource.LoginReturn,
+            return_to: 'netease_user_bonus_activity',
+            login_method: 'browser',
+          },
+        );
+      }
       if (current.context.state.claimed) {
+        reportClaimFailure(
+          current,
+          StartupCreditCampaignSource.LoginReturn,
+          ActivityServerErrorCode.AlreadyClaimed,
+          false,
+        );
         clearPendingStartupCreditClaim(localStorage);
         showTerminalView(CampaignModalView.AlreadyClaimed, {
           credits: current.context.state.rewardCredits,
@@ -382,6 +490,12 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
         return;
       }
       if (!canClaimStartupCredit(current.context)) {
+        reportClaimFailure(
+          current,
+          StartupCreditCampaignSource.LoginReturn,
+          'not_claimable',
+          false,
+        );
         showTerminalView(
           CampaignModalView.Failed,
           null,
@@ -452,6 +566,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     if (authLoading) return;
     if (!enabled) {
       applySnapshot(null, false);
+      modalOpenRef.current = false;
       setModalOpen(false);
       return;
     }
@@ -471,37 +586,55 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   ]);
 
   useEffect(() => {
-    const handleOpen = async () => {
+    const handleOpen = async (event: Event) => {
       const current = snapshotRef.current ?? await load(false);
       if (!current) {
         showToast(i18nService.t('startupCreditNotAvailable'));
         return;
       }
-      setResult(current.context.state.claimed
-        ? {
+      const requestedSource = (event as CustomEvent<{
+        source?: StartupCreditCampaignSourceType;
+      }>).detail?.source;
+      const source = requestedSource
+        ?? StartupCreditCampaignSource.HomeNewConversation;
+      reportStartupCreditCampaignEvent(
+        LogReporterAction.ActivityEntryClick,
+        current.descriptor,
+        {
+          entry_name: current.descriptor.cardTitle,
+          source,
+        },
+      );
+      if (current.context.state.claimed) {
+        showTerminalView(CampaignModalView.AlreadyClaimed, {
             credits: current.context.state.rewardCredits,
             expiresAt: current.context.state.expiresAt,
-          }
-        : null);
-      setFailureMessage('');
-      setModalView(current.context.state.claimed
-        ? CampaignModalView.AlreadyClaimed
-        : CampaignModalView.Offer);
-      setModalOpen(true);
+        });
+        return;
+      }
+      openOffer(source);
     };
     window.addEventListener(STARTUP_CREDIT_OPEN_EVENT, handleOpen);
     return () => window.removeEventListener(STARTUP_CREDIT_OPEN_EVENT, handleOpen);
-  }, [load]);
+  }, [load, openOffer, showTerminalView]);
 
   useEffect(() => {
     if (!snapshot) return undefined;
-    const endAt = Date.parse(snapshot.descriptor.endAt);
-    const untilEnd = Number.isFinite(endAt)
-      ? Math.max(1_000, endAt - Date.now() + 1_000)
-      : STARTUP_CREDIT_REFRESH_INTERVAL_MS;
+    const now = Date.now();
+    const nextBoundary = [
+      snapshot.descriptor.autoPopupStartAt,
+      snapshot.descriptor.autoPopupEndAt,
+      snapshot.descriptor.endAt,
+    ]
+      .map(value => Date.parse(value))
+      .filter(value => Number.isFinite(value) && value > now)
+      .sort((left, right) => left - right)[0];
+    const untilRefresh = nextBoundary === undefined
+      ? STARTUP_CREDIT_REFRESH_INTERVAL_MS
+      : Math.max(1_000, nextBoundary - now + 1_000);
     const timer = setTimeout(
-      () => void load(false),
-      Math.min(untilEnd, STARTUP_CREDIT_REFRESH_INTERVAL_MS),
+      () => void load(true),
+      Math.min(untilRefresh, STARTUP_CREDIT_REFRESH_INTERVAL_MS),
     );
     return () => clearTimeout(timer);
   }, [load, snapshot]);
@@ -513,12 +646,28 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     }
     const current = snapshotRef.current;
     if (current) {
+      if (exposureStartedAtRef.current !== null) {
+        reportStartupCreditCampaignEvent(
+          LogReporterAction.ActivityPopupClose,
+          current.descriptor,
+          {
+            source: offerSourceRef.current,
+            exposure_duration_ms: Math.max(
+              0,
+              Date.now() - exposureStartedAtRef.current,
+            ),
+            close_state: 'dismissed',
+          },
+        );
+      }
       dismissStartupCreditAutoPopup(
         localStorage,
         current.descriptor.activityCode,
       );
     }
+    exposureStartedAtRef.current = null;
     clearPendingStartupCreditClaim(localStorage);
+    modalOpenRef.current = false;
     setModalOpen(false);
   }, [modalView]);
 
@@ -536,6 +685,19 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
       return;
     }
 
+    reportStartupCreditCampaignEvent(
+      LogReporterAction.ActivityClaimClick,
+      current.descriptor,
+      {
+        source: offerSourceRef.current,
+        login_status: isLoggedIn && current.context.authenticated
+          ? 'logged_in'
+          : 'logged_out',
+        button_text: current.descriptor.actionText,
+      },
+    );
+    exposureStartedAtRef.current = null;
+
     const existingPending = readPendingStartupCreditClaim(localStorage);
     const pending = existingPending?.activityCode === current.descriptor.activityCode
       ? existingPending
@@ -546,11 +708,26 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           createStartupCreditIdempotencyKey(),
         );
     if (!isLoggedIn || !current.context.authenticated) {
+      reportStartupCreditCampaignEvent(
+        LogReporterAction.ActivityLoginRedirect,
+        current.descriptor,
+        {
+          source: offerSourceRef.current,
+          return_to: 'netease_user_bonus_activity',
+          reason: 'claim_requires_login',
+        },
+      );
       showTerminalView(CampaignModalView.StartingLogin);
       try {
         await authService.login();
         if (mountedRef.current) setModalView(CampaignModalView.Offer);
       } catch (error) {
+        reportClaimFailure(
+          current,
+          offerSourceRef.current,
+          'login_redirect_failed',
+          true,
+        );
         clearPendingStartupCreditClaim(localStorage);
         showTerminalView(
           CampaignModalView.Failed,
@@ -588,6 +765,46 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   const shouldShowPoster = Boolean(descriptor) && (isOffer || isBusy);
   const posterReady = !shouldShowPoster
     || (posterLoad.url === posterUrl && posterLoad.settled);
+
+  useEffect(() => {
+    if (!modalOpen
+        || !gatewayReady
+        || !posterReady
+        || posterLoad.failed
+        || !isOffer
+        || !descriptor
+        || exposureReportedRef.current) {
+      return;
+    }
+    exposureReportedRef.current = true;
+    exposureStartedAtRef.current = Date.now();
+    reportStartupCreditCampaignEvent(
+      LogReporterAction.ActivityPopupExposure,
+      descriptor,
+      {
+        source: offerSourceRef.current,
+        popup_type: 'startup_credit_offer',
+        is_auto_popup: offerSourceRef.current
+          === StartupCreditCampaignSource.AutoPopup,
+        login_status: snapshot?.context.authenticated
+          ? 'logged_in'
+          : 'logged_out',
+        close_state: isStartupCreditAutoDismissed(
+          localStorage,
+          descriptor.activityCode,
+        ) ? 'dismissed' : 'open',
+      },
+    );
+  }, [
+    descriptor,
+    gatewayReady,
+    isOffer,
+    modalOpen,
+    posterLoad.failed,
+    posterReady,
+    snapshot?.context.authenticated,
+  ]);
+
   if (!modalOpen || !gatewayReady || !posterReady) return null;
   if (!descriptor && (isOffer || isBusy || isSuccess || isAlreadyClaimed)) {
     return null;
@@ -619,7 +836,12 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           isEnded ? 'startupCreditEndedTitle' : 'startupCreditClaimFailedTitle',
         )}
     >
-      <section className="relative z-10 w-[min(430px,calc(100vw-48px))] overflow-hidden rounded-2xl border border-border bg-surface shadow-modal">
+      <section className={`relative z-10 w-[min(432px,calc(100vw-48px))] overflow-hidden rounded-2xl shadow-modal ${
+        shouldShowPoster
+          ? 'bg-transparent'
+          : 'border border-border bg-surface'
+      }`}
+      >
         <button
           type="button"
           className={`absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:cursor-wait disabled:opacity-60 ${
@@ -633,35 +855,38 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
         >
           <XMarkIcon className="h-5 w-5" />
         </button>
-        {descriptor
-          && shouldShowPoster
-          && posterUrl
-          && !posterLoad.failed && (
-          <img
-            src={posterUrl}
-            alt={descriptor.posterAlt}
-            onError={() => setPosterLoad(current => (
-              current.url === posterUrl
-                ? { ...current, settled: true, failed: true }
-                : current
-            ))}
-            className="block aspect-[2/1] w-full object-cover"
-          />
-        )}
-        {isOffer || isBusy ? (
-          <div className="p-5">
-            <button
-              type="button"
-              disabled={isBusy}
-              onClick={() => void handlePrimaryAction()}
-              className="flex h-11 w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground shadow-subtle transition-colors hover:bg-primary-hover disabled:cursor-wait disabled:opacity-70"
-            >
-              {modalView === CampaignModalView.Claiming
-                ? i18nService.t('startupCreditClaiming')
-                : modalView === CampaignModalView.StartingLogin
-                  ? i18nService.t('startupCreditStartingLogin')
-                  : descriptor?.actionText}
-            </button>
+        {shouldShowPoster && descriptor && posterUrl ? (
+          <div className="relative overflow-hidden rounded-2xl bg-surface">
+            {!posterLoad.failed ? (
+              <img
+                src={posterUrl}
+                alt={descriptor.posterAlt}
+                onError={() => setPosterLoad(current => (
+                  current.url === posterUrl
+                    ? { ...current, settled: true, failed: true }
+                    : current
+                ))}
+                className="block h-auto w-full"
+              />
+            ) : (
+              <div className="flex min-h-56 items-center justify-center px-8 text-center text-sm text-secondary">
+                {i18nService.t('startupCreditClaimFailed')}
+              </div>
+            )}
+            {!posterLoad.failed && (
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={() => void handlePrimaryAction()}
+                className="absolute inset-x-[13%] bottom-[7%] flex h-11 items-center justify-center rounded-lg bg-[#292c32] px-4 text-sm font-semibold text-white shadow-lg transition-colors hover:bg-black disabled:cursor-wait disabled:opacity-70"
+              >
+                {modalView === CampaignModalView.Claiming
+                  ? i18nService.t('startupCreditClaiming')
+                  : modalView === CampaignModalView.StartingLogin
+                    ? i18nService.t('startupCreditStartingLogin')
+                    : descriptor?.actionText}
+              </button>
+            )}
           </div>
         ) : (
           <div className="px-7 pb-6 pt-7 text-center">

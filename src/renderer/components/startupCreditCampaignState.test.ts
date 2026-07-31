@@ -15,6 +15,7 @@ import {
   clearPendingStartupCreditClaim,
   dismissStartupCreditAutoPopup,
   isStartupCreditAutoDismissed,
+  isStartupCreditAutoPopupActive,
   isStartupCreditContext,
   isStartupCreditDescriptor,
   readPendingStartupCreditClaim,
@@ -39,6 +40,8 @@ const descriptor: StartupCreditDescriptor = {
   actionText: '领取 5000 积分',
   posterUrl: 'https://nos.example.test/reward.png',
   posterAlt: 'LobsterAI 用户回馈活动',
+  autoPopupStartAt: '2026-07-31T00:00:00Z',
+  autoPopupEndAt: '2026-08-15T00:00:00Z',
 };
 
 const context: StartupCreditContextResponse = {
@@ -99,6 +102,21 @@ describe('startupCreditCampaignState', () => {
 
     expect(isStartupCreditAutoDismissed(storage, descriptor.activityCode)).toBe(true);
     expect(isStartupCreditAutoDismissed(storage, 'another-activity')).toBe(false);
+  });
+
+  test('auto popup uses its own window while the activity remains active', () => {
+    expect(isStartupCreditAutoPopupActive(
+      descriptor,
+      Date.parse('2026-08-01T00:00:00Z'),
+    )).toBe(true);
+    expect(isStartupCreditAutoPopupActive(
+      descriptor,
+      Date.parse('2026-08-20T00:00:00Z'),
+    )).toBe(false);
+    expect(isStartupCreditDescriptor({
+      ...descriptor,
+      autoPopupEndAt: '2026-09-01T00:00:00Z',
+    })).toBe(false);
   });
 
   test('poster cache URL changes with the immutable config revision', () => {
