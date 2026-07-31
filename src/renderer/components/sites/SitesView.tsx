@@ -34,6 +34,7 @@ import {
 import { copyTextToClipboard } from '../../services/clipboard';
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
+import { MessageCopyButton } from '../cowork/MessageActionButton';
 import Cog6ToothIcon from '../icons/Cog6ToothIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
@@ -974,15 +975,7 @@ const SitesView: React.FC<SitesViewProps> = ({
                   >
                     {selectedSite.url}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => void window.electron.clipboard.writeText(selectedSite.url)}
-                    className="rounded-lg p-2 text-secondary hover:bg-background hover:text-foreground"
-                    aria-label={i18nService.t('copy')}
-                    title={i18nService.t('copy')}
-                  >
-                    <ClipboardDocumentIcon className="h-4 w-4" />
-                  </button>
+                  <MessageCopyButton content={selectedSite.url} />
                 </div>
               </section>
               <section className="rounded-xl border border-border bg-surface p-4">
@@ -1027,17 +1020,7 @@ const SitesView: React.FC<SitesViewProps> = ({
                       </span>
                       <span className="font-mono text-foreground">{selectedSite.shareCode}</span>
                     </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void window.electron.clipboard.writeText(selectedSite.shareCode || '')
-                      }
-                      className="rounded p-1 text-secondary hover:bg-surface-raised"
-                      aria-label={i18nService.t('copy')}
-                      title={i18nService.t('copy')}
-                    >
-                      <ClipboardDocumentIcon className="h-4 w-4" />
-                    </button>
+                    <MessageCopyButton content={selectedSite.shareCode} />
                   </div>
                 )}
                 {accessModeDraft !== selectedSite.accessMode && (
