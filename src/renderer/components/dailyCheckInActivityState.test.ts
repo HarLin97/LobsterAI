@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'vitest';
 
 import {
-  type ActivityContextResponse,
   ActivityLifecycleState,
+  ActivityPlacement,
+  ActivityTemplate,
+  ActivityType,
   DailyCheckInAction,
+  type DailyCheckInContextResponse,
+  type DailyCheckInState,
 } from '../../shared/activity/constants';
 import {
   canClaimDailyCheckIn,
@@ -16,8 +20,8 @@ import {
 } from './dailyCheckInActivityState';
 
 const context = (
-  overrides: Partial<ActivityContextResponse['state']> = {},
-): ActivityContextResponse => ({
+  overrides: Partial<DailyCheckInState> = {},
+): DailyCheckInContextResponse => ({
   activityCode: 'login-seven-days-native-1',
   configRevision: 1,
   lifecycleState: ActivityLifecycleState.Active,
@@ -65,6 +69,9 @@ describe('dailyCheckInActivityState', () => {
     expect(isDailyCheckInDescriptor({
       activityCode: 'login-seven-days-native-1',
       configRevision: 1,
+      activityType: ActivityType.DailyCheckIn,
+      placement: ActivityPlacement.DesktopSidebar,
+      templateKey: ActivityTemplate.NativeDailyCheckInV1,
       startAt: '2026-07-28T04:00:00Z',
       endAt: '2026-08-04T04:00:00Z',
       timezone: 'Asia/Shanghai',

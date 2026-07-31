@@ -27,6 +27,7 @@ import { SitesView } from './components/sites';
 import { SkillsView } from './components/skills';
 import SkinBackdrop, { SkinBackdropVariant } from './components/skin/SkinBackdrop';
 import SkinPresentationScope from './components/skin/SkinPresentationScope';
+import StartupCreditCampaign from './components/StartupCreditCampaign';
 import Toast from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateBlockingPanel from './components/update/AppUpdateBlockingPanel';
@@ -1320,6 +1321,9 @@ const App: React.FC = () => {
           onClose={() => setToastMessage(null)}
         />
       )}
+      <StartupCreditCampaign
+        enabled={privacyAgreed === true && !showWelcome}
+      />
       {windowsStandaloneTitleBar}
       <div
         className="relative flex flex-1 min-h-0 overflow-hidden"
