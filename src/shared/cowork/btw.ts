@@ -14,6 +14,12 @@ export const CoworkBtwStatus = {
 } as const;
 export type CoworkBtwStatus = typeof CoworkBtwStatus[keyof typeof CoworkBtwStatus];
 
+export const CoworkBtwErrorCode = {
+  ToolRequired: 'tool_required',
+} as const;
+export type CoworkBtwErrorCode =
+  typeof CoworkBtwErrorCode[keyof typeof CoworkBtwErrorCode];
+
 // BTW questions have no product-level character limit. Follow-up history stays
 // bounded independently, while the runtime enforces the shared chat frame size.
 export const COWORK_BTW_CONTEXT_MAX_CHARS = 16_000;

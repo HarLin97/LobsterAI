@@ -24,6 +24,7 @@ import {
   COWORK_BTW_RESULT_MAX_CHARS,
   type CoworkBtwAbortResponse,
   type CoworkBtwEntry,
+  CoworkBtwErrorCode,
   CoworkBtwStatus,
   type CoworkBtwSubmitResponse,
   normalizeCoworkBtwQuestion,
@@ -121,6 +122,7 @@ import {
   resolveChannelSessionTerminalStatus,
 } from './channelSessionRunStatus';
 import { AgentLifecyclePhase, type AgentLifecyclePhase as AgentLifecyclePhaseValue } from './constants';
+import { sanitizeCoworkBtwResultText } from './coworkBtwResultSanitizer';
 import {
   buildCoworkContinuityCapsule,
   ContinuityCapsuleSource,
@@ -521,6 +523,7 @@ type OpenClawBtwSideResultPayload = {
   agentId?: string;
   question: string;
   text: string;
+  errorCode?: CoworkBtwErrorCode;
   isError?: boolean;
   ts: number;
   seq?: number;
@@ -6918,6 +6921,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const text = typeof payload.text === 'string'
       ? truncateBtwResultText(payload.text)
       : '';
+    const errorCode = payload.errorCode === CoworkBtwErrorCode.ToolRequired
+      ? payload.errorCode
+      : undefined;
     const ts = typeof payload.ts === 'number' && Number.isFinite(payload.ts) ? payload.ts : NaN;
     if (
       !runId
@@ -6938,6 +6944,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       ...(agentId ? { agentId } : {}),
       question,
       text,
+      ...(errorCode ? { errorCode } : {}),
       ...(payload.isError === true ? { isError: true } : {}),
       ts,
       ...(typeof payload.seq === 'number' && Number.isFinite(payload.seq)
@@ -7010,24 +7017,50 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!this.addPendingBtwRunAlias(pending, result.runId)) {
       return;
     }
+    const sanitizedResult = sanitizeCoworkBtwResultText(result.text);
+    const sanitizedText = sanitizedResult.text.trim();
+    if (sanitizedResult.detectedFamilies.length > 0) {
+      console.warn(
+        '[CoworkBtw] sanitized provider protocol from side result.',
+        `Session ${pending.sessionId}.`,
+        `Run ${result.runId}.`,
+        `Families ${sanitizedResult.detectedFamilies.join(',')}.`,
+        `Before chars ${result.text.length}.`,
+        `After chars ${sanitizedText.length}.`,
+        `Visible text ${sanitizedText ? 'yes' : 'no'}.`,
+      );
+    }
+    const isResultError = result.isError === true || result.errorCode !== undefined;
     console.log(
       '[CoworkBtw] received side result.',
       `Session ${pending.sessionId}.`,
       `Run ${result.runId}.`,
-      `Answer chars ${result.text.length}.`,
-      `Error ${result.isError ? 'yes' : 'no'}.`,
+      `Answer chars ${sanitizedText.length}.`,
+      `Error ${isResultError ? 'yes' : 'no'}.`,
     );
-    if (result.isError && pending.stopRequested) {
+    if (isResultError && pending.stopRequested) {
       this.stopPendingBtwRun(pending, 'gateway returned an error after stop');
+      return;
+    }
+    if (result.errorCode === CoworkBtwErrorCode.ToolRequired) {
+      this.finishPendingBtwRun(pending, {
+        error: t('coworkBtwToolRequired'),
+      });
       return;
     }
     if (result.isError) {
       this.finishPendingBtwRun(pending, {
-        error: result.text.trim() || t('coworkBtwFailed'),
+        error: sanitizedText || t('coworkBtwFailed'),
       });
       return;
     }
-    this.finishPendingBtwRun(pending, { answer: result.text });
+    if (sanitizedResult.detectedFamilies.length > 0 && !sanitizedText) {
+      this.finishPendingBtwRun(pending, {
+        error: t('coworkBtwToolRequired'),
+      });
+      return;
+    }
+    this.finishPendingBtwRun(pending, { answer: sanitizedText });
   }
 
   private handleBtwChatEvent(payload: unknown): boolean {
