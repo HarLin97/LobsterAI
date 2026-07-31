@@ -115,6 +115,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkBtwSubmitFailed: '提交顺便问问失败。',
     coworkBtwNoPending: '找不到正在回答的顺便问问。',
     coworkBtwStopFailed: '停止顺便问问失败，请重试。',
+    coworkBtwToolRequired: '这个问题需要调用工具，请在主对话中继续。',
     imErrorPrefix: '处理消息时出错',
 
     // Exec approval continuation
@@ -453,6 +454,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkBtwSubmitFailed: 'Failed to submit the BTW side question.',
     coworkBtwNoPending: 'No pending BTW side question was found.',
     coworkBtwStopFailed: 'Failed to stop the BTW side question. Please try again.',
+    coworkBtwToolRequired:
+      'This question requires a tool operation. Continue in the main conversation.',
     imErrorPrefix: 'Error processing message',
 
     // Exec approval continuation

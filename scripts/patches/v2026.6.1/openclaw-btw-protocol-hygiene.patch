@@ -1,0 +1,467 @@
+diff --git a/src/agents/btw.test.ts b/src/agents/btw.test.ts
+index a23e629991..7d1ff95f14 100644
+--- a/src/agents/btw.test.ts
++++ b/src/agents/btw.test.ts
+@@ -552,6 +552,63 @@ describe("runBtwSideQuestion", () => {
+     });
+   });
+ 
++  it("sanitizes provider tool protocol text from direct fallback answers", async () => {
++    mockDoneAnswer(
++      'Visible answer.<|DSML|tool_calls><|DSML|invoke name="read">private</|DSML|invoke></|DSML|tool_calls>',
++    );
++
++    await expect(runSideQuestion()).resolves.toEqual({ text: "Visible answer." });
++  });
++
++  it("returns a stable tool-required error when direct fallback emits only tool protocol", async () => {
++    mockDoneAnswer("<｜DSML｜tool_calls>private arguments</｜DSML｜tool_calls>");
++
++    await expect(runSideQuestion()).resolves.toEqual({
++      text: "This side question requires a tool operation. Continue in the main conversation.",
++      isError: true,
++      btw: {
++        question: DEFAULT_QUESTION,
++        errorCode: "tool_required",
++      },
++    });
++  });
++
++  it("sanitizes block replies before delivery", async () => {
++    const onBlockReply = vi.fn().mockResolvedValue(undefined);
++    const rawAnswer =
++      'Visible.<minimax:tool_call><invoke name="read">private</invoke></minimax:tool_call>';
++    streamSimpleMock.mockReturnValue(
++      makeAsyncEvents([
++        {
++          type: "text_delta",
++          delta: rawAnswer,
++          partial: {
++            role: "assistant",
++            content: [],
++            provider: DEFAULT_PROVIDER,
++            model: DEFAULT_MODEL,
++          },
++        },
++        createDoneEvent(rawAnswer),
++      ]),
++    );
++
++    await runSideQuestion({
++      blockReplyChunking: {
++        minChars: 1,
++        maxChars: 200,
++        breakPreference: "paragraph",
++      },
++      resolvedBlockStreamingBreak: "message_end",
++      opts: { onBlockReply },
++    });
++
++    expect(onBlockReply).toHaveBeenCalledWith({
++      text: "Visible.",
++      btw: { question: DEFAULT_QUESTION },
++    });
++  });
++
+   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
+     const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+     registerAgentHarness({
+@@ -1096,6 +1153,10 @@ describe("runBtwSideQuestion", () => {
+     await runSideQuestion({ question: "what is the distance to the sun?" });
+ 
+     const context = streamContext();
++    expect(String(context.systemPrompt)).toContain("This direct /btw fallback has no tools");
++    expect(String(context.systemPrompt)).not.toContain(
++      "unless the side question explicitly asks for them",
++    );
+     expect(String(context.systemPrompt)).toContain(
+       "Do not continue, resume, or complete any unfinished task",
+     );
+diff --git a/src/agents/btw.ts b/src/agents/btw.ts
+index 933d09c647..d8f7d51c70 100644
+--- a/src/agents/btw.ts
++++ b/src/agents/btw.ts
+@@ -1,6 +1,6 @@
+ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+ import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
++import { BtwErrorCode, type ReplyPayload } from "../auto-reply/reply-payload.js";
+ import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+ import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
+ import type { OpenClawConfig } from "../config/types.openclaw.js";
+@@ -20,6 +20,7 @@ import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles
+ import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
+ import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
+ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
++import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+ import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
+ import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
+ import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+@@ -60,12 +61,18 @@ function buildBtwSystemPrompt(): string {
+     "Use the conversation only as background context.",
+     "Answer only the side question in the last user message.",
+     "Do not continue, resume, or complete any unfinished task from the conversation.",
+-    "Do not emit tool calls, pseudo-tool calls, shell commands, file writes, patches, or code unless the side question explicitly asks for them.",
++    "This direct /btw fallback has no tools and cannot read files or inspect state beyond the supplied conversation context.",
++    "Never emit tool calls, pseudo-tool calls, or provider control markup.",
++    "If answering requires a fresh tool operation, say briefly that it must be done in the main conversation.",
++    "Never claim that a command, file operation, or other tool action was executed.",
+     "Do not say you will continue the main task after answering.",
+     "If the question can be answered briefly, answer briefly.",
+   ].join("\n");
+ }
+ 
++const BTW_TOOL_PROTOCOL_RE =
++  /(?:<\s*\/?\s*[|｜]\s*DSML\s*[|｜]\s*(?:tool_use_error|tool_calls?|function_calls)\s*>|<\s*\/?\s*(?:minimax:tool_call|tool_calls?|tool_result|function_calls?|function_response)\b|\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]|\[tool:[A-Za-z_][A-Za-z0-9_.:-]*\])/i;
++
+ function resolveReturnedAuthProfileSource(
+   sessionEntry: StoredSessionEntry | undefined,
+   authProfileId: string | undefined,
+@@ -522,14 +529,15 @@ export async function runBtwSideQuestion(
+   let sawTextEvent = false;
+ 
+   const emitBlockChunk = async (text: string) => {
+-    const trimmed = text.trim();
++    const sanitized = sanitizeUserFacingText(text);
++    const trimmed = sanitized.trim();
+     if (!trimmed || !params.opts?.onBlockReply) {
+       return;
+     }
+     emittedBlocks += 1;
+     blockEmitChain = blockEmitChain.then(async () => {
+       await params.opts?.onBlockReply?.({
+-        text,
++        text: sanitized,
+         btw: { question: params.question },
+       });
+     });
+@@ -632,8 +640,19 @@ export async function runBtwSideQuestion(
+     }
+   }
+ 
+-  const answer = answerText.trim();
++  const rawAnswer = answerText.trim();
++  const answer = sanitizeUserFacingText(rawAnswer).trim();
+   if (!answer) {
++    if (rawAnswer && BTW_TOOL_PROTOCOL_RE.test(rawAnswer)) {
++      return {
++        text: "This side question requires a tool operation. Continue in the main conversation.",
++        isError: true,
++        btw: {
++          question: params.question,
++          errorCode: BtwErrorCode.ToolRequired,
++        },
++      };
++    }
+     throw new Error("No BTW response generated.");
+   }
+ 
+diff --git a/src/agents/embedded-agent-helpers.sanitizeuserfacingtext.test.ts b/src/agents/embedded-agent-helpers.sanitizeuserfacingtext.test.ts
+index 2240f80a9f..7b98154453 100644
+--- a/src/agents/embedded-agent-helpers.sanitizeuserfacingtext.test.ts
++++ b/src/agents/embedded-agent-helpers.sanitizeuserfacingtext.test.ts
+@@ -281,6 +281,25 @@ describe("sanitizeUserFacingText", () => {
+     expect(sanitizeUserFacingText(input)).toBe("Let me check that.\n\nDone.");
+   });
+ 
++  it("strips complete and truncated DeepSeek DSML blocks before user-facing delivery", () => {
++    expect(
++      sanitizeUserFacingText(
++        'Before<|DSML|tool_calls><|DSML|invoke name="read">private</|DSML|invoke></|DSML|tool_calls>After',
++      ),
++    ).toBe("BeforeAfter");
++    expect(sanitizeUserFacingText("Visible<｜DSML｜tool_call>private payload")).toBe("Visible");
++  });
++
++  it("preserves DeepSeek DSML examples in user-facing code spans", () => {
++    const inline = "Use `<|DSML|tool_calls>example</|DSML|tool_calls>` in protocol docs.";
++    const fenced = ["```text", "<｜DSML｜tool_calls>example</｜DSML｜tool_calls>", "```"].join(
++      "\n",
++    );
++
++    expect(sanitizeUserFacingText(inline)).toBe(inline);
++    expect(sanitizeUserFacingText(fenced)).toBe(fenced);
++  });
++
+   it("preserves MiniMax tool-call XML examples in user-facing code spans", () => {
+     const inline = 'Use `<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>`.';
+     const fenced = [
+diff --git a/src/agents/embedded-agent-helpers/sanitize-user-facing-text.ts b/src/agents/embedded-agent-helpers/sanitize-user-facing-text.ts
+index 2d8da4be50..e72a50740f 100644
+--- a/src/agents/embedded-agent-helpers/sanitize-user-facing-text.ts
++++ b/src/agents/embedded-agent-helpers/sanitize-user-facing-text.ts
+@@ -1,3 +1,7 @@
++import {
++  normalizeLowercaseStringOrEmpty,
++  normalizeOptionalLowercaseString,
++} from "../../../packages/normalization-core/src/string-coerce.js";
+ import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+ import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
+ import {
+@@ -11,10 +15,7 @@ import {
+ } from "../../shared/assistant-error-format.js";
+ import { coerceChatContentText } from "../../shared/chat-content.js";
+ import {
+-  normalizeLowercaseStringOrEmpty,
+-  normalizeOptionalLowercaseString,
+-} from "../../../packages/normalization-core/src/string-coerce.js";
+-import {
++  stripDeepSeekDsmlToolCallBlocks,
+   stripLegacyBracketToolCallBlocks,
+   stripMinimaxToolCallXml,
+   stripToolCallXmlTags,
+@@ -407,9 +408,12 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
+   }
+   const errorContext = opts?.errorContext ?? false;
+   const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
+-  const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(stripped), {
+-    stripFunctionCallsXmlPayloads: true,
+-  });
++  const withoutToolCallXml = stripToolCallXmlTags(
++    stripMinimaxToolCallXml(stripDeepSeekDsmlToolCallBlocks(stripped)),
++    {
++      stripFunctionCallsXmlPayloads: true,
++    },
++  );
+   // Replay repair may synthesize this placeholder to keep provider transcripts valid.
+   // It is internal scaffolding, so drop standalone placeholder lines before delivery
+   // while preserving ordinary inline mentions a user may be discussing.
+diff --git a/src/auto-reply/reply-payload.ts b/src/auto-reply/reply-payload.ts
+index 639e12ca8d..775d6f0b9c 100644
+--- a/src/auto-reply/reply-payload.ts
++++ b/src/auto-reply/reply-payload.ts
+@@ -4,6 +4,11 @@ import type {
+   ReplyPayloadDelivery,
+ } from "../interactive/payload.js";
+ 
++export const BtwErrorCode = {
++  ToolRequired: "tool_required",
++} as const;
++export type BtwErrorCode = (typeof BtwErrorCode)[keyof typeof BtwErrorCode];
++
+ export type ReplyPayload = {
+   text?: string;
+   mediaUrl?: string;
+@@ -24,6 +29,7 @@ export type ReplyPayload = {
+   interactive?: InteractiveReply;
+   btw?: {
+     question: string;
++    errorCode?: BtwErrorCode;
+   };
+   replyToId?: string;
+   replyToTag?: boolean;
+diff --git a/src/auto-reply/reply/commands-btw.test.ts b/src/auto-reply/reply/commands-btw.test.ts
+index 7dc1b5a417..8d92b80657 100644
+--- a/src/auto-reply/reply/commands-btw.test.ts
++++ b/src/auto-reply/reply/commands-btw.test.ts
+@@ -100,6 +100,37 @@ describe("handleBtwCommand", () => {
+     });
+   });
+ 
++  it("preserves a stable BTW error code from the side-question runner", async () => {
++    const params = buildParams("/btw read the file");
++    params.agentDir = "/tmp/agent";
++    params.sessionEntry = {
++      sessionId: "session-1",
++      updatedAt: Date.now(),
++    };
++    runBtwSideQuestionMock.mockResolvedValue({
++      text: "Use the main conversation.",
++      isError: true,
++      btw: {
++        question: "runtime question",
++        errorCode: "tool_required",
++      },
++    });
++
++    const result = await handleBtwCommand(params, true);
++
++    expect(result).toEqual({
++      shouldContinue: false,
++      reply: {
++        text: "Use the main conversation.",
++        isError: true,
++        btw: {
++          question: "read the file",
++          errorCode: "tool_required",
++        },
++      },
++    });
++  });
++
+   it("starts the typing keepalive while the side question runs", async () => {
+     const params = buildParams("/btw what changed?");
+     const typing = createMockTypingController();
+diff --git a/src/auto-reply/reply/commands-btw.ts b/src/auto-reply/reply/commands-btw.ts
+index d188fac08a..76a1a0d8c4 100644
+--- a/src/auto-reply/reply/commands-btw.ts
++++ b/src/auto-reply/reply/commands-btw.ts
+@@ -78,7 +78,15 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
+     });
+     return {
+       shouldContinue: false,
+-      reply: reply ? { ...reply, btw: { question } } : reply,
++      reply: reply
++        ? {
++            ...reply,
++            btw: {
++              ...reply.btw,
++              question,
++            },
++          }
++        : reply,
+     };
+   } catch (error) {
+     const message = error instanceof Error ? error.message.trim() : "";
+diff --git a/src/gateway/server.chat.gateway-server-chat.test.ts b/src/gateway/server.chat.gateway-server-chat.test.ts
+index d65c20eec2..909e71b316 100644
+--- a/src/gateway/server.chat.gateway-server-chat.test.ts
++++ b/src/gateway/server.chat.gateway-server-chat.test.ts
+@@ -1046,7 +1046,11 @@ describe("gateway server chat", () => {
+         const [params] = args as [
+           {
+             dispatcher: {
+-              sendFinalReply: (payload: { text: string; btw: { question: string } }) => boolean;
++              sendFinalReply: (payload: {
++                text: string;
++                btw: { question: string; errorCode?: string };
++                isError?: boolean;
++              }) => boolean;
+               markComplete: () => void;
+               waitForIdle: () => Promise<void>;
+               getQueuedCounts: () => { final: number; block: number; tool: number };
+@@ -1054,8 +1058,12 @@ describe("gateway server chat", () => {
+           },
+         ];
+         params.dispatcher.sendFinalReply({
+-          text: "323",
+-          btw: { question: "what is 17 * 19?" },
++          text: "Continue in the main conversation.",
++          btw: {
++            question: "what is 17 * 19?",
++            errorCode: "tool_required",
++          },
++          isError: true,
+         });
+         params.dispatcher.markComplete();
+         await params.dispatcher.waitForIdle();
+@@ -1100,7 +1108,9 @@ describe("gateway server chat", () => {
+         runId: "idem-btw-1",
+         sessionKey: "agent:main:main",
+         question: "what is 17 * 19?",
+-        text: "323",
++        text: "Continue in the main conversation.",
++        errorCode: "tool_required",
++        isError: true,
+       });
+       expectRecordFields(finalEvent.payload, {
+         runId: "idem-btw-1",
+diff --git a/src/gateway/server-methods/chat.ts b/src/gateway/server-methods/chat.ts
+index 497024cc3f..cf10d9e857 100644
+--- a/src/gateway/server-methods/chat.ts
++++ b/src/gateway/server-methods/chat.ts
+@@ -490,6 +490,7 @@ type SideResultPayload = {
+   agentId?: string;
+   question: string;
+   text: string;
++  errorCode?: string;
+   isError?: boolean;
+   ts: number;
+ };
+@@ -2186,7 +2187,7 @@ function broadcastChatFinal(params: {
+ }
+ 
+ function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
+-  btw: { question: string };
++  btw: { question: string; errorCode?: string };
+   text: string;
+ } {
+   return (
+@@ -3684,6 +3685,9 @@ export const chatHandlers: GatewayRequestHandlers = {
+                   .filter(Boolean)
+                   .join("\n\n")
+                   .trim();
++                const btwErrorCode = btwReplies
++                  .map((payload) => payload.btw.errorCode)
++                  .find((value) => value !== undefined);
+                 if (btwReplies.length > 0 && btwText) {
+                   broadcastSideResult({
+                     context,
+@@ -3694,6 +3698,7 @@ export const chatHandlers: GatewayRequestHandlers = {
+                       ...(sessionKey === "global" && agentId ? { agentId } : {}),
+                       question: btwReplies[0].btw.question.trim(),
+                       text: btwText,
++                      ...(btwErrorCode ? { errorCode: btwErrorCode } : {}),
+                       isError: btwReplies.some((payload) => payload.isError),
+                       ts: Date.now(),
+                     },
+diff --git a/src/shared/text/assistant-visible-text.ts b/src/shared/text/assistant-visible-text.ts
+index 1a30bebc84..56a3caadfb 100644
+--- a/src/shared/text/assistant-visible-text.ts
++++ b/src/shared/text/assistant-visible-text.ts
+@@ -11,6 +11,10 @@ import {
+ const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
+ const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
+ const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
++const DEEPSEEK_DSML_TOOL_BLOCK_RE =
++  /<\s*(\/?)\s*[|｜]\s*DSML\s*[|｜]\s*(?:tool_use_error|tool_calls?|function_calls)\s*>/gi;
++const DEEPSEEK_DSML_TOOL_BLOCK_QUICK_RE =
++  /<\s*\/?\s*[|｜]\s*DSML\s*[|｜]\s*(?:tool_use_error|tool_calls?|function_calls)\s*>/i;
+ 
+ /**
+  * Strip XML-style tool call tags that models sometimes emit as plain text.
+@@ -562,6 +566,46 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
+   return result;
+ }
+ 
++export function stripDeepSeekDsmlToolCallBlocks(text: string): string {
++  if (!text || !DEEPSEEK_DSML_TOOL_BLOCK_QUICK_RE.test(text)) {
++    return text;
++  }
++
++  const codeRegions = findCodeRegions(text);
++  let result = "";
++  let cursor = 0;
++  let insideBlock = false;
++
++  DEEPSEEK_DSML_TOOL_BLOCK_RE.lastIndex = 0;
++  for (const match of text.matchAll(DEEPSEEK_DSML_TOOL_BLOCK_RE)) {
++    const start = match.index ?? 0;
++    if (isInsideCode(start, codeRegions)) {
++      continue;
++    }
++    const end = start + match[0].length;
++    const isClose = match[1] === "/";
++
++    if (!insideBlock) {
++      result += text.slice(cursor, start);
++      cursor = end;
++      if (!isClose) {
++        insideBlock = true;
++      }
++      continue;
++    }
++
++    cursor = end;
++    if (isClose) {
++      insideBlock = false;
++    }
++  }
++
++  if (!insideBlock) {
++    result += text.slice(cursor);
++  }
++  return result;
++}
++
+ /**
+  * Strip downgraded tool call text representations that leak into user-visible
+  * text content when replaying history across providers.
+@@ -824,6 +868,7 @@ function applyAssistantVisibleTextStagePipeline(
+   };
+   const stripNonReasoningStages = (value: string) => {
+     let cleaned = value;
++    cleaned = stripDeepSeekDsmlToolCallBlocks(cleaned);
+     if (!options.preserveMinimaxToolXml) {
+       cleaned = stripMinimaxToolCallXml(cleaned);
+     }
