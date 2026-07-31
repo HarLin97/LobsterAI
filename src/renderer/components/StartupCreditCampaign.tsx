@@ -1,8 +1,4 @@
-import {
-  CheckCircleIcon,
-  ExclamationTriangleIcon,
-  XMarkIcon,
-} from '@heroicons/react/24/outline';
+import { XMarkIcon } from '@heroicons/react/24/outline';
 import {
   ActivityLifecycleState,
   ActivityPlacement,
@@ -11,6 +7,7 @@ import {
   OneTimeCreditAction,
   type StartupCreditActionResponse,
 } from '@shared/activity/constants';
+import { OpenClawEnginePhase } from '@shared/openclawEngine/constants';
 import React, {
   useCallback,
   useEffect,
@@ -21,6 +18,7 @@ import { createPortal } from 'react-dom';
 import { useSelector } from 'react-redux';
 
 import { authService } from '../services/auth';
+import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
 import type { RootState } from '../store';
 import {
@@ -28,6 +26,7 @@ import {
   STARTUP_CREDIT_OPEN_EVENT,
 } from './startupCreditCampaignBridge';
 import {
+  buildStartupCreditPosterUrl,
   canClaimStartupCredit,
   clearPendingStartupCreditClaim,
   createStartupCreditIdempotencyKey,
@@ -43,6 +42,9 @@ import {
 } from './startupCreditCampaignState';
 
 const STARTUP_CREDIT_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const STARTUP_POSTER_PRELOAD_TIMEOUT_MS = 15_000;
+const STARTUP_POSTER_PRELOAD_CACHE_LIMIT = 12;
+const startupPosterPreloadCache = new Map<string, Promise<boolean>>();
 
 const CampaignModalView = {
   Offer: 'offer',
@@ -62,9 +64,59 @@ interface CampaignResult {
   expiresAt?: string | null;
 }
 
+interface CampaignPosterLoadState {
+  url: string | null;
+  settled: boolean;
+  failed: boolean;
+}
+
 interface StartupCreditCampaignProps {
   enabled?: boolean;
 }
+
+const preloadStartupCreditPoster = (url: string): Promise<boolean> => {
+  const cached = startupPosterPreloadCache.get(url);
+  if (cached) return cached;
+
+  if (startupPosterPreloadCache.size >= STARTUP_POSTER_PRELOAD_CACHE_LIMIT) {
+    const oldestKey = startupPosterPreloadCache.keys().next().value;
+    if (oldestKey) startupPosterPreloadCache.delete(oldestKey);
+  }
+
+  const request = new Promise<boolean>((resolve) => {
+    const image = new Image();
+    let settled = false;
+    const finish = (success: boolean): void => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve(success);
+    };
+    const timeout = window.setTimeout(
+      () => finish(false),
+      STARTUP_POSTER_PRELOAD_TIMEOUT_MS,
+    );
+    image.decoding = 'async';
+    image.onload = () => {
+      if (typeof image.decode !== 'function') {
+        finish(true);
+        return;
+      }
+      void image.decode()
+        .then(() => finish(true))
+        .catch(() => finish(true));
+    };
+    image.onerror = () => finish(false);
+    image.src = url;
+  });
+  startupPosterPreloadCache.set(url, request);
+  void request.then((success) => {
+    if (!success && startupPosterPreloadCache.get(url) === request) {
+      startupPosterPreloadCache.delete(url);
+    }
+  });
+  return request;
+};
 
 const formatExpiry = (value: string | null | undefined): string | null => {
   if (!value) return null;
@@ -96,12 +148,26 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   );
   const [result, setResult] = useState<CampaignResult | null>(null);
   const [failureMessage, setFailureMessage] = useState('');
-  const [posterFailed, setPosterFailed] = useState(false);
+  const [posterLoad, setPosterLoad] = useState<CampaignPosterLoadState>({
+    url: null,
+    settled: false,
+    failed: false,
+  });
+  const [gatewayReady, setGatewayReady] = useState(
+    () => coworkService.getOpenClawEngineStatusSnapshot()?.phase
+      === OpenClawEnginePhase.Running,
+  );
   const snapshotRef = useRef<StartupCreditSnapshot | null>(null);
   const mountedRef = useRef(true);
   const loadRequestRef = useRef(0);
   const continuationInFlightRef = useRef(false);
   const actionInFlightRef = useRef(false);
+  const posterUrl = snapshot
+    ? buildStartupCreditPosterUrl(
+        snapshot.descriptor.posterUrl,
+        snapshot.descriptor.configRevision,
+      )
+    : null;
 
   const applySnapshot = useCallback((
     next: StartupCreditSnapshot | null,
@@ -110,7 +176,6 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     snapshotRef.current = next;
     if (!mountedRef.current) return;
     setSnapshot(next);
-    setPosterFailed(false);
     setStartupCreditCampaignEntry(next
       ? { available: true, label: next.descriptor.cardTitle }
       : null);
@@ -340,6 +405,50 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   }, []);
 
   useEffect(() => {
+    let active = true;
+    void coworkService.getOpenClawEngineStatus()
+      .then((status) => {
+        if (active) {
+          setGatewayReady(status?.phase === OpenClawEnginePhase.Running);
+        }
+      })
+      .catch(() => {
+        // Keep the latest status delivered by the event listener.
+      });
+    const unsubscribe = coworkService.onOpenClawEngineStatus((status) => {
+      if (active) {
+        setGatewayReady(status.phase === OpenClawEnginePhase.Running);
+      }
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!posterUrl) {
+      setPosterLoad({ url: null, settled: true, failed: false });
+      return undefined;
+    }
+    let active = true;
+    setPosterLoad(current => current.url === posterUrl && current.settled
+      ? current
+      : { url: posterUrl, settled: false, failed: false });
+    void preloadStartupCreditPoster(posterUrl).then((success) => {
+      if (!active) return;
+      setPosterLoad({
+        url: posterUrl,
+        settled: true,
+        failed: !success,
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, [posterUrl]);
+
+  useEffect(() => {
     if (authLoading) return;
     if (!enabled) {
       applySnapshot(null, false);
@@ -467,8 +576,6 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     await performClaim(current, pending.idempotencyKey);
   }, [load, performClaim, showTerminalView]);
 
-  if (!modalOpen) return null;
-
   const descriptor = snapshot?.descriptor ?? null;
   const activityState = snapshot?.context.state ?? null;
   const isBusy = modalView === CampaignModalView.Claiming
@@ -478,6 +585,10 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   const isAlreadyClaimed = modalView === CampaignModalView.AlreadyClaimed;
   const isFailure = modalView === CampaignModalView.Failed;
   const isEnded = modalView === CampaignModalView.Ended;
+  const shouldShowPoster = Boolean(descriptor) && (isOffer || isBusy);
+  const posterReady = !shouldShowPoster
+    || (posterLoad.url === posterUrl && posterLoad.settled);
+  if (!modalOpen || !gatewayReady || !posterReady) return null;
   if (!descriptor && (isOffer || isBusy || isSuccess || isAlreadyClaimed)) {
     return null;
   }
@@ -508,91 +619,77 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           isEnded ? 'startupCreditEndedTitle' : 'startupCreditClaimFailedTitle',
         )}
     >
-      <button
-        type="button"
-        className="absolute inset-0 cursor-default"
-        aria-label={i18nService.t('close')}
-        onClick={closeByUser}
-        disabled={isBusy}
-      />
-      <section className="relative z-10 w-[min(430px,calc(100vw-48px))] overflow-hidden rounded-2xl border border-black/10 bg-white shadow-2xl dark:border-white/10 dark:bg-[#202124]">
+      <section className="relative z-10 w-[min(430px,calc(100vw-48px))] overflow-hidden rounded-2xl border border-border bg-surface shadow-modal">
         <button
           type="button"
-          className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/35 text-white transition-colors hover:bg-black/50 disabled:cursor-wait disabled:opacity-60"
+          className={`absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:cursor-wait disabled:opacity-60 ${
+            shouldShowPoster
+              ? 'bg-black/35 text-white hover:bg-black/50'
+              : 'bg-surface-raised text-secondary hover:text-foreground'
+          }`}
           aria-label={i18nService.t('close')}
           onClick={closeByUser}
           disabled={isBusy}
         >
           <XMarkIcon className="h-5 w-5" />
         </button>
-        {descriptor && !posterFailed && (
+        {descriptor
+          && shouldShowPoster
+          && posterUrl
+          && !posterLoad.failed && (
           <img
-            src={descriptor.posterUrl}
+            src={posterUrl}
             alt={descriptor.posterAlt}
-            onError={() => setPosterFailed(true)}
-            className="block max-h-[300px] w-full bg-[#FFF4EA] object-contain"
+            onError={() => setPosterLoad(current => (
+              current.url === posterUrl
+                ? { ...current, settled: true, failed: true }
+                : current
+            ))}
+            className="block aspect-[2/1] w-full object-cover"
           />
         )}
-        <div className="px-7 pb-6 pt-5 text-center">
-          {isOffer || isBusy ? (
-            <>
-              <h2 className="text-xl font-semibold text-foreground">
-                {descriptor?.modalTitle}
-              </h2>
-              <p className="mx-auto mt-2 max-w-[340px] text-sm leading-6 text-secondary">
-                {descriptor?.modalDescription}
-              </p>
-              <button
-                type="button"
-                disabled={isBusy}
-                onClick={() => void handlePrimaryAction()}
-                className="mt-5 flex h-11 w-full items-center justify-center rounded-xl bg-[linear-gradient(90deg,#ED773D,#EE9855)] text-sm font-semibold text-white shadow-[0_8px_20px_rgba(224,111,54,0.28)] transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-70"
-              >
-                {modalView === CampaignModalView.Claiming
-                  ? i18nService.t('startupCreditClaiming')
-                  : modalView === CampaignModalView.StartingLogin
-                    ? i18nService.t('startupCreditStartingLogin')
-                    : descriptor?.actionText}
-              </button>
-            </>
-          ) : (
-            <>
-              <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full ${
-                isFailure || isEnded
-                  ? 'bg-amber-50 text-amber-600 dark:bg-amber-950/40'
-                  : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40'
-              }`}
-              >
-                {isFailure || isEnded
-                  ? <ExclamationTriangleIcon className="h-8 w-8" />
-                  : <CheckCircleIcon className="h-8 w-8" />}
-              </div>
-              <h2 className="mt-3 text-xl font-semibold text-foreground">
-                {isSuccess
-                  ? i18nService.t('startupCreditClaimSuccessTitle')
-                  : isAlreadyClaimed
-                    ? i18nService.t('startupCreditAlreadyClaimedTitle')
-                    : isEnded
-                      ? i18nService.t('startupCreditEndedTitle')
-                      : i18nService.t('startupCreditClaimFailedTitle')}
-              </h2>
-              <p className="mx-auto mt-2 max-w-[340px] text-sm leading-6 text-secondary">
-                {resultDescription}
-              </p>
-              <button
-                type="button"
-                onClick={isFailure
-                  ? () => void handleRetry()
-                  : closeByUser}
-                className="mt-5 flex h-11 w-full items-center justify-center rounded-xl bg-[#303136] text-sm font-semibold text-white transition-colors hover:bg-[#202126]"
-              >
-                {isFailure
-                  ? i18nService.t('startupCreditRetry')
-                  : i18nService.t('startupCreditDone')}
-              </button>
-            </>
-          )}
-        </div>
+        {isOffer || isBusy ? (
+          <div className="p-5">
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={() => void handlePrimaryAction()}
+              className="flex h-11 w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground shadow-subtle transition-colors hover:bg-primary-hover disabled:cursor-wait disabled:opacity-70"
+            >
+              {modalView === CampaignModalView.Claiming
+                ? i18nService.t('startupCreditClaiming')
+                : modalView === CampaignModalView.StartingLogin
+                  ? i18nService.t('startupCreditStartingLogin')
+                  : descriptor?.actionText}
+            </button>
+          </div>
+        ) : (
+          <div className="px-7 pb-6 pt-7 text-center">
+            <h2 className="pr-5 text-xl font-semibold text-foreground">
+              {isSuccess
+                ? i18nService.t('startupCreditClaimSuccessTitle')
+                : isAlreadyClaimed
+                  ? i18nService.t('startupCreditAlreadyClaimedTitle')
+                  : isEnded
+                    ? i18nService.t('startupCreditEndedTitle')
+                    : i18nService.t('startupCreditClaimFailedTitle')}
+            </h2>
+            <p className="mx-auto mt-2 max-w-[340px] text-sm leading-6 text-secondary">
+              {resultDescription}
+            </p>
+            <button
+              type="button"
+              onClick={isFailure
+                ? () => void handleRetry()
+                : closeByUser}
+              className="mt-5 flex h-11 w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover"
+            >
+              {isFailure
+                ? i18nService.t('startupCreditRetry')
+                : i18nService.t('startupCreditDone')}
+            </button>
+          </div>
+        )}
       </section>
     </div>,
     document.body,

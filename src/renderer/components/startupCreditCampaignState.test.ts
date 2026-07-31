@@ -10,6 +10,7 @@ import {
 import { describe, expect, test } from 'vitest';
 
 import {
+  buildStartupCreditPosterUrl,
   canClaimStartupCredit,
   clearPendingStartupCreditClaim,
   dismissStartupCreditAutoPopup,
@@ -98,6 +99,17 @@ describe('startupCreditCampaignState', () => {
 
     expect(isStartupCreditAutoDismissed(storage, descriptor.activityCode)).toBe(true);
     expect(isStartupCreditAutoDismissed(storage, 'another-activity')).toBe(false);
+  });
+
+  test('poster cache URL changes with the immutable config revision', () => {
+    expect(buildStartupCreditPosterUrl(
+      'https://nos.example.test/reward.png?width=860#poster',
+      2,
+    )).toBe(
+      'https://nos.example.test/reward.png?width=860&lobster_activity_revision=2#poster',
+    );
+    expect(buildStartupCreditPosterUrl(descriptor.posterUrl, 3))
+      .not.toBe(buildStartupCreditPosterUrl(descriptor.posterUrl, 2));
   });
 
   test('pending login claim survives reload and expires after thirty minutes', () => {
