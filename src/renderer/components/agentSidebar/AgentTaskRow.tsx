@@ -18,6 +18,8 @@ interface AgentTaskRowProps {
   task: AgentSidebarTaskNode;
   isBatchMode: boolean;
   isSelected: boolean;
+  contextLabel?: string;
+  contextIcon?: React.ReactNode;
   isSelectionDisabled?: boolean;
   showBatchOption?: boolean;
   hasActiveSubagent?: boolean;
@@ -55,6 +57,8 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   task,
   isBatchMode,
   isSelected,
+  contextLabel,
+  contextIcon,
   isSelectionDisabled = false,
   showBatchOption = false,
   hasActiveSubagent = false,
@@ -198,13 +202,16 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
     'flex w-full items-center gap-2 whitespace-nowrap px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
   const menuIconClassName = 'h-3.5 w-3.5';
   const relativeTime = formatAgentTaskRelativeTime(task.updatedAt || task.createdAt);
-  const showRelativeTime = task.indicator === AgentSidebarIndicator.None;
+  const showRelativeTime = !contextLabel && task.indicator === AgentSidebarIndicator.None;
   const pinLabel = task.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession');
+  const isActivityRow = !!contextLabel;
 
   return (
     <div
-      className={`group relative -ml-[6px] flex h-[30px] w-[calc(100%+12px)] items-center gap-2 rounded-md ${
-        isBatchMode ? 'pl-4' : 'pl-[38px]'
+      className={`group relative -ml-[6px] flex w-[calc(100%+12px)] items-center gap-2 rounded-md ${
+        isActivityRow ? 'min-h-[48px] py-1.5' : 'h-[30px]'
+      } ${
+        isBatchMode ? 'pl-4' : isActivityRow ? 'pl-3.5' : 'pl-[38px]'
       } pr-2.5 text-sm font-normal transition-colors ${
         isSelectionDisabled
           ? 'cursor-default text-foreground/30'
@@ -216,11 +223,11 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
       onMouseMove={() => setSuppressPinHover(false)}
       onMouseLeave={() => setSuppressPinHover(false)}
       role="treeitem"
-      aria-level={2}
+      aria-level={isActivityRow ? 1 : 2}
       aria-selected={task.isSelected}
       aria-disabled={isSelectionDisabled || undefined}
     >
-      {!isBatchMode && !isRenaming && !isSelectionDisabled && (
+      {!isActivityRow && !isBatchMode && !isRenaming && !isSelectionDisabled && (
         <button
           type="button"
           onClick={(event) => {
@@ -276,8 +283,18 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
         />
       ) : (
         <>
-          <span className="min-w-0 flex-1 truncate">
-            {task.title}
+          <span className={`min-w-0 flex-1 ${isActivityRow ? 'flex flex-col gap-0.5' : 'truncate'}`}>
+            <span className="truncate">{task.title}</span>
+            {contextLabel && (
+              <span className="flex min-w-0 items-center gap-1 text-[11px] font-normal leading-4 text-secondary">
+                {contextIcon && (
+                  <span className="flex h-3 w-3 shrink-0 items-center justify-center" aria-hidden="true">
+                    {contextIcon}
+                  </span>
+                )}
+                <span className="truncate">{contextLabel}</span>
+              </span>
+            )}
           </span>
           {task.indicator === AgentSidebarIndicator.PendingPermission && (
             <span

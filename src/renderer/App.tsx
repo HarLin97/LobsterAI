@@ -131,6 +131,8 @@ const App: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isTaskFilterActive, setIsTaskFilterActive] = useState(false);
+  const [hasUnreadCompletedTasks, setHasUnreadCompletedTasks] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(244);
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState>({
     status: AppUpdateStatus.Idle,
@@ -462,6 +464,26 @@ const App: React.FC = () => {
     });
     setIsSidebarCollapsed((prev) => !prev);
   }, [isSidebarCollapsed, mainView]);
+
+  const handleToggleTaskFilter = useCallback(() => {
+    const nextActive = !isTaskFilterActive;
+    const message = `task activity toggle requested activeView=${mainView} nextActive=${nextActive} hasUnreadCompleted=${hasUnreadCompletedTasks} platform=${window.electron.platform}`;
+    console.debug(`[TaskActivity] ${message}`);
+    try {
+      window.electron?.log?.fromRenderer?.('debug', 'TaskActivity', message);
+    } catch {
+      // Diagnostics must never block the sidebar interaction.
+    }
+    void reportYdAnalyzer({
+      action: LogReporterAction.SidebarAction,
+      source: 'home_sidebar',
+      actionType: 'task_filter_toggle',
+      activeView: mainView,
+      isCollapsed: isSidebarCollapsed,
+      targetSelected: nextActive,
+    });
+    setIsTaskFilterActive(nextActive);
+  }, [hasUnreadCompletedTasks, isSidebarCollapsed, isTaskFilterActive, mainView]);
 
   const handleNewChat = useCallback(() => {
     // Only clear when already on home (no session) — preserve __home__ draft when returning from a session
@@ -1247,6 +1269,11 @@ const App: React.FC = () => {
       onToggleSidebar={canUseWindowsTopBarActions ? handleToggleSidebar : undefined}
       onNewChat={canUseWindowsCollapsedTopBarActions ? handleNewChat : undefined}
       sidebarToggleLabel={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+      showFilterIcon={canUseWindowsTopBarActions && !isSidebarCollapsed && mainView === 'cowork'}
+      filterLabel={i18nService.t('sidebarFilter')}
+      isFilterActive={isTaskFilterActive}
+      hasFilterNotice={hasUnreadCompletedTasks}
+      onToggleFilter={handleToggleTaskFilter}
       newChatLabel={i18nService.t('newChat')}
       updateBadge={canUseWindowsCollapsedTopBarActions ? updateBadge : null}
     />
@@ -1338,6 +1365,10 @@ const App: React.FC = () => {
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
+          isTaskFilterActive={isTaskFilterActive}
+          hasUnreadCompletedTasks={hasUnreadCompletedTasks}
+          onToggleTaskFilter={handleToggleTaskFilter}
+          onTaskFilterSummaryChange={setHasUnreadCompletedTasks}
           onWidthChange={setSidebarWidth}
           updateNotice={!isSidebarCollapsed && !isUpdateInteractionBlocked ? updateCard : null}
           hideAdBanner={isUpdateCardExpanded}

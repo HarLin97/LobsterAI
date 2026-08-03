@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect } from 'react';
 
+import SidebarTaskFilterButton from '../agentSidebar/SidebarTaskFilterButton';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import WindowTitleBar from './WindowTitleBar';
@@ -11,6 +12,11 @@ interface WindowsAppTitleBarProps {
   onToggleSidebar?: () => void;
   onNewChat?: () => void;
   sidebarToggleLabel?: string;
+  showFilterIcon?: boolean;
+  filterLabel?: string;
+  isFilterActive?: boolean;
+  hasFilterNotice?: boolean;
+  onToggleFilter?: () => void;
   newChatLabel?: string;
   updateBadge?: React.ReactNode;
 }
@@ -22,6 +28,11 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
   onToggleSidebar,
   onNewChat,
   sidebarToggleLabel,
+  showFilterIcon = false,
+  filterLabel,
+  isFilterActive = false,
+  hasFilterNotice = false,
+  onToggleFilter,
   newChatLabel,
   updateBadge,
 }) => {
@@ -72,7 +83,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
             LobsterAI
           </span>
         </div>
-        {(onToggleSidebar || onNewChat || updateBadge) && (
+        {(onToggleSidebar || showFilterIcon || onNewChat || updateBadge) && (
           <div className="non-draggable flex shrink-0 items-center gap-1">
             {onToggleSidebar && (
               <button
@@ -84,6 +95,14 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
               >
                 <SidebarToggleIcon className="h-4 w-4" isCollapsed={isSidebarCollapsed} />
               </button>
+            )}
+            {showFilterIcon && onToggleFilter && (
+              <SidebarTaskFilterButton
+                isActive={isFilterActive}
+                hasUnreadCompletedTasks={hasFilterNotice}
+                label={filterLabel ?? ''}
+                onClick={onToggleFilter}
+              />
             )}
             {onNewChat && (
               <button

@@ -42,6 +42,7 @@ import {
   markCompactionNotified,
   openBtwThread,
   prependMessages,
+  setAgentSessions,
   setConfig,
   setContextCompacting,
   setContextMaintenance,
@@ -756,7 +757,7 @@ class CoworkService {
       if (requestId !== this.latestLoadSessionsRequestId) {
         return;
       }
-      store.dispatch(setSessions(result.sessions));
+      store.dispatch(agentId ? setAgentSessions(result.sessions) : setSessions(result.sessions));
       store.dispatch(setHasMoreSessions(result.hasMore ?? false));
       result.sessions.forEach((session) => {
         if (

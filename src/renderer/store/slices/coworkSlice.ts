@@ -93,7 +93,10 @@ interface CoworkState {
   pendingSteers: Record<string, CoworkPendingSteer[]>;
   /** Keyed by sessionId, stores steer requests rejected by the runtime. */
   rejectedSteers: Record<string, CoworkPendingSteer[]>;
+  /** Sessions with any unread background activity. */
   unreadSessionIds: string[];
+  /** Completed sessions whose result has not been opened yet. */
+  completedUnreadSessionIds: string[];
   isCoworkActive: boolean;
   isStreaming: boolean;
   contextUsageBySessionId: Record<string, CoworkContextUsage>;
@@ -133,6 +136,7 @@ const initialState: CoworkState = {
   pendingSteers: {},
   rejectedSteers: {},
   unreadSessionIds: [],
+  completedUnreadSessionIds: [],
   isCoworkActive: false,
   isStreaming: false,
   contextUsageBySessionId: {},
@@ -182,12 +186,28 @@ const COWORK_STEER_REJECTED_PREVIEW_LIMIT = 20;
 const markSessionRead = (state: CoworkState, sessionId: string | null) => {
   if (!sessionId) return;
   state.unreadSessionIds = state.unreadSessionIds.filter((id) => id !== sessionId);
+  state.completedUnreadSessionIds = state.completedUnreadSessionIds.filter(
+    (id) => id !== sessionId,
+  );
 };
 
 const markSessionUnread = (state: CoworkState, sessionId: string) => {
   if (state.currentSessionId === sessionId) return;
   if (state.unreadSessionIds.includes(sessionId)) return;
   state.unreadSessionIds.push(sessionId);
+};
+
+const markCompletedSessionUnread = (state: CoworkState, sessionId: string) => {
+  if (state.currentSessionId === sessionId) return;
+  if (state.completedUnreadSessionIds.includes(sessionId)) return;
+  state.completedUnreadSessionIds.push(sessionId);
+};
+
+const clearCompletedSessionUnread = (state: CoworkState, sessionId: string) => {
+  const index = state.completedUnreadSessionIds.indexOf(sessionId);
+  if (index !== -1) {
+    state.completedUnreadSessionIds.splice(index, 1);
+  }
 };
 
 const buildRailIndexItemFromMessage = (
@@ -451,9 +471,18 @@ const coworkSlice = createSlice({
     setSessions(state, action: PayloadAction<CoworkSessionSummary[]>) {
       state.sessions = action.payload;
       const validSessionIds = new Set(action.payload.map((session) => session.id));
-      state.unreadSessionIds = state.unreadSessionIds.filter((id) => {
-        return validSessionIds.has(id) && id !== state.currentSessionId;
-      });
+      state.unreadSessionIds = state.unreadSessionIds.filter((id) => validSessionIds.has(id));
+      state.completedUnreadSessionIds = state.completedUnreadSessionIds.filter(
+        (id) => validSessionIds.has(id),
+      );
+      markSessionRead(state, state.currentSessionId);
+    },
+
+    setAgentSessions(state, action: PayloadAction<CoworkSessionSummary[]>) {
+      state.sessions = action.payload;
+      // Agent-scoped refreshes are partial snapshots. Preserve unread state
+      // from every Agent and clear only the session the user is viewing.
+      markSessionRead(state, state.currentSessionId);
     },
 
     setHasMoreSessions(state, action: PayloadAction<boolean>) {
@@ -673,6 +702,9 @@ const coworkSlice = createSlice({
 
       if (status === CoworkSessionStatusValue.Completed) {
         markSessionUnread(state, sessionId);
+        markCompletedSessionUnread(state, sessionId);
+      } else {
+        clearCompletedSessionUnread(state, sessionId);
       }
     },
 
@@ -1316,6 +1348,7 @@ const coworkSlice = createSlice({
 export const {
   setCoworkActive,
   setSessions,
+  setAgentSessions,
   setHasMoreSessions,
   appendSessions,
   setCurrentSessionId,

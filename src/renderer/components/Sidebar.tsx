@@ -20,6 +20,7 @@ import {
   createSessionBatchKey,
 } from './agentSidebar/batchSelection';
 import MyAgentSidebarTree from './agentSidebar/MyAgentSidebarTree';
+import SidebarTaskFilterButton from './agentSidebar/SidebarTaskFilterButton';
 import Modal from './common/Modal';
 import { CoworkUiEvent } from './cowork/constants';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
@@ -49,6 +50,10 @@ interface SidebarProps {
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
+  isTaskFilterActive: boolean;
+  hasUnreadCompletedTasks: boolean;
+  onToggleTaskFilter: () => void;
+  onTaskFilterSummaryChange: (hasUnreadCompletedTasks: boolean) => void;
   onWidthChange?: (width: number) => void;
   updateNotice?: React.ReactNode;
   /** The expanded update card owns the sidebar bottom; temporarily hide the
@@ -142,6 +147,10 @@ const Sidebar: React.FC<SidebarProps> = ({
   onNewChat,
   isCollapsed,
   onToggleCollapse,
+  isTaskFilterActive,
+  hasUnreadCompletedTasks,
+  onToggleTaskFilter,
+  onTaskFilterSummaryChange,
   onWidthChange,
   updateNotice,
   hideAdBanner,
@@ -531,14 +540,25 @@ const Sidebar: React.FC<SidebarProps> = ({
         {showHeaderRow && (
           <div className="draggable sidebar-header-drag h-8 flex items-center justify-end px-3">
             {!isWindows && (
-              <button
-                type="button"
-                onClick={onToggleCollapse}
-                className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-                aria-label={isCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
-              >
-                <SidebarToggleIcon className="h-4 w-4" isCollapsed={isCollapsed} />
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={onToggleCollapse}
+                  className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+                  aria-label={isCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+                >
+                  <SidebarToggleIcon className="h-4 w-4" isCollapsed={isCollapsed} />
+                </button>
+                {activeView === 'cowork' && !isCollapsed && (
+                  <SidebarTaskFilterButton
+                    isActive={isTaskFilterActive}
+                    hasUnreadCompletedTasks={hasUnreadCompletedTasks}
+                    label={i18nService.t('sidebarFilter')}
+                    onClick={onToggleTaskFilter}
+                    className="non-draggable"
+                  />
+                )}
+              </>
             )}
           </div>
         )}
@@ -654,7 +674,9 @@ const Sidebar: React.FC<SidebarProps> = ({
             batchAgentId={batchAgentId}
             deletedSessionIds={deletedSessionIds}
             selectedKeys={selectedKeys}
+            isTaskFilterActive={isTaskFilterActive}
             onShowCowork={onShowCowork}
+            onTaskFilterSummaryChange={onTaskFilterSummaryChange}
             onTaskSelected={(params) => {
               console.debug('[Sidebar] reporting agent sidebar task selection analytics');
               void reportYdAnalyzer({
