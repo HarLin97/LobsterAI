@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
+import {
+  type ActivityHostExecuteActionInput,
+  type ActivityHostGetContextInput,
+  type ActivityHostGetSlotInput,
+  ActivityIpc,
+} from '../shared/activity/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
 import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
@@ -881,6 +887,14 @@ contextBridge.exposeInMainWorld('electron', {
     openSystemNotificationSettings: () =>
       ipcRenderer.invoke(AppIpcChannel.OpenSystemNotificationSettings),
   },
+  activity: {
+    getSlot: (input: ActivityHostGetSlotInput) =>
+      ipcRenderer.invoke(ActivityIpc.HostGetSlot, input),
+    getContext: (input: ActivityHostGetContextInput) =>
+      ipcRenderer.invoke(ActivityIpc.HostGetContext, input),
+    executeAction: (input: ActivityHostExecuteActionInput) =>
+      ipcRenderer.invoke(ActivityIpc.HostExecuteAction, input),
+  },
   appUpdate: {
     getState: () => ipcRenderer.invoke(AppUpdateIpc.GetState),
     checkNow: (options?: { manual?: boolean; userId?: string | null }) =>
@@ -1134,8 +1148,6 @@ contextBridge.exposeInMainWorld('electron', {
     getModels: () => ipcRenderer.invoke(AuthIpcChannel.GetModels),
     getPricingCatalog: () => ipcRenderer.invoke(AuthIpcChannel.GetPricingCatalog),
     getProfileSummary: () => ipcRenderer.invoke(AuthIpcChannel.GetProfileSummary),
-    claimCreditsFinalReward: (campaignCode: string) =>
-      ipcRenderer.invoke(AuthIpcChannel.ClaimCreditsFinalReward, { campaignCode }),
     getActiveClientBanner: () => ipcRenderer.invoke(AuthIpcChannel.GetActiveClientBanner),
     getActiveClientBanners: () => ipcRenderer.invoke(AuthIpcChannel.GetActiveClientBanners),
     getPendingCallback: () => ipcRenderer.invoke(AuthIpcChannel.GetPendingCallback),

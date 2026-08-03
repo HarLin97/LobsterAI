@@ -34,7 +34,7 @@ import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import SkillIcon from './icons/SkillIcon';
 import TrashIcon from './icons/TrashIcon';
 import LoginButton from './LoginButton';
-import SidebarAdBanner from './SidebarAdBanner';
+import SidebarExperienceSlot from './SidebarExperienceSlot';
 
 interface SidebarProps {
   onShowSettings: () => void;
@@ -645,7 +645,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         <div
           ref={agentScrollContainerRef}
           className={`scrollbar-hidden h-full overflow-y-auto px-2.5 ${
-            isSidebarBannerVisible && !isBatchMode ? 'pb-[104px]' : 'pb-10'
+            isSidebarBannerVisible && !isBatchMode ? 'pb-[128px]' : 'pb-10'
           }`}
           onScroll={handleAgentScroll}
         >
@@ -677,7 +677,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           />
         </div>
         {!isBatchMode && (
-          <SidebarAdBanner
+          <SidebarExperienceSlot
             hidden={hideAdBanner}
             onVisibleChange={setIsSidebarBannerVisible}
           />
@@ -757,7 +757,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <div className="flex items-center gap-1 pl-3 pr-2 pt-1">
             {!hideLogin && (
               <div className="flex-1 min-w-0">
-                <LoginButton contentLeftOffset={isCollapsed ? 0 : sidebarWidth} />
+                <LoginButton />
               </div>
             )}
             <button

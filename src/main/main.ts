@@ -186,6 +186,7 @@ import type {
   TelegramInstanceConfig,
   WecomInstanceConfig,
 } from './im/types';
+import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
@@ -361,6 +362,7 @@ import {
 import { collectReferencedEnvVarNames, pickReferencedSecretEnvVars } from './libs/openclawSecretEnv';
 import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
+import { sanitizeProfileSummary } from './libs/profileSummary';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { packageNodeServiceDeployment } from './libs/shareDeployment/nodeServiceDeploymentPackager';
@@ -5580,7 +5582,10 @@ if (!gotTheLock) {
 
   const syncOpenClawConfigIfAuthQuotaGateChanged = (previous: ReturnType<typeof getAuthQuotaGateState>) => {
     if (hasAuthQuotaGateStateChanged(previous)) {
-      syncOpenClawConfig({ reason: MEDIA_ENTITLEMENT_SYNC_REASON, restartGatewayIfRunning: true }).catch((error) => {
+      // The auth quota gate is enforced in the main process. Let config sync
+      // decide whether its rendered changes require a restart instead of
+      // forcing one before the post-login server-model metadata sync.
+      syncOpenClawConfig({ reason: MEDIA_ENTITLEMENT_SYNC_REASON, restartGatewayIfRunning: false }).catch((error) => {
         console.warn('[Auth] failed to sync OpenClaw config after quota gate changed:', error);
       });
       return true;
@@ -5684,6 +5689,20 @@ if (!gotTheLock) {
         };
       }
     }
+  });
+
+  registerActivityIpcHandlers({
+    ipcMain,
+    isDev,
+    isPackaged: app.isPackaged,
+    getMainWindow: () => mainWindow,
+    getServerBaseUrl: getServerApiBaseUrl,
+    getClientVersion: () => app.getVersion(),
+    platform: process.platform,
+    hasAuthTokens: () => getAuthTokens() !== null,
+    fetchPublic: (url, options) => net.fetch(url, options),
+    fetchWithAuth,
+    developmentServerBaseUrl: process.env.LOBSTER_ACTIVITY_SERVER_BASE_URL,
   });
 
   ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
@@ -5828,37 +5847,9 @@ if (!gotTheLock) {
       if (!resp.ok) return { success: false };
       const body = (await resp.json()) as { code: number; data: Record<string, unknown> };
       if (body.code !== 0 || !body.data) return { success: false };
-      return { success: true, data: body.data };
+      return { success: true, data: sanitizeProfileSummary(body.data) };
     } catch {
       return { success: false };
-    }
-  });
-
-  ipcMain.handle(AuthIpcChannel.ClaimCreditsFinalReward, async (_event, payload: { campaignCode?: string }) => {
-    try {
-      const campaignCode = payload?.campaignCode?.trim();
-      if (!campaignCode) return { success: false, error: 'Missing campaign code' };
-      const serverBaseUrl = getServerApiBaseUrl();
-      const url = appendKeyfromQuery(`${serverBaseUrl}/api/credits-reset-campaign/free-credits/claim`);
-      const resp = await fetchWithAuth(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ campaignCode }),
-      });
-      const body = (await resp.json()) as {
-        code: number;
-        message?: string;
-        data?: Record<string, unknown>;
-      };
-      if (!resp.ok || body.code !== 0 || !body.data) {
-        return { success: false, error: body.message || `Claim failed (${resp.status})` };
-      }
-      return { success: true, data: body.data };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Claim failed',
-      };
     }
   });
 
