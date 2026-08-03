@@ -4,6 +4,7 @@ import type {
   ActivityContextResponse,
   ActivityHostExecuteActionInput,
   ActivityHostGetContextInput,
+  ActivityHostGetSlotInput,
   ActivityResult,
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
@@ -478,66 +479,12 @@ interface CreditItem {
   expiresAt: string | null;
 }
 
-interface CreditsResetCampaignStatusData {
-  enabled: boolean;
-  active: boolean;
-  registeredEligible: boolean;
-  participated: boolean;
-  participationType: string | null;
-  identity: 'subscription' | 'free';
-  availableResetCount: number;
-  availablePromoSubscriptionCount: number;
-  promoPlanId: number;
-  promoAmount: number;
-  campaignCode: string;
-  startAt: string;
-  endAt: string;
-  registeredBefore: string;
-  reason: string;
-  resetEntitlements: CreditsResetEntitlementData[];
-  availableFreeCreditsRewardCount: number;
-  freeCreditsReward: FreeCreditsRewardData | null;
-  freeCreditsRewards?: FreeCreditsRewardData[];
-}
-
-interface CreditsResetEntitlementData {
-  campaignCode: string;
-  expiresAt: string;
-}
-
-interface FreeCreditsRewardData {
-  campaignCode: string;
-  credits: number;
-  claimDeadline: string;
-  validityDays: number;
-  presentation?: CampaignPresentationData | null;
-}
-
-interface CampaignPresentationData {
-  titleZh?: string | null;
-  titleEn?: string | null;
-  actionTextZh?: string | null;
-  actionTextEn?: string | null;
-  posterUrl?: string | null;
-  iconUrl?: string | null;
-}
-
-interface CreditsFinalRewardClaimData {
-  campaignCode: string;
-  creditsGranted: number;
-  claimedAt: string;
-  expiresAt: string;
-}
-
 interface ProfileSummaryData {
   id: number;
   nickname: string;
   avatarUrl: string | null;
   totalCreditsRemaining: number;
   creditItems: CreditItem[];
-  availableResetCount?: number;
-  availablePromoSubscriptionCount?: number;
-  creditsResetCampaign?: CreditsResetCampaignStatusData;
 }
 
 interface ClientBannerData {
@@ -1753,7 +1700,9 @@ interface IElectronAPI {
     }>;
   };
   activity: {
-    getSlot: () => Promise<ActivityResult<ActivitySlotResponse>>;
+    getSlot: (
+      input: ActivityHostGetSlotInput,
+    ) => Promise<ActivityResult<ActivitySlotResponse>>;
     getContext: (
       input: ActivityHostGetContextInput,
     ) => Promise<ActivityResult<ActivityContextResponse>>;
@@ -1831,7 +1780,6 @@ interface IElectronAPI {
       error?: string;
     }>;
     getProfileSummary: () => Promise<{ success: boolean; data?: ProfileSummaryData }>;
-    claimCreditsFinalReward: (campaignCode: string) => Promise<{ success: boolean; data?: CreditsFinalRewardClaimData; error?: string }>;
     getActiveClientBanner: () => Promise<{ success: boolean; data?: ClientBannerData | null }>;
     getActiveClientBanners: () => Promise<{ success: boolean; data?: ClientBannerData[] }>;
     getPendingCallback: () => Promise<string | null>;

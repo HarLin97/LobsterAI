@@ -37,59 +37,12 @@ export interface CreditItem {
   expiresAt: string | null;
 }
 
-export interface CreditsResetCampaignStatus {
-  enabled: boolean;
-  active: boolean;
-  registeredEligible: boolean;
-  participated: boolean;
-  participationType: string | null;
-  identity: 'subscription' | 'free';
-  availableResetCount: number;
-  availablePromoSubscriptionCount: number;
-  promoPlanId: number;
-  promoAmount: number;
-  campaignCode: string;
-  startAt: string;
-  endAt: string;
-  registeredBefore: string;
-  reason: string;
-  resetEntitlements: CreditsResetEntitlement[];
-  availableFreeCreditsRewardCount: number;
-  freeCreditsReward: FreeCreditsReward | null;
-  freeCreditsRewards?: FreeCreditsReward[];
-}
-
-export interface CreditsResetEntitlement {
-  campaignCode: string;
-  expiresAt: string;
-}
-
-export interface FreeCreditsReward {
-  campaignCode: string;
-  credits: number;
-  claimDeadline: string;
-  validityDays: number;
-  presentation?: CampaignPresentation | null;
-}
-
-export interface CampaignPresentation {
-  titleZh?: string | null;
-  titleEn?: string | null;
-  actionTextZh?: string | null;
-  actionTextEn?: string | null;
-  posterUrl?: string | null;
-  iconUrl?: string | null;
-}
-
 export interface ProfileSummary {
   id: number;
   nickname: string;
   avatarUrl: string | null;
   totalCreditsRemaining: number;
   creditItems: CreditItem[];
-  availableResetCount?: number;
-  availablePromoSubscriptionCount?: number;
-  creditsResetCampaign?: CreditsResetCampaignStatus;
 }
 
 interface AuthState {

@@ -382,6 +382,7 @@ import {
 import { collectReferencedEnvVarNames, pickReferencedSecretEnvVars } from './libs/openclawSecretEnv';
 import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
+import { sanitizeProfileSummary } from './libs/profileSummary';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { packageNodeServiceDeployment } from './libs/shareDeployment/nodeServiceDeploymentPackager';
@@ -6148,7 +6149,10 @@ if (!gotTheLock) {
 
   const syncOpenClawConfigIfAuthQuotaGateChanged = (previous: ReturnType<typeof getAuthQuotaGateState>) => {
     if (hasAuthQuotaGateStateChanged(previous)) {
-      syncOpenClawConfig({ reason: MEDIA_ENTITLEMENT_SYNC_REASON, restartGatewayIfRunning: true }).catch((error) => {
+      // The auth quota gate is enforced in the main process. Let config sync
+      // decide whether its rendered changes require a restart instead of
+      // forcing one before the post-login server-model metadata sync.
+      syncOpenClawConfig({ reason: MEDIA_ENTITLEMENT_SYNC_REASON, restartGatewayIfRunning: false }).catch((error) => {
         console.warn('[Auth] failed to sync OpenClaw config after quota gate changed:', error);
       });
       return true;
@@ -6557,14 +6561,20 @@ if (!gotTheLock) {
       const serverBaseUrl = getServerApiBaseUrl();
       const resp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
       if (authAccountGeneration !== requestAccountGeneration) return { success: false };
-      if (!resp.ok) return { success: false };
+      if (!resp.ok) {
+        console.warn(`[Auth] quota refresh rejected (HTTP ${resp.status})`);
+        return { success: false };
+      }
       const responseAuthState = captureAuthStateSnapshot();
       const body = (await resp.json()) as { code: number; data: Record<string, unknown> };
       if (!isCurrentAuthStateSnapshot(responseAuthState)) return { success: false };
       if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
         return { success: false };
       }
-      if (body.code !== 0 || !body.data) return { success: false };
+      if (body.code !== 0 || !body.data) {
+        console.warn(`[Auth] quota refresh returned invalid data (code ${body.code})`);
+        return { success: false };
+      }
       const previousQuotaGateState = getAuthQuotaGateState();
       const quota = normalizeQuota(body.data);
       syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
@@ -6575,7 +6585,8 @@ if (!gotTheLock) {
         quota,
         enterpriseContext: enterpriseContextResult.context,
       };
-    } catch {
+    } catch (error) {
+      console.warn('[Auth] quota refresh failed:', error);
       return { success: false };
     }
   });
@@ -6597,7 +6608,10 @@ if (!gotTheLock) {
       ) {
         return { success: false };
       }
-      if (!resp.ok) return { success: false };
+      if (!resp.ok) {
+        console.warn(`[Auth] profile summary refresh rejected (HTTP ${resp.status})`);
+        return { success: false };
+      }
       const responseAuthState = captureAuthStateSnapshot();
       const body = (await resp.json()) as { code: number; data: Record<string, unknown> };
       if (
@@ -6609,38 +6623,14 @@ if (!gotTheLock) {
       if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
         return { success: false };
       }
-      if (body.code !== 0 || !body.data) return { success: false };
-      return { success: true, data: body.data };
-    } catch {
-      return { success: false };
-    }
-  });
-
-  ipcMain.handle(AuthIpcChannel.ClaimCreditsFinalReward, async (_event, payload: { campaignCode?: string }) => {
-    try {
-      const campaignCode = payload?.campaignCode?.trim();
-      if (!campaignCode) return { success: false, error: 'Missing campaign code' };
-      const serverBaseUrl = getServerApiBaseUrl();
-      const url = appendKeyfromQuery(`${serverBaseUrl}/api/credits-reset-campaign/free-credits/claim`);
-      const resp = await fetchWithAuth(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ campaignCode }),
-      });
-      const body = (await resp.json()) as {
-        code: number;
-        message?: string;
-        data?: Record<string, unknown>;
-      };
-      if (!resp.ok || body.code !== 0 || !body.data) {
-        return { success: false, error: body.message || `Claim failed (${resp.status})` };
+      if (body.code !== 0 || !body.data) {
+        console.warn(`[Auth] profile summary refresh returned invalid data (code ${body.code})`);
+        return { success: false };
       }
-      return { success: true, data: body.data };
+      return { success: true, data: sanitizeProfileSummary(body.data) };
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Claim failed',
-      };
+      console.warn('[Auth] profile summary refresh failed:', error);
+      return { success: false };
     }
   });
 

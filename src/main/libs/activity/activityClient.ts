@@ -1,9 +1,9 @@
 import {
+  type ActivityAction,
   type ActivityActionResponse,
   type ActivityContextResponse,
   type ActivityResult,
   type ActivitySlotResponse,
-  DailyCheckInAction,
 } from '../../../shared/activity/constants';
 
 export const ActivityAuthMode = {
@@ -86,7 +86,7 @@ export function getActivitySlot(
   );
 }
 
-export function getDailyCheckInContext(
+export function getActivityContext(
   serverBaseUrl: string,
   activityFetch: ActivityFetch,
   activityCode: string,
@@ -101,12 +101,13 @@ export function getDailyCheckInContext(
   );
 }
 
-export function executeDailyCheckIn(
+export function executeActivityAction(
   serverBaseUrl: string,
   activityFetch: ActivityFetch,
   input: {
     activityCode: string;
     configRevision: number;
+    actionId: ActivityAction;
     idempotencyKey: string;
   },
 ): Promise<ActivityResult<ActivityActionResponse>> {
@@ -114,7 +115,7 @@ export function executeDailyCheckIn(
     serverBaseUrl,
     activityFetch,
     `/api/client-activities/${encodeURIComponent(input.activityCode)}/actions/`
-      + DailyCheckInAction.CheckIn,
+      + encodeURIComponent(input.actionId),
     ActivityAuthMode.Required,
     {
       method: 'POST',

@@ -757,7 +757,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <div className="flex items-center gap-1 pl-3 pr-2 pt-1">
             {!hideLogin && (
               <div className="flex-1 min-w-0">
-                <LoginButton contentLeftOffset={isCollapsed ? 0 : sidebarWidth} />
+                <LoginButton />
               </div>
             )}
             <button

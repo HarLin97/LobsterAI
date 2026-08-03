@@ -1,4 +1,4 @@
-import { ArrowPathIcon, ExclamationTriangleIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ExclamationTriangleIcon, GiftIcon } from '@heroicons/react/24/outline';
 import type { CoworkBrowserAnnotationMessageBatch } from '@shared/cowork/browserAnnotations';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
@@ -42,7 +42,6 @@ import {
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
 import { toOpenClawModelRef } from '../../utils/openclawModelRef';
-import CreditsResetCampaignFloat from '../CreditsResetCampaignFloat';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import { PromptPanel, QuickActionBar } from '../quick-actions';
@@ -50,6 +49,10 @@ import type { SettingsOpenOptions } from '../Settings';
 import HomeSkinEmblem from '../skin/HomeSkinEmblem';
 import SkinAmbientEffects from '../skin/SkinAmbientEffects';
 import SkinBackdrop, { SkinBackdropVariant } from '../skin/SkinBackdrop';
+import {
+  openStartupCreditCampaign,
+  useStartupCreditCampaignEntry,
+} from '../startupCreditCampaignBridge';
 import { useAgentSelectedModel } from './agentModelSelection';
 import { CoworkUiEvent } from './constants';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
@@ -146,6 +149,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const quickActions = useSelector((state: RootState) => state.quickAction.actions);
   const selectedActionId = useSelector((state: RootState) => state.quickAction.selectedActionId);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const startupCreditEntry = useStartupCreditCampaignEntry();
   const agents = useSelector((state: RootState) => state.agent.agents);
   const currentAgent = agents.find((agent) => agent.id === currentAgentId);
   const shouldPresentConversation = Boolean(currentSession || sessionNavigationTargetId);
@@ -804,12 +808,18 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         )}
       </div>
       <div className="non-draggable flex items-center">
-        <div className="flex items-center gap-1.5 mr-2 px-2.5 py-1">
-          <ShieldCheckIcon className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
-          <span className="text-xs text-green-600 dark:text-green-400 whitespace-nowrap">
-            {i18nService.t('lobsterGuardEnabled')}
-          </span>
-        </div>
+        {startupCreditEntry.available && (
+          <button
+            type="button"
+            onClick={() => openStartupCreditCampaign()}
+            className="mr-2 inline-flex h-8 max-w-[240px] items-center gap-1.5 rounded-full border border-border bg-surface/90 px-3 text-xs font-medium text-foreground shadow-subtle transition-colors hover:bg-surface-raised"
+          >
+            <GiftIcon className="h-4 w-4 shrink-0 text-primary" />
+            <span className="truncate">
+              {startupCreditEntry.label || i18nService.t('startupCreditMenuEntry')}
+            </span>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -969,7 +979,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                     />
                   </div>
                 )}
-                <CreditsResetCampaignFloat />
               </div>
 
               <div aria-hidden="true" className="w-full min-h-[24px] flex-[3_0_0px]" />

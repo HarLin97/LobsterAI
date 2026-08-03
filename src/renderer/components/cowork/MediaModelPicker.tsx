@@ -710,7 +710,12 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
         if (!isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)) return;
         const saved = normalizeSavedMediaSelection(rawSaved);
         if (!isSameSavedMediaSelection(rawSaved, saved)) {
-          await localStore.setItem(selectionStoreKey, saved);
+          try {
+            await localStore.setItem(selectionStoreKey, saved);
+          } catch (error) {
+            console.warn('[MediaModelPicker] failed to normalize saved media selection:', error);
+          }
+          if (!isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)) return;
         }
         const imageEntry = saved?.image;
         const videoEntry = saved?.video;
@@ -798,7 +803,11 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
         const rawSaved = await loadSavedMediaSelection(restoreOwnerAccountKey);
         const saved = normalizeSavedMediaSelection(rawSaved);
         if (!isSameSavedMediaSelection(rawSaved, saved)) {
-          await localStore.setItem(selectionStoreKey, saved);
+          try {
+            await localStore.setItem(selectionStoreKey, saved);
+          } catch (error) {
+            console.warn('[MediaModelPicker] failed to normalize saved media selection:', error);
+          }
         }
         if (
           cancelled
@@ -851,52 +860,57 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     const selectionOwnerAccountKey = ownerAccountKey;
     const selectionGeneration = accountGeneration;
     const selectionStoreKey = getMediaSelectionStoreKey(selectionOwnerAccountKey);
-    const saved = normalizeSavedMediaSelection(
-      await loadSavedMediaSelection(selectionOwnerAccountKey),
-    );
-    if (!isAccountScopeCurrent(selectionOwnerAccountKey, selectionGeneration)) return;
-    const currentModelId = mode === 'image'
-      ? canonicalizeMediaModelId(selection?.imageModelId ?? (selection?.mode === 'image' ? selection?.modelId : undefined))
-      : canonicalizeMediaModelId(selection?.videoModelId ?? (selection?.mode === 'video' ? selection?.modelId : undefined));
-    const isDeselect = model && currentModelId === model.modelId;
-
-    if (isDeselect) {
-      delete saved[mode as 'image' | 'video'];
-    } else if (model) {
-      saved[mode as 'image' | 'video'] = { modelId: model.modelId, modelName: model.displayName };
-    }
     try {
-      await localStore.setItem(selectionStoreKey, saved);
+      const saved = normalizeSavedMediaSelection(
+        await loadSavedMediaSelection(selectionOwnerAccountKey),
+      );
+      if (!isAccountScopeCurrent(selectionOwnerAccountKey, selectionGeneration)) return;
+      const currentModelId = mode === 'image'
+        ? canonicalizeMediaModelId(selection?.imageModelId ?? (selection?.mode === 'image' ? selection?.modelId : undefined))
+        : canonicalizeMediaModelId(selection?.videoModelId ?? (selection?.mode === 'video' ? selection?.modelId : undefined));
+      const isDeselect = model && currentModelId === model.modelId;
+
+      if (isDeselect) {
+        delete saved[mode as 'image' | 'video'];
+      } else if (model) {
+        saved[mode as 'image' | 'video'] = { modelId: model.modelId, modelName: model.displayName };
+      }
+      try {
+        await localStore.setItem(selectionStoreKey, saved);
+      } catch (error) {
+        console.warn('[MediaModelPicker] failed to save media selection:', error);
+      }
+      if (!isAccountScopeCurrent(selectionOwnerAccountKey, selectionGeneration)) return;
+
+      const hasImage = !!saved.image;
+      const hasVideo = !!saved.video;
+
+      if (hasImage && hasVideo) {
+        dispatch(setMediaSelection({
+          draftKey,
+          selection: {
+            mode: 'auto',
+            modelId: saved[mode as 'image' | 'video']?.modelId,
+            modelName: saved[mode as 'image' | 'video']?.modelName,
+            imageModelId: saved.image!.modelId,
+            videoModelId: saved.video!.modelId,
+          },
+        }));
+      } else if (hasImage) {
+        dispatch(setMediaSelection({
+          draftKey,
+          selection: { mode: 'image', modelId: saved.image!.modelId, modelName: saved.image!.modelName },
+        }));
+      } else if (hasVideo) {
+        dispatch(setMediaSelection({
+          draftKey,
+          selection: { mode: 'video', modelId: saved.video!.modelId, modelName: saved.video!.modelName },
+        }));
+      } else {
+        dispatch(setMediaSelection({ draftKey, selection: { mode: 'none' } }));
+      }
     } catch (error) {
-      console.warn('[MediaModelPicker] failed to save media selection:', error);
-    }
-
-    const hasImage = !!saved.image;
-    const hasVideo = !!saved.video;
-
-    if (hasImage && hasVideo) {
-      dispatch(setMediaSelection({
-        draftKey,
-        selection: {
-          mode: 'auto',
-          modelId: saved[mode as 'image' | 'video']?.modelId,
-          modelName: saved[mode as 'image' | 'video']?.modelName,
-          imageModelId: saved.image!.modelId,
-          videoModelId: saved.video!.modelId,
-        },
-      }));
-    } else if (hasImage) {
-      dispatch(setMediaSelection({
-        draftKey,
-        selection: { mode: 'image', modelId: saved.image!.modelId, modelName: saved.image!.modelName },
-      }));
-    } else if (hasVideo) {
-      dispatch(setMediaSelection({
-        draftKey,
-        selection: { mode: 'video', modelId: saved.video!.modelId, modelName: saved.video!.modelName },
-      }));
-    } else {
-      dispatch(setMediaSelection({ draftKey, selection: { mode: 'none' } }));
+      console.warn('[MediaModelPicker] failed to load saved media selection:', error);
     }
   };
 

@@ -659,19 +659,12 @@ class AuthService {
       }
       if (result.success && result.data) {
         store.dispatch(setProfileSummary(result.data));
+      } else {
+        writeAuthRendererLog('debug', 'profile summary refresh returned no data');
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      writeAuthRendererLog('warn', 'profile summary refresh failed', error);
     }
-  }
-
-  async claimCreditsFinalReward(campaignCode: string) {
-    const result = await window.electron.auth.claimCreditsFinalReward(campaignCode);
-    if (!result.success || !result.data) {
-      throw new Error(result.error || 'Claim failed');
-    }
-    await Promise.all([this.refreshQuota(), this.fetchProfileSummary()]);
-    return result.data;
   }
 
   /**

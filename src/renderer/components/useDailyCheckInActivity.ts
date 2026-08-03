@@ -1,11 +1,12 @@
 import {
-  type ActivityActionResponse,
-  type ActivityContextResponse,
-  type ActivityDescriptor,
+  ActivityPlacement,
   type ActivityResult,
   ActivityServerErrorCode,
   ActivitySlotState,
   DailyCheckInAction,
+  type DailyCheckInActionResponse,
+  type DailyCheckInContextResponse,
+  type DailyCheckInDescriptor,
 } from '@shared/activity/constants';
 import {
   useCallback,
@@ -19,6 +20,10 @@ import { authService } from '../services/auth';
 import { i18nService } from '../services/i18n';
 import type { RootState } from '../store';
 import {
+  ActivityRendererLogSource,
+  logActivityRendererDiagnostic,
+} from './activityDiagnostics';
+import {
   canClaimDailyCheckIn,
   isActiveDailyCheckInContext,
   isDailyCheckInContext,
@@ -27,9 +32,20 @@ import {
 
 const DAILY_CHECK_IN_UPDATED_EVENT = 'lobster:daily-check-in-updated';
 
+const logDailyCheckInDiagnostic = (
+  level: 'debug' | 'warn',
+  message: string,
+  error?: unknown,
+): void => logActivityRendererDiagnostic(
+  ActivityRendererLogSource.DailyCheckIn,
+  level,
+  message,
+  error,
+);
+
 export interface DailyCheckInSnapshot {
-  descriptor: ActivityDescriptor;
-  context: ActivityContextResponse;
+  descriptor: DailyCheckInDescriptor;
+  context: DailyCheckInContextResponse;
 }
 
 export interface UseDailyCheckInActivityResult {
@@ -37,7 +53,7 @@ export interface UseDailyCheckInActivityResult {
   loading: boolean;
   claiming: boolean;
   refresh: () => Promise<void>;
-  claim: () => Promise<ActivityActionResponse>;
+  claim: () => Promise<DailyCheckInActionResponse>;
 }
 
 class DailyCheckInRequestError extends Error {
@@ -93,10 +109,19 @@ export function useDailyCheckInActivity(
     }
     if (isCurrentRequest()) setLoading(true);
     try {
-      const slot = await window.electron.activity.getSlot();
+      const slot = await window.electron.activity.getSlot({
+        placement: ActivityPlacement.DesktopSidebar,
+      });
       if (!isCurrentRequest()) return;
-      if (!slot.success
-          || !slot.data
+      if (!slot.success) {
+        logDailyCheckInDiagnostic(
+          'warn',
+          `slot request failed; code=${slot.code ?? 'unknown'}; httpStatus=${slot.httpStatus ?? 'unknown'}`,
+        );
+        setSnapshot(null);
+        return;
+      }
+      if (!slot.data
           || slot.data.slotState !== ActivitySlotState.Available
           || !isDailyCheckInDescriptor(slot.data.activity)) {
         setSnapshot(null);
@@ -105,6 +130,7 @@ export function useDailyCheckInActivity(
 
       const descriptor = slot.data.activity;
       const context = await window.electron.activity.getContext({
+        placement: ActivityPlacement.DesktopSidebar,
         activityCode: descriptor.activityCode,
         configRevision: descriptor.configRevision,
       });
@@ -112,9 +138,14 @@ export function useDailyCheckInActivity(
       if (!context.success) {
         if (retryRevision
             && context.code === ActivityServerErrorCode.RevisionMismatch) {
+          logDailyCheckInDiagnostic('debug', 'context revision changed; retrying slot lookup');
           await load(false);
           return;
         }
+        logDailyCheckInDiagnostic(
+          'warn',
+          `context request failed; code=${context.code ?? 'unknown'}; httpStatus=${context.httpStatus ?? 'unknown'}`,
+        );
         setSnapshot(null);
         return;
       }
@@ -127,7 +158,7 @@ export function useDailyCheckInActivity(
       setSnapshot({ descriptor, context: context.data });
     } catch (error) {
       if (isCurrentRequest()) {
-        console.warn('[DailyCheckIn] failed to load activity:', error);
+        logDailyCheckInDiagnostic('warn', 'activity load IPC failed', error);
         setSnapshot(null);
       }
     } finally {
@@ -146,7 +177,7 @@ export function useDailyCheckInActivity(
     return () => window.removeEventListener(DAILY_CHECK_IN_UPDATED_EVENT, refresh);
   }, [enabled, load]);
 
-  const claim = useCallback(async (): Promise<ActivityActionResponse> => {
+  const claim = useCallback(async (): Promise<DailyCheckInActionResponse> => {
     if (!snapshot) {
       throw new Error(i18nService.t('dailyCheckInClaimFailed'));
     }
@@ -160,11 +191,17 @@ export function useDailyCheckInActivity(
     if (mountedRef.current) setClaiming(true);
     try {
       const result = await window.electron.activity.executeAction({
+        placement: ActivityPlacement.DesktopSidebar,
         activityCode: snapshot.descriptor.activityCode,
         configRevision: snapshot.descriptor.configRevision,
+        actionId: DailyCheckInAction.CheckIn,
         idempotencyKey: createIdempotencyKey(),
       });
       if (!result.success) {
+        logDailyCheckInDiagnostic(
+          'warn',
+          `claim request failed; code=${result.code ?? 'unknown'}; httpStatus=${result.httpStatus ?? 'unknown'}`,
+        );
         if (result.code === ActivityServerErrorCode.AlreadyClaimed) {
           await load();
         } else if (result.code === ActivityServerErrorCode.RevisionMismatch) {
@@ -185,6 +222,7 @@ export function useDailyCheckInActivity(
           || result.data.result.actionId !== DailyCheckInAction.CheckIn
           || !Number.isFinite(result.data.result.creditsGranted)
           || result.data.result.creditsGranted < 0) {
+        logDailyCheckInDiagnostic('warn', 'claim response failed runtime validation');
         await load();
         throw new Error(i18nService.t('dailyCheckInClaimFailed'));
       }
@@ -196,8 +234,17 @@ export function useDailyCheckInActivity(
         });
       }
       window.dispatchEvent(new Event(DAILY_CHECK_IN_UPDATED_EVENT));
+      logDailyCheckInDiagnostic(
+        'debug',
+        `claim completed; replayed=${result.data.replayed}; revision=${snapshot.descriptor.configRevision}`,
+      );
       void authService.fetchProfileSummary();
-      return result.data;
+      return result.data as DailyCheckInActionResponse;
+    } catch (error) {
+      if (!(error instanceof DailyCheckInRequestError)) {
+        logDailyCheckInDiagnostic('warn', 'claim IPC failed', error);
+      }
+      throw error;
     } finally {
       claimingRef.current = false;
       if (mountedRef.current) setClaiming(false);

@@ -2,7 +2,7 @@ import {
   CheckCircleIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
-import type { ActivityDescriptor } from '@shared/activity/constants';
+import type { DailyCheckInDescriptor } from '@shared/activity/constants';
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -38,7 +38,7 @@ const GiftIcon: React.FC<{ className?: string }> = ({ className = '' }) => (
 );
 
 interface DailyCheckInLoginModalProps {
-  descriptor: ActivityDescriptor;
+  descriptor: DailyCheckInDescriptor;
   onClose: () => void;
 }
 

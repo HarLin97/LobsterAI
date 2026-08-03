@@ -1,11 +1,14 @@
 import { describe, expect, test, vi } from 'vitest';
 
-import { ActivityPlacement } from '../../../shared/activity/constants';
+import {
+  ActivityPlacement,
+  DailyCheckInAction,
+} from '../../../shared/activity/constants';
 import {
   ActivityAuthMode,
-  executeDailyCheckIn,
+  executeActivityAction,
+  getActivityContext,
   getActivitySlot,
-  getDailyCheckInContext,
 } from './activityClient';
 
 const successResponse = (data: unknown): Response => new Response(
@@ -44,7 +47,7 @@ describe('activityClient', () => {
       activityCode: 'login-seven-days',
     }));
 
-    await getDailyCheckInContext(
+    await getActivityContext(
       'https://server.example',
       activityFetch,
       'login-seven-days',
@@ -65,9 +68,10 @@ describe('activityClient', () => {
       context: {},
     }));
 
-    await executeDailyCheckIn('https://server.example', activityFetch, {
+    await executeActivityAction('https://server.example', activityFetch, {
       activityCode: 'login-seven-days',
       configRevision: 3,
+      actionId: DailyCheckInAction.CheckIn,
       idempotencyKey: 'request-1',
     });
 
