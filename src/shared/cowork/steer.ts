@@ -39,8 +39,6 @@ export interface CoworkSteerResponse {
 export interface CoworkPendingSteer {
   id: string;
   sessionId: string;
-  ownerAccountKey: string | null;
-  accountGeneration: number;
   text: string;
   attachments?: CoworkSteerAttachment[];
   imageAttachments?: CoworkImageAttachmentPayload[];

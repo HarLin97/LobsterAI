@@ -6,17 +6,10 @@ import {
 import { ProviderName } from '@shared/providers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import {
-  EnterpriseMemberRole,
-  EnterpriseQuotaReason,
-} from '../../shared/enterpriseAccount/constants';
-import { setEnterpriseAccountContext } from '../features/enterpriseAccount/enterpriseAccountSlice';
 import { store } from '../store';
-import { setLoggedIn, setLoggedOut } from '../store/slices/authSlice';
-import { clearServerModels } from '../store/slices/modelSlice';
+import { setLoggedIn } from '../store/slices/authSlice';
 import {
   authService,
-  isAuthAccountRequestCurrent,
   mapAvailableServerModelsToModels,
   mapPricingCatalogTextModelsToServerModels,
   mapPricingCatalogToPublicServerModels,
@@ -24,9 +17,6 @@ import {
 
 afterEach(() => {
   authService.destroy();
-  store.dispatch(setLoggedOut());
-  store.dispatch(clearServerModels());
-  store.dispatch(setEnterpriseAccountContext(null));
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -125,67 +115,6 @@ describe('authenticated server model mapping', () => {
   });
 });
 
-describe('auth-scoped renderer requests', () => {
-  test('rejects late model, profile, and public-catalog responses after auth changes', () => {
-    const personalA = {
-      isLoggedIn: true,
-      ownerAccountKey: 'personal:6',
-      accountGeneration: 3,
-    };
-
-    expect(isAuthAccountRequestCurrent(personalA, { ...personalA })).toBe(true);
-    expect(isAuthAccountRequestCurrent(personalA, {
-      isLoggedIn: true,
-      ownerAccountKey: 'enterprise:6:1001',
-      accountGeneration: 4,
-    })).toBe(false);
-    expect(isAuthAccountRequestCurrent({
-      isLoggedIn: false,
-      ownerAccountKey: null,
-      accountGeneration: 4,
-    }, personalA)).toBe(false);
-  });
-
-  test('clears the previous renderer account when a committed exchange lacks a stable owner', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.stubGlobal('window', {
-      electron: {
-        auth: {
-          exchange: vi.fn().mockResolvedValue({
-            success: true,
-            user: {
-              yid: 'enterprise-user',
-              accountMode: 'enterprise',
-              nickname: 'Enterprise User',
-              avatarUrl: null,
-            },
-            quota: null,
-            enterpriseContext: null,
-          }),
-        },
-        log: { fromRenderer: vi.fn() },
-      },
-    });
-    store.dispatch(setLoggedIn({
-      user: {
-        yid: 'previous-user',
-        nickname: 'Previous User',
-        avatarUrl: null,
-      },
-      quota: null,
-      ownerAccountKey: 'personal:previous-user',
-    }));
-
-    await expect(authService.handleCallback('auth-code')).resolves.toBe(false);
-    expect(store.getState().auth).toMatchObject({
-      isLoggedIn: false,
-      ownerAccountKey: null,
-      user: null,
-      quota: null,
-    });
-  });
-});
-
 describe('login diagnostics', () => {
   test('persists renderer lifecycle logs without including the login URL', async () => {
     const fromRenderer = vi.fn();
@@ -249,198 +178,6 @@ describe('login diagnostics', () => {
   });
 });
 
-describe('quota checks', () => {
-  test('returns a failure without issuing IPC requests when logged out', async () => {
-    const getQuota = vi.fn();
-    vi.stubGlobal('window', {
-      electron: {
-        auth: { getQuota },
-        log: { fromRenderer: vi.fn() },
-      },
-    });
-
-    await expect(authService.checkQuota()).resolves.toEqual({
-      success: false,
-      enterpriseQuotaAvailable: false,
-    });
-    expect(getQuota).not.toHaveBeenCalled();
-  });
-
-  test('refreshes quota, profile summary, and server model accessibility together', async () => {
-    const getQuota = vi.fn().mockResolvedValue({
-      success: true,
-      quota: {
-        planName: 'Enterprise',
-        subscriptionStatus: 'active',
-        creditsLimit: 100,
-        creditsUsed: 10,
-        creditsRemaining: 90,
-      },
-      enterpriseContext: null,
-    });
-    const getProfileSummary = vi.fn().mockResolvedValue({
-      success: true,
-      data: {
-        id: 1,
-        nickname: 'Tester',
-        avatarUrl: null,
-        totalCreditsRemaining: 90,
-        creditItems: [],
-      },
-    });
-    const getModels = vi.fn().mockResolvedValue({
-      success: true,
-      models: [{
-        modelId: 'qwen3.7-plus',
-        modelName: 'Qwen3.7 Plus',
-        provider: 'LobsterAI',
-        apiFormat: 'openai',
-        accessible: true,
-      }],
-    });
-    vi.stubGlobal('window', {
-      electron: {
-        auth: {
-          getQuota,
-          getProfileSummary,
-          getModels,
-        },
-      },
-    });
-    store.dispatch(setLoggedIn({
-      user: {
-        yid: 'tester',
-        nickname: 'Tester',
-        avatarUrl: null,
-      },
-      quota: null,
-      ownerAccountKey: 'personal:tester',
-    }));
-
-    await expect(authService.checkQuota()).resolves.toEqual({
-      success: true,
-      enterpriseQuotaAvailable: true,
-    });
-
-    expect(getQuota).toHaveBeenCalledOnce();
-    expect(getProfileSummary).toHaveBeenCalledOnce();
-    expect(getModels).toHaveBeenCalledOnce();
-    expect(store.getState().auth.quota?.creditsRemaining).toBe(90);
-    expect(store.getState().model.availableModels).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: 'qwen3.7-plus',
-        providerKey: ProviderName.LobsteraiServer,
-        accessible: true,
-      }),
-    ]));
-  });
-
-  test('shares concurrent quota checks to avoid duplicate IPC requests', async () => {
-    let resolveQuota: ((value: {
-      success: boolean;
-      quota: null;
-      enterpriseContext: null;
-    }) => void) | undefined;
-    const quotaResponse = new Promise<{
-      success: boolean;
-      quota: null;
-      enterpriseContext: null;
-    }>((resolve) => {
-      resolveQuota = resolve;
-    });
-    const getQuota = vi.fn().mockReturnValue(quotaResponse);
-    const getProfileSummary = vi.fn().mockResolvedValue({ success: true, data: null });
-    const getModels = vi.fn().mockResolvedValue({ success: true, models: [] });
-    vi.stubGlobal('window', {
-      electron: {
-        auth: {
-          getQuota,
-          getProfileSummary,
-          getModels,
-        },
-        log: { fromRenderer: vi.fn() },
-      },
-    });
-    store.dispatch(setLoggedIn({
-      user: {
-        yid: 'tester',
-        nickname: 'Tester',
-        avatarUrl: null,
-      },
-      quota: null,
-      ownerAccountKey: 'personal:tester',
-    }));
-
-    const firstCheck = authService.checkQuota();
-    const secondCheck = authService.checkQuota();
-    resolveQuota?.({
-      success: true,
-      quota: null,
-      enterpriseContext: null,
-    });
-
-    await expect(Promise.all([firstCheck, secondCheck])).resolves.toEqual([
-      { success: true, enterpriseQuotaAvailable: true },
-      { success: true, enterpriseQuotaAvailable: true },
-    ]);
-    expect(getQuota).toHaveBeenCalledOnce();
-    expect(getProfileSummary).toHaveBeenCalledOnce();
-    expect(getModels).toHaveBeenCalledOnce();
-  });
-
-  test('reports the refreshed enterprise quota as unavailable', async () => {
-    const getQuota = vi.fn().mockResolvedValue({
-      success: true,
-      quota: null,
-      enterpriseContext: {
-        accountMode: 'enterprise',
-        enterpriseId: 1001,
-        memberId: 2001,
-        enterpriseName: 'Example enterprise',
-        role: EnterpriseMemberRole.Member,
-        permissions: {
-          manageEnterprise: false,
-          adjustMemberQuota: false,
-          rechargeEnterprise: false,
-        },
-        memberQuota: { limit: 100, used: 100, remaining: 0 },
-        enterprisePool: { total: 1000, used: 400, remaining: 600 },
-        quotaStatus: {
-          available: false,
-          reason: EnterpriseQuotaReason.MemberMonthlyQuotaExhausted,
-          errorCode: 41606,
-        },
-      },
-    });
-    vi.stubGlobal('window', {
-      electron: {
-        auth: {
-          getQuota,
-          getProfileSummary: vi.fn(),
-          getModels: vi.fn().mockResolvedValue({ success: true, models: [] }),
-        },
-        log: { fromRenderer: vi.fn() },
-      },
-    });
-    store.dispatch(setLoggedIn({
-      user: {
-        yid: 'tester',
-        nickname: 'Tester',
-        avatarUrl: null,
-      },
-      quota: null,
-      ownerAccountKey: 'enterprise:tester:1001',
-    }));
-
-    await expect(authService.checkQuota()).resolves.toEqual({
-      success: true,
-      enterpriseQuotaAvailable: false,
-    });
-    expect(store.getState().enterpriseAccount.context?.quotaStatus.reason)
-      .toBe(EnterpriseQuotaReason.MemberMonthlyQuotaExhausted);
-  });
-});
-
 describe('auth state restoration', () => {
   const user = {
     yid: 'user@example.com',
@@ -456,11 +193,7 @@ describe('auth state restoration', () => {
   };
 
   test('preserves the current login snapshot for a temporary verification failure', async () => {
-    store.dispatch(setLoggedIn({
-      user,
-      quota,
-      ownerAccountKey: 'personal:user@example.com',
-    }));
+    store.dispatch(setLoggedIn({ user, quota }));
     vi.stubGlobal('window', {
       electron: {
         auth: {
@@ -486,11 +219,7 @@ describe('auth state restoration', () => {
   });
 
   test('clears the current login snapshot for terminal expiration', async () => {
-    store.dispatch(setLoggedIn({
-      user,
-      quota,
-      ownerAccountKey: 'personal:user@example.com',
-    }));
+    store.dispatch(setLoggedIn({ user, quota }));
     vi.stubGlobal('window', {
       electron: {
         auth: {
@@ -520,11 +249,7 @@ describe('auth state restoration', () => {
 
   test('shows a re-login toast when the main process reports terminal expiration', async () => {
     const dispatchEvent = vi.fn();
-    store.dispatch(setLoggedIn({
-      user,
-      quota,
-      ownerAccountKey: 'personal:user@example.com',
-    }));
+    store.dispatch(setLoggedIn({ user, quota }));
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubGlobal('window', {
       dispatchEvent,
@@ -551,139 +276,5 @@ describe('auth state restoration', () => {
     const toastEvent = dispatchEvent.mock.calls[0][0] as CustomEvent<string>;
     expect(toastEvent.type).toBe('app:showToast');
     expect(toastEvent.detail).toContain('登录状态已过期');
-  });
-
-  test('discards a stale restore response after the renderer account changes', async () => {
-    let resolveUser!: (value: {
-      success: true;
-      user: typeof user;
-      quota: typeof quota;
-      enterpriseContext: null;
-    }) => void;
-    const getUser = vi.fn(() => new Promise<{
-      success: true;
-      user: typeof user;
-      quota: typeof quota;
-      enterpriseContext: null;
-    }>(resolve => {
-      resolveUser = resolve;
-    }));
-    vi.stubGlobal('window', {
-      electron: {
-        auth: { getUser },
-        log: { fromRenderer: vi.fn() },
-      },
-    });
-    store.dispatch(setLoggedIn({
-      user,
-      quota,
-      ownerAccountKey: 'personal:user@example.com',
-    }));
-
-    const refresh = authService.refreshAuthState({ clearOnFailure: true });
-    const nextUser = {
-      ...user,
-      yid: 'next@example.com',
-      nickname: 'Next User',
-    };
-    store.dispatch(setLoggedIn({
-      user: nextUser,
-      quota: null,
-      ownerAccountKey: 'personal:next@example.com',
-    }));
-    resolveUser({
-      success: true,
-      user,
-      quota,
-      enterpriseContext: null,
-    });
-
-    await expect(refresh).resolves.toMatchObject({
-      isLoggedIn: true,
-      user: nextUser,
-      quota: null,
-    });
-    expect(store.getState().auth.ownerAccountKey).toBe('personal:next@example.com');
-  });
-
-  test('does not apply a stale enterprise context after the renderer account changes', async () => {
-    let resolveContext!: (value: {
-      success: true;
-      context: {
-        enterpriseId: number;
-        enterpriseName: string;
-        role: EnterpriseMemberRole;
-        quotaStatus: {
-          available: true;
-          reason: null;
-        };
-      };
-    }) => void;
-    const getContext = vi.fn(() => new Promise<{
-      success: true;
-      context: {
-        enterpriseId: number;
-        enterpriseName: string;
-        role: EnterpriseMemberRole;
-        quotaStatus: {
-          available: true;
-          reason: null;
-        };
-      };
-    }>(resolve => {
-      resolveContext = resolve;
-    }));
-    vi.stubGlobal('window', {
-      electron: {
-        auth: {
-          getUser: vi.fn().mockResolvedValue({
-            success: true,
-            user,
-            quota,
-          }),
-        },
-        enterpriseAccount: { getContext },
-        log: { fromRenderer: vi.fn() },
-      },
-    });
-    store.dispatch(setLoggedIn({
-      user,
-      quota,
-      ownerAccountKey: 'personal:user@example.com',
-    }));
-
-    const refresh = authService.refreshAuthState({ clearOnFailure: true });
-    await vi.waitFor(() => expect(getContext).toHaveBeenCalledOnce());
-    const nextUser = {
-      ...user,
-      yid: 'next@example.com',
-      nickname: 'Next User',
-    };
-    store.dispatch(setLoggedIn({
-      user: nextUser,
-      quota: null,
-      ownerAccountKey: 'personal:next@example.com',
-    }));
-    resolveContext({
-      success: true,
-      context: {
-        enterpriseId: 1001,
-        enterpriseName: 'Stale Enterprise',
-        role: EnterpriseMemberRole.Member,
-        quotaStatus: {
-          available: true,
-          reason: null,
-        },
-      },
-    });
-
-    await expect(refresh).resolves.toMatchObject({
-      isLoggedIn: true,
-      user: nextUser,
-      quota: null,
-      enterpriseContext: null,
-    });
-    expect(store.getState().enterpriseAccount.context).toBeNull();
-    expect(store.getState().auth.ownerAccountKey).toBe('personal:next@example.com');
   });
 });

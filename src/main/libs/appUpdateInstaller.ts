@@ -274,12 +274,7 @@ export async function downloadUpdate(
     }
     throw error;
   } finally {
-    // A cancelled flow can be replaced before its rejected pipeline reaches
-    // this finally block. Do not let the stale flow clear the replacement's
-    // controller, otherwise the new download can no longer be cancelled.
-    if (activeDownloadController === controller) {
-      activeDownloadController = null;
-    }
+    activeDownloadController = null;
   }
 }
 

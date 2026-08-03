@@ -20,10 +20,6 @@ import { authService } from '../services/auth';
 import { i18nService } from '../services/i18n';
 import type { RootState } from '../store';
 import {
-  ActivityRendererLogSource,
-  logActivityRendererDiagnostic,
-} from './activityDiagnostics';
-import {
   canClaimDailyCheckIn,
   isActiveDailyCheckInContext,
   isDailyCheckInContext,
@@ -31,17 +27,6 @@ import {
 } from './dailyCheckInActivityState';
 
 const DAILY_CHECK_IN_UPDATED_EVENT = 'lobster:daily-check-in-updated';
-
-const logDailyCheckInDiagnostic = (
-  level: 'debug' | 'warn',
-  message: string,
-  error?: unknown,
-): void => logActivityRendererDiagnostic(
-  ActivityRendererLogSource.DailyCheckIn,
-  level,
-  message,
-  error,
-);
 
 export interface DailyCheckInSnapshot {
   descriptor: DailyCheckInDescriptor;
@@ -113,15 +98,8 @@ export function useDailyCheckInActivity(
         placement: ActivityPlacement.DesktopSidebar,
       });
       if (!isCurrentRequest()) return;
-      if (!slot.success) {
-        logDailyCheckInDiagnostic(
-          'warn',
-          `slot request failed; code=${slot.code ?? 'unknown'}; httpStatus=${slot.httpStatus ?? 'unknown'}`,
-        );
-        setSnapshot(null);
-        return;
-      }
-      if (!slot.data
+      if (!slot.success
+          || !slot.data
           || slot.data.slotState !== ActivitySlotState.Available
           || !isDailyCheckInDescriptor(slot.data.activity)) {
         setSnapshot(null);
@@ -138,14 +116,9 @@ export function useDailyCheckInActivity(
       if (!context.success) {
         if (retryRevision
             && context.code === ActivityServerErrorCode.RevisionMismatch) {
-          logDailyCheckInDiagnostic('debug', 'context revision changed; retrying slot lookup');
           await load(false);
           return;
         }
-        logDailyCheckInDiagnostic(
-          'warn',
-          `context request failed; code=${context.code ?? 'unknown'}; httpStatus=${context.httpStatus ?? 'unknown'}`,
-        );
         setSnapshot(null);
         return;
       }
@@ -158,7 +131,7 @@ export function useDailyCheckInActivity(
       setSnapshot({ descriptor, context: context.data });
     } catch (error) {
       if (isCurrentRequest()) {
-        logDailyCheckInDiagnostic('warn', 'activity load IPC failed', error);
+        console.warn('[DailyCheckIn] failed to load activity:', error);
         setSnapshot(null);
       }
     } finally {
@@ -198,10 +171,6 @@ export function useDailyCheckInActivity(
         idempotencyKey: createIdempotencyKey(),
       });
       if (!result.success) {
-        logDailyCheckInDiagnostic(
-          'warn',
-          `claim request failed; code=${result.code ?? 'unknown'}; httpStatus=${result.httpStatus ?? 'unknown'}`,
-        );
         if (result.code === ActivityServerErrorCode.AlreadyClaimed) {
           await load();
         } else if (result.code === ActivityServerErrorCode.RevisionMismatch) {
@@ -222,7 +191,6 @@ export function useDailyCheckInActivity(
           || result.data.result.actionId !== DailyCheckInAction.CheckIn
           || !Number.isFinite(result.data.result.creditsGranted)
           || result.data.result.creditsGranted < 0) {
-        logDailyCheckInDiagnostic('warn', 'claim response failed runtime validation');
         await load();
         throw new Error(i18nService.t('dailyCheckInClaimFailed'));
       }
@@ -234,17 +202,8 @@ export function useDailyCheckInActivity(
         });
       }
       window.dispatchEvent(new Event(DAILY_CHECK_IN_UPDATED_EVENT));
-      logDailyCheckInDiagnostic(
-        'debug',
-        `claim completed; replayed=${result.data.replayed}; revision=${snapshot.descriptor.configRevision}`,
-      );
       void authService.fetchProfileSummary();
       return result.data as DailyCheckInActionResponse;
-    } catch (error) {
-      if (!(error instanceof DailyCheckInRequestError)) {
-        logDailyCheckInDiagnostic('warn', 'claim IPC failed', error);
-      }
-      throw error;
     } finally {
       claimingRef.current = false;
       if (mountedRef.current) setClaiming(false);

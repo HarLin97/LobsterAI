@@ -15,9 +15,6 @@ export type NormalizedAuthQuota = Record<string, unknown> & {
   creditsUsed: number;
   creditsRemaining: number;
   hasPaidCredits: boolean;
-  mediaGenerationEntitled: boolean;
-  shareEntitled: boolean;
-  deploymentEntitled: boolean;
 };
 
 export type AuthQuotaGateState = {
@@ -34,32 +31,10 @@ const readString = (value: unknown, fallback: string): string => (
 );
 
 export const hasMediaGenerationEntitlement = (quota: Record<string, unknown>): boolean => {
-  if (typeof quota.mediaGenerationEntitled === 'boolean') {
-    return quota.mediaGenerationEntitled;
-  }
   const subscriptionStatus = typeof quota.subscriptionStatus === 'string'
     ? quota.subscriptionStatus
     : AuthSubscriptionStatus.Free;
-  if (subscriptionStatus === AuthSubscriptionStatus.Enterprise) {
-    return false;
-  }
   return quota.hasPaidCredits === true || subscriptionStatus === AuthSubscriptionStatus.Active;
-};
-
-export const hasPublishingEntitlement = (
-  quota: Record<string, unknown>,
-  field: 'shareEntitled' | 'deploymentEntitled',
-): boolean => {
-  if (typeof quota[field] === 'boolean') {
-    return quota[field] as boolean;
-  }
-  const subscriptionStatus = typeof quota.subscriptionStatus === 'string'
-    ? quota.subscriptionStatus
-    : AuthSubscriptionStatus.Free;
-  if (subscriptionStatus === AuthSubscriptionStatus.Enterprise) {
-    return false;
-  }
-  return subscriptionStatus === AuthSubscriptionStatus.Active;
 };
 
 export const createDefaultAuthQuotaGateState = (): AuthQuotaGateState => ({
@@ -86,15 +61,7 @@ export const normalizeAuthQuota = (
   let planName = labels.freePlanName;
   let subscriptionStatus: string = AuthSubscriptionStatus.Free;
 
-  if (typeof raw.limit === 'number') {
-    creditsLimit = raw.limit;
-    creditsUsed = readNumber(raw.used);
-    planName = readString(raw.planName, 'Enterprise');
-    subscriptionStatus = readString(
-      raw.subscriptionStatus,
-      AuthSubscriptionStatus.Enterprise,
-    );
-  } else if (typeof raw.freeCreditsTotal === 'number') {
+  if (typeof raw.freeCreditsTotal === 'number') {
     creditsLimit = raw.freeCreditsTotal;
     creditsUsed = readNumber(raw.freeCreditsUsed);
     planName = readString(raw.planName, labels.freePlanName);
@@ -116,8 +83,6 @@ export const normalizeAuthQuota = (
     );
     creditsLimit = readNumber(raw.creditsLimit);
     creditsUsed = readNumber(raw.creditsUsed);
-    const hasPaidCredits = raw.hasPaidCredits === true
-      || subscriptionStatus === AuthSubscriptionStatus.Active;
     const normalizedRaw = {
       ...raw,
       planName: readString(raw.planName, labels.freePlanName),
@@ -127,39 +92,18 @@ export const normalizeAuthQuota = (
       creditsRemaining: typeof raw.creditsRemaining === 'number'
         ? raw.creditsRemaining
         : Math.max(0, creditsLimit - creditsUsed),
-      hasPaidCredits,
-      mediaGenerationEntitled: hasMediaGenerationEntitlement({
-        ...raw,
-        subscriptionStatus,
-        hasPaidCredits,
-      }),
-      shareEntitled: hasPublishingEntitlement({ ...raw, subscriptionStatus }, 'shareEntitled'),
-      deploymentEntitled: hasPublishingEntitlement(
-        { ...raw, subscriptionStatus },
-        'deploymentEntitled',
-      ),
+      hasPaidCredits: raw.hasPaidCredits === true || subscriptionStatus === AuthSubscriptionStatus.Active,
     } as NormalizedAuthQuota;
     return normalizedRaw;
   }
 
   const hasPaidCredits = raw.hasPaidCredits === true || subscriptionStatus === AuthSubscriptionStatus.Active;
   return {
-    ...raw,
     planName,
     subscriptionStatus,
     creditsLimit,
     creditsUsed,
     creditsRemaining: Math.max(0, creditsLimit - creditsUsed),
     hasPaidCredits,
-    mediaGenerationEntitled: hasMediaGenerationEntitlement({
-      ...raw,
-      subscriptionStatus,
-      hasPaidCredits,
-    }),
-    shareEntitled: hasPublishingEntitlement({ ...raw, subscriptionStatus }, 'shareEntitled'),
-    deploymentEntitled: hasPublishingEntitlement(
-      { ...raw, subscriptionStatus },
-      'deploymentEntitled',
-    ),
   };
 };

@@ -24,7 +24,6 @@ import {
   COWORK_BTW_RESULT_MAX_CHARS,
   type CoworkBtwAbortResponse,
   type CoworkBtwEntry,
-  CoworkBtwErrorCode,
   CoworkBtwStatus,
   type CoworkBtwSubmitResponse,
   normalizeCoworkBtwQuestion,
@@ -61,12 +60,6 @@ import {
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
 import { stripNullChars } from '../../../shared/cowork/text';
-import {
-  EnterpriseQuotaMessageMetadataKey,
-  EnterpriseQuotaReason,
-} from '../../../shared/enterpriseAccount/constants';
-import { resolveEnterpriseQuotaError } from '../../../shared/enterpriseAccount/quotaError';
-import type { EnterpriseQuotaErrorDetails } from '../../../shared/enterpriseAccount/types';
 import type {
   KitReference,
   ResolvedKitCapabilities,
@@ -122,7 +115,6 @@ import {
   resolveChannelSessionTerminalStatus,
 } from './channelSessionRunStatus';
 import { AgentLifecyclePhase, type AgentLifecyclePhase as AgentLifecyclePhaseValue } from './constants';
-import { sanitizeCoworkBtwResultText } from './coworkBtwResultSanitizer';
 import {
   buildCoworkContinuityCapsule,
   ContinuityCapsuleSource,
@@ -523,7 +515,6 @@ type OpenClawBtwSideResultPayload = {
   agentId?: string;
   question: string;
   text: string;
-  errorCode?: CoworkBtwErrorCode;
   isError?: boolean;
   ts: number;
   seq?: number;
@@ -1493,8 +1484,6 @@ function isOpenClawGenericLlmRequestFailed(errorMessage: string): boolean {
 }
 
 export type OpenClawSafeRuntimeErrorMetadata = {
-  code?: string;
-  errorCode?: string;
   error?: string;
   errorMessage?: string;
   provider?: string;
@@ -1539,13 +1528,6 @@ const pickStringField = (
   key: keyof OpenClawSafeRuntimeErrorMetadata,
 ): string | undefined => {
   const value = record[key];
-  if (
-    (key === 'code' || key === 'errorCode')
-    && typeof value === 'number'
-    && Number.isFinite(value)
-  ) {
-    return String(value);
-  }
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 };
 
@@ -1555,8 +1537,6 @@ function normalizeOpenClawSafeRuntimeErrorMetadata(
   if (!isRecord(metadata)) return undefined;
   const normalized: OpenClawSafeRuntimeErrorMetadata = {};
   for (const key of [
-    'code',
-    'errorCode',
     'error',
     'errorMessage',
     'provider',
@@ -1627,48 +1607,7 @@ export function resolveOpenClawRuntimeErrorMessage(
   errorMessage: string,
   metadata?: OpenClawSafeRuntimeErrorMetadata,
 ): string {
-  return resolveOpenClawRuntimeError(errorMessage, metadata).message;
-}
-
-export type ResolvedOpenClawRuntimeError = {
-  message: string;
-  enterpriseQuotaError: EnterpriseQuotaErrorDetails | null;
-};
-
-const getEnterpriseQuotaErrorMessage = (
-  details: EnterpriseQuotaErrorDetails,
-): string => {
-  switch (details.reason) {
-    case EnterpriseQuotaReason.MemberMonthlyQuotaExhausted:
-      return t('coworkErrorEnterpriseMemberQuotaExhausted');
-    case EnterpriseQuotaReason.EnterprisePoolExhausted:
-      return t('coworkErrorEnterprisePoolExhausted');
-    case EnterpriseQuotaReason.EnterpriseCreditBatchesExpired:
-      return t('coworkErrorEnterpriseCreditBatchesExpired');
-  }
-};
-
-const buildResolvedRuntimeError = (
-  message: string,
-  enterpriseQuotaError: EnterpriseQuotaErrorDetails | null = null,
-): ResolvedOpenClawRuntimeError => ({ message, enterpriseQuotaError });
-
-export function resolveOpenClawRuntimeError(
-  errorMessage: string,
-  metadata?: OpenClawSafeRuntimeErrorMetadata,
-): ResolvedOpenClawRuntimeError {
   const normalized = normalizeOpenClawRuntimeErrorMessage(errorMessage);
-  const explicitEnterpriseQuotaError = resolveEnterpriseQuotaError(
-    metadata?.errorCode ?? metadata?.code,
-    normalized,
-  );
-  if (explicitEnterpriseQuotaError) {
-    consumeRecentOpenClawTokenProxyQuotaError();
-    return buildResolvedRuntimeError(
-      getEnterpriseQuotaErrorMessage(explicitEnterpriseQuotaError),
-      explicitEnterpriseQuotaError,
-    );
-  }
   const classifiedKey = classifyErrorKey(normalized);
 
   if (classifiedKey) {
@@ -1679,63 +1618,31 @@ export function resolveOpenClawRuntimeError(
         || classifiedKey === CoworkErrorI18nKey.OAuthInvalid
       )
     ) {
-      return buildResolvedRuntimeError(t(CoworkErrorI18nKey.LobsterAILoginExpired));
+      return t(CoworkErrorI18nKey.LobsterAILoginExpired);
     }
     if (classifiedKey === CoworkErrorI18nKey.QuotaExhausted) {
-      const recentQuotaError = consumeRecentOpenClawTokenProxyQuotaError();
-      const enterpriseQuotaError = resolveEnterpriseQuotaError(
-        metadata?.errorCode ?? metadata?.code ?? recentQuotaError?.code,
-        `${normalized} ${recentQuotaError?.message ?? ''}`,
-      );
-      if (enterpriseQuotaError) {
-        return buildResolvedRuntimeError(
-          getEnterpriseQuotaErrorMessage(enterpriseQuotaError),
-          enterpriseQuotaError,
-        );
-      }
+      consumeRecentOpenClawTokenProxyQuotaError();
     }
-    return buildResolvedRuntimeError(t(classifiedKey));
+    return t(classifiedKey);
   }
 
   if (isOpenClawGenericLlmRequestFailed(normalized)) {
     if (isLobsterAILoginExpiredMetadata(metadata)) {
       consumeRecentOpenClawTokenProxyQuotaError();
-      return buildResolvedRuntimeError(t(CoworkErrorI18nKey.LobsterAILoginExpired));
+      return t(CoworkErrorI18nKey.LobsterAILoginExpired);
     }
     const metadataClassifiedKey = classifyOpenClawSafeRuntimeErrorMetadata(metadata);
     if (metadataClassifiedKey) {
-      const recentQuotaError = consumeRecentOpenClawTokenProxyQuotaError();
-      if (metadataClassifiedKey === CoworkErrorI18nKey.QuotaExhausted) {
-        const enterpriseQuotaError = resolveEnterpriseQuotaError(
-          metadata?.errorCode ?? metadata?.code ?? recentQuotaError?.code,
-          recentQuotaError?.message ?? '',
-        );
-        if (enterpriseQuotaError) {
-          return buildResolvedRuntimeError(
-            getEnterpriseQuotaErrorMessage(enterpriseQuotaError),
-            enterpriseQuotaError,
-          );
-        }
-      }
-      return buildResolvedRuntimeError(t(metadataClassifiedKey));
+      consumeRecentOpenClawTokenProxyQuotaError();
+      return t(metadataClassifiedKey);
     }
     const recentQuotaError = consumeRecentOpenClawTokenProxyQuotaError();
     if (recentQuotaError) {
-      const enterpriseQuotaError = resolveEnterpriseQuotaError(
-        recentQuotaError.code,
-        recentQuotaError.message,
-      );
-      if (enterpriseQuotaError) {
-        return buildResolvedRuntimeError(
-          getEnterpriseQuotaErrorMessage(enterpriseQuotaError),
-          enterpriseQuotaError,
-        );
-      }
-      return buildResolvedRuntimeError(t(CoworkErrorI18nKey.QuotaExhausted));
+      return t(CoworkErrorI18nKey.QuotaExhausted);
     }
   }
 
-  return buildResolvedRuntimeError(normalized);
+  return normalized;
 }
 
 export type OpenClawRuntimeErrorDetailOptions = {
@@ -1779,19 +1686,6 @@ export function buildOpenClawRuntimeErrorDetail(
     providerDisplayName: sourceInfo?.providerDisplayName,
   });
 }
-
-export const buildRuntimeErrorMetadata = (
-  resolvedError: ResolvedOpenClawRuntimeError & { errorDetail?: CoworkErrorDetail },
-): CoworkMessageMetadata => ({
-  error: resolvedError.message,
-  ...(resolvedError.errorDetail ? { errorDetail: resolvedError.errorDetail } : {}),
-  ...(resolvedError.enterpriseQuotaError
-    ? {
-      [EnterpriseQuotaMessageMetadataKey.ErrorCode]: resolvedError.enterpriseQuotaError.code,
-      [EnterpriseQuotaMessageMetadataKey.Reason]: resolvedError.enterpriseQuotaError.reason,
-    }
-    : {}),
-});
 
 const extractTextBlocksAndSignals = (
   message: unknown,
@@ -6921,9 +6815,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const text = typeof payload.text === 'string'
       ? truncateBtwResultText(payload.text)
       : '';
-    const errorCode = payload.errorCode === CoworkBtwErrorCode.ToolRequired
-      ? payload.errorCode
-      : undefined;
     const ts = typeof payload.ts === 'number' && Number.isFinite(payload.ts) ? payload.ts : NaN;
     if (
       !runId
@@ -6944,7 +6835,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       ...(agentId ? { agentId } : {}),
       question,
       text,
-      ...(errorCode ? { errorCode } : {}),
       ...(payload.isError === true ? { isError: true } : {}),
       ts,
       ...(typeof payload.seq === 'number' && Number.isFinite(payload.seq)
@@ -7017,50 +6907,24 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!this.addPendingBtwRunAlias(pending, result.runId)) {
       return;
     }
-    const sanitizedResult = sanitizeCoworkBtwResultText(result.text);
-    const sanitizedText = sanitizedResult.text.trim();
-    if (sanitizedResult.detectedFamilies.length > 0) {
-      console.warn(
-        '[CoworkBtw] sanitized provider protocol from side result.',
-        `Session ${pending.sessionId}.`,
-        `Run ${result.runId}.`,
-        `Families ${sanitizedResult.detectedFamilies.join(',')}.`,
-        `Before chars ${result.text.length}.`,
-        `After chars ${sanitizedText.length}.`,
-        `Visible text ${sanitizedText ? 'yes' : 'no'}.`,
-      );
-    }
-    const isResultError = result.isError === true || result.errorCode !== undefined;
     console.log(
       '[CoworkBtw] received side result.',
       `Session ${pending.sessionId}.`,
       `Run ${result.runId}.`,
-      `Answer chars ${sanitizedText.length}.`,
-      `Error ${isResultError ? 'yes' : 'no'}.`,
+      `Answer chars ${result.text.length}.`,
+      `Error ${result.isError ? 'yes' : 'no'}.`,
     );
-    if (isResultError && pending.stopRequested) {
+    if (result.isError && pending.stopRequested) {
       this.stopPendingBtwRun(pending, 'gateway returned an error after stop');
-      return;
-    }
-    if (result.errorCode === CoworkBtwErrorCode.ToolRequired) {
-      this.finishPendingBtwRun(pending, {
-        error: t('coworkBtwToolRequired'),
-      });
       return;
     }
     if (result.isError) {
       this.finishPendingBtwRun(pending, {
-        error: sanitizedText || t('coworkBtwFailed'),
+        error: result.text.trim() || t('coworkBtwFailed'),
       });
       return;
     }
-    if (sanitizedResult.detectedFamilies.length > 0 && !sanitizedText) {
-      this.finishPendingBtwRun(pending, {
-        error: t('coworkBtwToolRequired'),
-      });
-      return;
-    }
-    this.finishPendingBtwRun(pending, { answer: sanitizedText });
+    this.finishPendingBtwRun(pending, { answer: result.text });
   }
 
   private handleBtwChatEvent(payload: unknown): boolean {
@@ -7948,15 +7812,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         if (!turn) return; // Already handled by handleChatError
         // If a different run started while the fallback was pending, leave it alone.
         if (errorRunId && !turn.knownRunIds.has(errorRunId)) return;
-        const resolvedError = resolveOpenClawRuntimeError(rawErrorMessage, errorMetadata);
-        const errorMessage = resolvedError.message;
-        const errorDetail = this.buildTurnErrorDetail(
-          sessionId,
-          turn,
-          rawErrorMessage,
-          errorMessage,
-          errorMetadata,
-        );
+        const errorMessage = resolveOpenClawRuntimeErrorMessage(rawErrorMessage, errorMetadata);
+        const errorDetail = this.buildTurnErrorDetail(sessionId, turn, rawErrorMessage, errorMessage, errorMetadata);
         console.log(`[OpenClawRuntime] lifecycle error fallback surfaced an error after waiting for the gateway chat error event in session ${sessionId}: ${errorMessage}`);
         // Abort the retrying run on the gateway so the session is freed for new messages.
         // Without this, the gateway continues retrying indefinitely and rejects subsequent chat.send requests.
@@ -7975,10 +7832,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         const errorMsg = this.store.addMessage(sessionId, {
           type: 'system',
           content: errorMessage,
-          metadata: buildRuntimeErrorMetadata({
-            ...resolvedError,
-            ...(errorDetail ? { errorDetail } : {}),
-          }),
+          metadata: { error: errorMessage, ...(errorDetail ? { errorDetail } : {}) },
         });
         this.emit('message', sessionId, errorMsg);
         this.emit('error', sessionId, errorMessage);
@@ -9102,18 +8956,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (finalTextIsOpenClawFailure) {
       const rawErrorMessage = finalText.trim() || 'OpenClaw run failed';
       const errorMetadata = normalizeOpenClawSafeRuntimeErrorMetadata(payload);
-      const resolvedError = resolveOpenClawRuntimeError(rawErrorMessage, errorMetadata);
-      const errorMessage = resolvedError.message;
+      const errorMessage = resolveOpenClawRuntimeErrorMessage(rawErrorMessage, errorMetadata);
       const errorDetail = this.buildTurnErrorDetail(sessionId, turn, rawErrorMessage, errorMessage, errorMetadata);
       const erroredSessionKey = turn.sessionKey;
       this.store.updateSession(sessionId, { status: 'error' });
       const errorMsg = this.store.addMessage(sessionId, {
         type: 'system',
         content: errorMessage,
-        metadata: buildRuntimeErrorMetadata({
-          ...resolvedError,
-          ...(errorDetail ? { errorDetail } : {}),
-        }),
+        metadata: { error: errorMessage, ...(errorDetail ? { errorDetail } : {}) },
       });
       this.emit('message', sessionId, errorMsg);
       this.emit('error', sessionId, errorMessage);
@@ -9344,24 +9194,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         || errorMessageFromMessage?.trim()
         || 'OpenClaw run failed';
       const errorMetadata = normalizeOpenClawSafeRuntimeErrorMetadata(payload);
-      const resolvedError = resolveOpenClawRuntimeError(rawErrorMessage, errorMetadata);
-      const errorMessage = resolvedError.message;
-      const errorDetail = this.buildTurnErrorDetail(
-        sessionId,
-        turn,
-        rawErrorMessage,
-        errorMessage,
-        errorMetadata,
-      );
+      const errorMessage = resolveOpenClawRuntimeErrorMessage(rawErrorMessage, errorMetadata);
+      const errorDetail = this.buildTurnErrorDetail(sessionId, turn, rawErrorMessage, errorMessage, errorMetadata);
       const erroredSessionKey = turn.sessionKey;
       this.store.updateSession(sessionId, { status: 'error' });
       const errorMsg = this.store.addMessage(sessionId, {
         type: 'system',
         content: errorMessage,
-        metadata: buildRuntimeErrorMetadata({
-          ...resolvedError,
-          ...(errorDetail ? { errorDetail } : {}),
-        }),
+        metadata: { error: errorMessage, ...(errorDetail ? { errorDetail } : {}) },
       });
       this.emit('message', sessionId, errorMsg);
       this.emit('error', sessionId, errorMessage);
@@ -10044,8 +9884,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     console.log('[OpenClawRuntime] handleChatError payload:', JSON.stringify(payload).slice(0, 1000));
     const rawErrorMessage = payload.errorMessage?.trim() || 'OpenClaw run failed';
     const errorMetadata = normalizeOpenClawSafeRuntimeErrorMetadata(payload);
-    const resolvedError = resolveOpenClawRuntimeError(rawErrorMessage, errorMetadata);
-    let errorMessage = resolvedError.message;
+    let errorMessage = resolveOpenClawRuntimeErrorMessage(rawErrorMessage, errorMetadata);
 
     // Detect model API errors that are likely caused by unsupported image content
     // in tool results (e.g., Read tool returning image blocks for non-vision models).
@@ -10063,10 +9902,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const errorMsg = this.store.addMessage(sessionId, {
       type: 'system',
       content: errorMessage,
-      metadata: buildRuntimeErrorMetadata({
-        ...resolvedError,
-        message: errorMessage, ...(errorDetail ? { errorDetail } : {}),
-      }),
+      metadata: { error: errorMessage, ...(errorDetail ? { errorDetail } : {}) },
     });
     this.emit('message', sessionId, errorMsg);
     this.emit('error', sessionId, errorMessage);

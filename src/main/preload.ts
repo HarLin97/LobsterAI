@@ -38,10 +38,6 @@ import {
 import { DataMigrationIpc } from '../shared/dataMigration/constants';
 import { DialogIpc } from '../shared/dialog/constants';
 import {
-  EnterpriseAccountIpcChannel,
-  type EnterpriseQuotaRequestType,
-} from '../shared/enterpriseAccount/constants';
-import {
   type HtmlShareAccessMode,
   type HtmlShareConfigurableStatus,
   HtmlShareIpc,
@@ -193,18 +189,6 @@ contextBridge.exposeInMainWorld('electron', {
   },
   enterprise: {
     getConfig: () => ipcRenderer.invoke('enterprise:getConfig'),
-  },
-  enterpriseAccount: {
-    getContext: () => ipcRenderer.invoke(EnterpriseAccountIpcChannel.GetContext),
-    getIdentities: () => ipcRenderer.invoke(EnterpriseAccountIpcChannel.GetIdentities),
-    requestQuotaIncrease: (enterpriseId: number, requestType: EnterpriseQuotaRequestType) => (
-      ipcRenderer.invoke(EnterpriseAccountIpcChannel.RequestQuotaIncrease, enterpriseId, requestType)
-    ),
-    onContextInvalidated: (callback: () => void) => {
-      const handler = () => callback();
-      ipcRenderer.on(EnterpriseAccountIpcChannel.ContextInvalidated, handler);
-      return () => ipcRenderer.removeListener(EnterpriseAccountIpcChannel.ContextInvalidated, handler);
-    },
   },
   api: {
     // 普通 API 请求（非流式）
@@ -533,7 +517,7 @@ contextBridge.exposeInMainWorld('electron', {
 
     // Media task management
     cancelMediaTask: (taskId: string) =>
-      ipcRenderer.invoke(CoworkIpcChannel.CancelMediaTask, taskId),
+      ipcRenderer.invoke('cowork:media:cancel', taskId),
 
     // Permission handling
     respondToPermission: (options: { requestId: string; result: any }) =>
@@ -1190,7 +1174,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
   media: {
     getModels: (type: 'image' | 'video') =>
-      ipcRenderer.invoke(CoworkIpcChannel.GetMediaModels, type) as Promise<{ success: boolean; models?: unknown[]; error?: string }>,
+      ipcRenderer.invoke('media:getModels', type) as Promise<{ success: boolean; models?: unknown[]; error?: string }>,
     getTaskStatus: (taskId: number, type: 'image' | 'video') =>
       ipcRenderer.invoke('media:getTaskStatus', taskId, type) as Promise<{ success: boolean; task?: unknown; error?: string }>,
   },
