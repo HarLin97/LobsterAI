@@ -263,9 +263,14 @@ FunctionEnd
 ;    (Web Search bridge server, MCP servers spawned with detached:true)
 ;
 ; Stop-Process -Force is equivalent to taskkill /F -- the processes have no
-; chance to run before-quit cleanup, so file handles may linger briefly as
-; "ghost handles" in the Windows kernel. We poll until no matching process
-; remains before proceeding.
+; chance to run before-quit cleanup. The kill is re-issued on every poll
+; round instead of once up front: a single kill loses against a long-running
+; instance whose kernel teardown outlives a fixed observation window (field
+; report 2026-07-29: a loaded old app survived the previous
+; kill-once-then-poll 7.5s gate, while a freshly started instance died in one
+; round) and against anything respawned between the kill and a later poll.
+; 30 rounds x 500ms keeps the worst-case gate under ~20s wall time; the
+; healthy path still converges on the first or second round.
 ;
 ; Shared between the installer and the uninstaller via customCheckAppRunning.
 !macro stopLobsterAIProcesses
@@ -274,19 +279,20 @@ FunctionEnd
   System::Call 'kernel32::GetCurrentProcessId()i .r4'
   StrCpy $lobsterCurrentProcessPid $4
   System::Call 'kernel32::GetTickCount()i .r7'
+  ; The survivor helper below and every log write in this macro need the
+  ; directory, including on the helper-not-found path.
+  CreateDirectory "$APPDATA\LobsterAI"
   StrCmp $lobsterTrustedPowerShellPath "" StopLobsterAIProcessesDone
   nsExec::ExecToLog '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
-    Stop-Process -Name LobsterAI -Force -ErrorAction SilentlyContinue;\
-    Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" } | Stop-Process -Force -ErrorAction SilentlyContinue;\
-    for ($$i = 0; $$i -lt 15; $$i++) {\
+    for ($$i = 0; $$i -lt 30; $$i++) {\
       $$procs = @();\
       $$procs += Get-Process -Name LobsterAI -ErrorAction SilentlyContinue;\
       $$procs += Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" };\
-      if ($$procs.Count -eq 0) { break };\
+      if ($$procs.Count -eq 0) { exit 0 };\
+      $$procs | Stop-Process -Force -ErrorAction SilentlyContinue;\
       Start-Sleep -Milliseconds 500;\
     };\
-    if ($$procs.Count -ne 0) { exit 3 };\
-    exit 0"'
+    exit 3"'
   Pop $0
   StrCpy $R2 $0
   StrCpy $lobsterTargetProcessesStopStatus "numeric-exit-code"
@@ -294,6 +300,38 @@ FunctionEnd
     StrCpy $lobsterTargetProcessesStopStatus "process-start-blocked"
   StrCmp $R2 "0" 0 +2
     StrCpy $lobsterTargetProcessesStopStatus "success"
+  StrCmp $R2 "3" 0 StopLobsterAIProcessesLog
+  ; The exit-3 verdict alone never says WHICH process refused to die. Re-snapshot
+  ; and append one process-stop-survivor line per remaining process before the
+  ; completion line below. Inputs travel through the child environment, not
+  ; string interpolation: the log path contains the user profile directory,
+  ; which may hold shell metacharacters. Helper exit code = survivor count at
+  ; re-check time; 0 means the blockers died right after the verdict.
+  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_LOG_PATH", t "$APPDATA\LobsterAI\install-timing.log")i'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_ATTEMPT_ID", t "$lobsterInstallerAttemptId")i'
+  nsExec::ExecToLog '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
+    $$ts = Get-Date -Format \"yyyy-MM-dd HH:mm:ss\";\
+    $$procs = @();\
+    $$procs += Get-Process -Name LobsterAI -ErrorAction SilentlyContinue;\
+    $$procs += Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" };\
+    foreach ($$p in $$procs) {\
+      $$fp = \"unknown\";\
+      try { if ($$p.Path) { $$fp = $$p.Path } } catch { };\
+      Add-Content -LiteralPath $$env:LOBSTERAI_STOP_LOG_PATH -Value \"$$ts phase=process-stop-survivor attempt_id=$$env:LOBSTERAI_STOP_ATTEMPT_ID name=$$($$p.ProcessName) pid=$$($$p.Id) path=$$fp\" -ErrorAction SilentlyContinue;\
+    };\
+    exit $$procs.Count"'
+  Pop $1
+  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_LOG_PATH", t "")i'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_ATTEMPT_ID", t "")i'
+  FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
+  FileSeek $9 0 END
+  !insertmacro GetTimestamp $8
+  !ifdef BUILD_UNINSTALLER
+    FileWrite $9 "$8 phase=process-stop-survivors-logged attempt_id=$lobsterInstallerAttemptId role=uninstaller helper_exit=$1$\r$\n"
+  !else
+    FileWrite $9 "$8 phase=process-stop-survivors-logged attempt_id=$lobsterInstallerAttemptId role=installer helper_exit=$1$\r$\n"
+  !endif
+  FileClose $9
   Goto StopLobsterAIProcessesLog
 
   StopLobsterAIProcessesDone:
@@ -302,7 +340,6 @@ FunctionEnd
   StopLobsterAIProcessesLog:
   System::Call 'kernel32::GetTickCount()i .r6'
   IntOp $5 $6 - $7
-  CreateDirectory "$APPDATA\LobsterAI"
   FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
   FileSeek $9 0 END
   !insertmacro GetTimestamp $8
