@@ -38,6 +38,7 @@ import { ContinuityCapsuleSource } from './coworkContinuityCapsule';
 import {
   buildOpenClawChatSendPayloadTooLargeError,
   buildOpenClawRuntimeErrorDetail,
+  buildRuntimeErrorMetadata,
   ensurePlanModeProposedPlanBlock,
   estimateOpenClawChatSendFrameBytes,
   isIncompleteStopReason,
@@ -48,6 +49,7 @@ import {
   OPENCLAW_CHAT_SEND_PAYLOAD_SAFE_LIMIT_BYTES,
   OpenClawRuntimeAdapter,
   pickPersistedAssistantSegment,
+  resolveOpenClawRuntimeError,
   resolveOpenClawRuntimeErrorMessage,
   resolveToolEventIsError,
 } from './openclawRuntimeAdapter';
@@ -625,6 +627,41 @@ test('resolveOpenClawRuntimeErrorMessage restores recent quota error hidden by O
 
 test('resolveOpenClawRuntimeErrorMessage classifies raw LobsterAI quota errors', () => {
   expect(resolveOpenClawRuntimeErrorMessage('本月积分已用完')).toContain('积分额度已用完');
+});
+
+test('resolveOpenClawRuntimeError keeps structured enterprise quota reason', () => {
+  expect(resolveOpenClawRuntimeError('LLM request failed.', {
+    errorCode: '41606',
+    rawErrorPreview: '41606 member monthly quota exhausted',
+  })).toEqual({
+    message: expect.stringContaining('成员月度额度'),
+    enterpriseQuotaError: {
+      code: 41606,
+      reason: 'member_monthly_quota_exhausted',
+    },
+  });
+});
+
+test('buildRuntimeErrorMetadata preserves technical details with enterprise quota fields', () => {
+  const errorDetail = {
+    rawErrorMessage: 'LLM request failed.',
+    provider: 'lobsterai-server',
+    httpCode: '402',
+  };
+
+  expect(buildRuntimeErrorMetadata({
+    message: 'Enterprise credits have been used up.',
+    enterpriseQuotaError: {
+      code: 41607,
+      reason: 'enterprise_pool_exhausted',
+    },
+    errorDetail,
+  })).toEqual({
+    error: 'Enterprise credits have been used up.',
+    errorDetail,
+    enterpriseErrorCode: 41607,
+    enterpriseQuotaReason: 'enterprise_pool_exhausted',
+  });
 });
 
 test('resolveOpenClawRuntimeErrorMessage classifies generic error from safe OAuth metadata', () => {
@@ -2650,6 +2687,117 @@ test('BTW side results and terminal events stay isolated from an active main tur
   expect(session.messages).toEqual([]);
   expect(messageListener).not.toHaveBeenCalled();
   expect(statusListener).not.toHaveBeenCalled();
+});
+
+test('BTW side results remove provider protocol markup without logging its payload', async () => {
+  const { adapter } = createRunTurnAdapter({
+    autoFinalizeChatSend: false,
+  });
+  const resultListener = vi.fn();
+  adapter.on('btwResult', resultListener);
+  await adapter.submitBtw('session-1', 'What changed?', 'btw-run-sanitize');
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    adapter.handleGatewayEvent({
+      event: 'chat.side_result',
+      payload: {
+        kind: 'btw',
+        runId: 'btw-run-sanitize',
+        sessionKey: 'agent:main:lobsterai:session-1',
+        agentId: 'main',
+        question: 'What changed?',
+        text: [
+          'The visible answer.',
+          '<|DSML|tool_calls><|DSML|invoke name="read">',
+          '<|DSML|parameter name="filePath">/private/secret.txt</|DSML|parameter>',
+          '</|DSML|invoke></|DSML|tool_calls>',
+        ].join('\n'),
+        ts: Date.now(),
+      },
+    });
+
+    expect(resultListener).toHaveBeenCalledWith('session-1', expect.objectContaining({
+      runId: 'btw-run-sanitize',
+      status: CoworkBtwStatus.Answered,
+      answer: 'The visible answer.',
+    }));
+    const diagnostic = warn.mock.calls.flat().join(' ');
+    expect(diagnostic).toContain('deepseek_dsml');
+    expect(diagnostic).not.toContain('/private/secret.txt');
+    expect(diagnostic).not.toContain('filePath');
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('BTW tool-only protocol output becomes an isolated localized failure', async () => {
+  const { adapter, session } = createRunTurnAdapter({
+    autoFinalizeChatSend: false,
+  });
+  const activeMainTurn = {
+    runId: 'main-run',
+    sessionKey: 'agent:main:lobsterai:session-1',
+  };
+  adapter.activeTurns.set('session-1', activeMainTurn as never);
+  const resultListener = vi.fn();
+  adapter.on('btwResult', resultListener);
+  await adapter.submitBtw('session-1', 'Read the file', 'btw-run-tool-required');
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    adapter.handleGatewayEvent({
+      event: 'chat.side_result',
+      payload: {
+        kind: 'btw',
+        runId: 'btw-run-tool-required',
+        sessionKey: 'agent:main:lobsterai:session-1',
+        agentId: 'main',
+        question: 'Read the file',
+        text: '<｜DSML｜tool_calls>private arguments</｜DSML｜tool_calls>',
+        ts: Date.now(),
+      },
+    });
+  } finally {
+    warn.mockRestore();
+  }
+
+  expect(resultListener).toHaveBeenCalledWith('session-1', expect.objectContaining({
+    runId: 'btw-run-tool-required',
+    status: CoworkBtwStatus.Failed,
+    error: expect.not.stringContaining('DSML'),
+  }));
+  expect(adapter.activeTurns.get('session-1')).toBe(activeMainTurn);
+  expect(session.messages).toEqual([]);
+});
+
+test('BTW uses the runtime tool-required error code without matching backend copy or flags', async () => {
+  const { adapter } = createRunTurnAdapter({
+    autoFinalizeChatSend: false,
+  });
+  const resultListener = vi.fn();
+  adapter.on('btwResult', resultListener);
+  await adapter.submitBtw('session-1', 'Read the file', 'btw-run-error-code');
+
+  adapter.handleGatewayEvent({
+    event: 'chat.side_result',
+    payload: {
+      kind: 'btw',
+      runId: 'btw-run-error-code',
+      sessionKey: 'agent:main:lobsterai:session-1',
+      agentId: 'main',
+      question: 'Read the file',
+      text: 'Runtime-specific copy that must not be shown.',
+      errorCode: 'tool_required',
+      ts: Date.now(),
+    },
+  });
+
+  expect(resultListener).toHaveBeenCalledWith('session-1', expect.objectContaining({
+    runId: 'btw-run-error-code',
+    status: CoworkBtwStatus.Failed,
+    error: expect.not.stringContaining('Runtime-specific copy'),
+  }));
 });
 
 test('unknown BTW side results cannot mark an unrelated main run as terminal', () => {
@@ -4901,6 +5049,45 @@ test('chat final terminal error persists visible system message when no assistan
   expect(session.status).toBe('error');
   expect(errorSpy).toHaveBeenCalledWith(session.id, expect.stringContaining('模型响应超时'));
   expect(persistedError?.content).toContain('模型响应超时');
+});
+
+test('chat final terminal error persists enterprise quota signal and technical details', async () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+
+  session.status = 'running';
+  adapter.on('error', vi.fn());
+  adapter.activeTurns.set(session.id, createActiveTurn(
+    session.id,
+    sessionKey,
+    'run-enterprise-quota',
+  ));
+
+  adapter.handleChatEvent({
+    state: 'final',
+    runId: 'run-enterprise-quota',
+    sessionKey,
+    stopReason: 'error',
+    errorMessage: 'LLM request failed.',
+    errorCode: 41607,
+    provider: 'lobsterai-server',
+    rawErrorPreview: '41607 enterprise pool exhausted',
+  }, 1);
+  await Promise.resolve();
+
+  const persistedError = session.messages.find((message) => message.type === 'system');
+  expect(session.status).toBe('error');
+  expect(persistedError?.metadata).toEqual(expect.objectContaining({
+    enterpriseErrorCode: 41607,
+    enterpriseQuotaReason: 'enterprise_pool_exhausted',
+    errorDetail: expect.objectContaining({
+      provider: 'lobsterai-server',
+      rawErrorMessage: 'LLM request failed.',
+    }),
+  }));
 });
 
 test('chat error ignores non-managed OpenClaw session key when local session id is unknown', () => {

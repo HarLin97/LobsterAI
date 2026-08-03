@@ -23,6 +23,10 @@ import { i18nService } from '../services/i18n';
 import { LogReporterAction } from '../services/logReporter';
 import type { RootState } from '../store';
 import {
+  ActivityRendererLogSource,
+  logActivityRendererDiagnostic,
+} from './activityDiagnostics';
+import {
   reportStartupCreditCampaignEvent,
   StartupCreditCampaignSource,
   type StartupCreditCampaignSource as StartupCreditCampaignSourceType,
@@ -97,6 +101,9 @@ const preloadStartupCreditPoster = (url: string): Promise<boolean> => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timeout);
+      image.onload = null;
+      image.onerror = null;
+      if (!success) image.src = '';
       resolve(success);
     };
     const timeout = window.setTimeout(
@@ -138,6 +145,17 @@ const formatExpiry = (value: string | null | undefined): string | null => {
 const showToast = (message: string): void => {
   window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
 };
+
+const logStartupCreditDiagnostic = (
+  level: 'debug' | 'warn',
+  message: string,
+  error?: unknown,
+): void => logActivityRendererDiagnostic(
+  ActivityRendererLogSource.StartupCreditCampaign,
+  level,
+  message,
+  error,
+);
 
 const reportClaimFailure = (
   snapshot: StartupCreditSnapshot,
@@ -246,8 +264,14 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     const slot = await window.electron.activity.getSlot({
       placement: ActivityPlacement.DesktopStartupModal,
     });
-    if (!slot.success
-        || slot.data.slotState !== ActivitySlotState.Available
+    if (!slot.success) {
+      logStartupCreditDiagnostic(
+        'warn',
+        `slot request failed; code=${slot.code ?? 'unknown'}; httpStatus=${slot.httpStatus ?? 'unknown'}`,
+      );
+      return null;
+    }
+    if (slot.data.slotState !== ActivitySlotState.Available
         || !isStartupCreditDescriptor(slot.data.activity)) {
       return null;
     }
@@ -260,8 +284,13 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     if (!context.success) {
       if (retryRevision
           && context.code === ActivityServerErrorCode.RevisionMismatch) {
+        logStartupCreditDiagnostic('debug', 'context revision changed; retrying slot lookup');
         return fetchCurrentSnapshot(false);
       }
+      logStartupCreditDiagnostic(
+        'warn',
+        `context request failed; code=${context.code ?? 'unknown'}; httpStatus=${context.httpStatus ?? 'unknown'}`,
+      );
       return null;
     }
     if (!isActiveStartupCreditContext(context.data)
@@ -329,6 +358,10 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           idempotencyKey,
         });
         if (!response.success) {
+          logStartupCreditDiagnostic(
+            'warn',
+            `claim request failed; code=${response.code ?? 'unknown'}; httpStatus=${response.httpStatus ?? 'unknown'}`,
+          );
           if (response.code === ActivityServerErrorCode.AlreadyClaimed) {
             reportClaimFailure(
               current,
@@ -421,12 +454,16 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           credits: data.result.creditsGranted,
           expiresAt: data.result.expiresAt,
         });
+        logStartupCreditDiagnostic(
+          'debug',
+          `claim completed; replayed=${data.replayed}; revision=${current.descriptor.configRevision}`,
+        );
         void authService.fetchProfileSummary();
       };
 
       await execute(target, true);
     } catch (error) {
-      console.warn('[StartupCreditCampaign] failed to claim activity:', error);
+      logStartupCreditDiagnostic('warn', 'claim IPC failed', error);
       reportClaimFailure(
         target,
         offerSourceRef.current,
@@ -526,8 +563,12 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           setGatewayReady(status?.phase === OpenClawEnginePhase.Running);
         }
       })
-      .catch(() => {
-        // Keep the latest status delivered by the event listener.
+      .catch((error) => {
+        logStartupCreditDiagnostic(
+          'warn',
+          'failed to read initial OpenClaw engine status; waiting for status events',
+          error,
+        );
       });
     const unsubscribe = coworkService.onOpenClawEngineStatus((status) => {
       if (active) {
@@ -551,6 +592,12 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
       : { url: posterUrl, settled: false, failed: false });
     void preloadStartupCreditPoster(posterUrl).then((success) => {
       if (!active) return;
+      if (!success) {
+        logStartupCreditDiagnostic(
+          'warn',
+          `poster preload failed; revision=${snapshotRef.current?.descriptor.configRevision ?? 'unknown'}`,
+        );
+      }
       setPosterLoad({
         url: posterUrl,
         settled: true,
@@ -671,6 +718,19 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     setModalOpen(false);
   }, [modalView]);
 
+  useEffect(() => {
+    if (!modalOpen
+        || modalView === CampaignModalView.Claiming
+        || modalView === CampaignModalView.StartingLogin) {
+      return undefined;
+    }
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') closeByUser();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [closeByUser, modalOpen, modalView]);
+
   const handlePrimaryAction = useCallback(async () => {
     const current = snapshotRef.current;
     if (!current) {
@@ -722,6 +782,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
         await authService.login();
         if (mountedRef.current) setModalView(CampaignModalView.Offer);
       } catch (error) {
+        logStartupCreditDiagnostic('warn', 'login redirect failed', error);
         reportClaimFailure(
           current,
           offerSourceRef.current,
@@ -836,7 +897,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           isEnded ? 'startupCreditEndedTitle' : 'startupCreditClaimFailedTitle',
         )}
     >
-      <section className={`relative z-10 w-[min(432px,calc(100vw-48px))] overflow-hidden rounded-2xl shadow-modal ${
+      <section className={`relative z-10 max-h-[calc(100vh-48px)] w-[min(432px,calc(100vw-48px))] overflow-x-hidden overflow-y-auto rounded-2xl shadow-modal ${
         shouldShowPoster
           ? 'bg-transparent'
           : 'border border-border bg-surface'

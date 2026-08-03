@@ -248,6 +248,19 @@ describe('activity IPC handlers', () => {
     });
     expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
 
+    const unsupportedAction = await executeAction?.(harness.event, {
+      placement: ActivityPlacement.DesktopSidebar,
+      activityCode: activityDescriptor.activityCode,
+      configRevision: activityDescriptor.configRevision,
+      actionId: OneTimeCreditAction.Claim,
+      idempotencyKey: 'request-unsupported',
+    });
+    expect(unsupportedAction).toEqual({
+      success: false,
+      error: 'Invalid activity action',
+    });
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
+
     const accepted = await executeAction?.(harness.event, {
       placement: ActivityPlacement.DesktopSidebar,
       activityCode: activityDescriptor.activityCode,

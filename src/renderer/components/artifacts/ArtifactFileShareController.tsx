@@ -315,10 +315,17 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
 
   useEffect(() => {
     generationRef.current += 1;
+    mutationBarriersRef.current.clear();
+    preparationPromisesRef.current.clear();
     setDialog(null);
     setSubscriptionPrompt(null);
     resetFeedback();
-  }, [resetFeedback, sessionId]);
+  }, [
+    authState.accountGeneration,
+    authState.ownerAccountKey,
+    resetFeedback,
+    sessionId,
+  ]);
 
   useEffect(() => () => clearFeedbackTimer(), [clearFeedbackTimer]);
 
@@ -415,14 +422,20 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
     return resolveArtifactSubscriptionDecision({
       isLoggedIn: authState.isLoggedIn,
       subscriptionStatus: authState.quota?.subscriptionStatus,
+      accountMode: authState.quota?.accountMode ?? authState.user?.accountMode,
+      shareEntitled: authState.quota?.shareEntitled,
+      deploymentEntitled: authState.quota?.deploymentEntitled,
     }, async () => {
       const refreshed = await authService.refreshAuthState();
       return {
         isLoggedIn: refreshed.isLoggedIn,
         subscriptionStatus: refreshed.quota?.subscriptionStatus,
+        accountMode: refreshed.quota?.accountMode ?? refreshed.user?.accountMode,
+        shareEntitled: refreshed.quota?.shareEntitled,
+        deploymentEntitled: refreshed.quota?.deploymentEntitled,
       };
-    });
-  }, [authState.isLoggedIn, authState.quota]);
+    }, ArtifactSubscriptionFeature.Share);
+  }, [authState.isLoggedIn, authState.quota, authState.user?.accountMode]);
 
   const lookupShare = useCallback(async (api: HtmlShareApi, request: ArtifactFileShareRequest) => {
     return request.source === ArtifactFileShareRequestSource.HtmlFile

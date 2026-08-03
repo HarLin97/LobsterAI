@@ -66,6 +66,60 @@ if (patchFiles.length === 0) {
 console.log(`[apply-openclaw-patches] Applying patches for openclaw ${openclawVersion} (${patchFiles.length} file(s))`);
 
 const strongPatchValidators = {
+  'openclaw-btw-protocol-hygiene.patch': [
+    {
+      file: 'src/agents/btw.ts',
+      snippets: [
+        'This direct /btw fallback has no tools',
+        'sanitizeUserFacingText(rawAnswer).trim()',
+        'errorCode: BtwErrorCode.ToolRequired',
+      ],
+      forbiddenSnippets: [
+        'unless the side question explicitly asks for them',
+      ],
+    },
+    {
+      file: 'src/shared/text/assistant-visible-text.ts',
+      snippets: [
+        'export function stripDeepSeekDsmlToolCallBlocks',
+        'cleaned = stripDeepSeekDsmlToolCallBlocks(cleaned)',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-helpers/sanitize-user-facing-text.ts',
+      snippets: [
+        'stripMinimaxToolCallXml(stripDeepSeekDsmlToolCallBlocks(stripped))',
+      ],
+    },
+    {
+      file: 'src/auto-reply/reply-payload.ts',
+      snippets: [
+        'ToolRequired: "tool_required"',
+        'errorCode?: BtwErrorCode',
+      ],
+    },
+    {
+      file: 'src/gateway/server-methods/chat.ts',
+      snippets: [
+        'const btwErrorCode = btwReplies',
+        '...(btwErrorCode ? { errorCode: btwErrorCode } : {})',
+      ],
+    },
+    {
+      file: 'src/gateway/server.chat.gateway-server-chat.test.ts',
+      snippets: [
+        'errorCode: "tool_required"',
+        'isError: true',
+      ],
+    },
+    {
+      file: 'src/agents/btw.test.ts',
+      snippets: [
+        'sanitizes provider tool protocol text from direct fallback answers',
+        'returns a stable tool-required error when direct fallback emits only tool protocol',
+      ],
+    },
+  ],
   'openclaw-terminate-run-on-critical-tool-loop.patch': [
     {
       file: 'packages/agent-core/src/agent.ts',

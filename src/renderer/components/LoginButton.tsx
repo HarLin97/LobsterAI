@@ -5,6 +5,8 @@ import inviteCreditsIconUrl from '../assets/icons/invite-credits.svg';
 import logoutIconUrl from '../assets/icons/logout.svg';
 import rechargeIconUrl from '../assets/icons/recharge.svg';
 import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
+import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/EnterpriseAccountMenu';
+import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
 import { authService } from '../services/auth';
 import {
   getPortalInvitationUrl,
@@ -406,12 +408,20 @@ const UserMenu: React.FC<UserMenuProps> = ({ onClose }) => {
 
 const LoginButton: React.FC = () => {
   const { isLoggedIn, isLoading, profileSummary, user } = useSelector((state: RootState) => state.auth);
+  const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const [showMenu, setShowMenu] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      const target = event.target;
+      const isEnterpriseAccountFlyout = target instanceof Element
+        && target.closest('[data-enterprise-account-flyout="true"]') !== null;
+      if (
+        containerRef.current
+        && !containerRef.current.contains(target as Node)
+        && !isEnterpriseAccountFlyout
+      ) {
         setShowMenu(false);
       }
     };
@@ -478,7 +488,16 @@ const LoginButton: React.FC = () => {
         )}
       </button>
       {showMenu && isLoggedIn && (
-        <UserMenu onClose={() => setShowMenu(false)} />
+        enterpriseAccountContext
+          ? (
+            <EnterpriseAccountMenu
+              context={enterpriseAccountContext}
+              onClose={() => setShowMenu(false)}
+            />
+          )
+          : (
+            <UserMenu onClose={() => setShowMenu(false)} />
+          )
       )}
     </div>
   );

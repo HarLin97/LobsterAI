@@ -112,6 +112,7 @@ import {
   ArtifactSubscriptionFeature,
   type ArtifactSubscriptionFeature as ArtifactSubscriptionFeatureValue,
   type ArtifactSubscriptionPromptState,
+  getArtifactSubscriptionDecision,
   resolveArtifactSubscriptionDecision,
 } from './artifactSubscriptionGate';
 import ArtifactSubscriptionPromptDialog from './ArtifactSubscriptionPromptDialog';
@@ -804,6 +805,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const nodeDeploymentAccessRunIdRef = useRef(0);
   const nodeDeploymentPersistenceOperationRunIdRef = useRef(0);
   const handledLocalServiceDeploymentRequestIdRef = useRef<number | null>(null);
+  const publishingAccountGenerationRef = useRef(authState.accountGeneration);
+  publishingAccountGenerationRef.current = authState.accountGeneration;
   nodeDeploymentLookupRef.current = nodeDeploymentLookup;
 
   const previewableArtifacts = artifacts.filter(a => PREVIEWABLE_ARTIFACT_TYPES.has(a.type));
@@ -1245,11 +1248,42 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   }, []);
 
   useEffect(() => {
+    publishingAccountGenerationRef.current = authState.accountGeneration;
+    nodeDeploymentActionRunIdRef.current += 1;
+    nodeDeploymentAccessRunIdRef.current += 1;
+    nodeDeploymentPersistenceOperationRunIdRef.current += 1;
+    handledLocalServiceDeploymentRequestIdRef.current = null;
+    nodeDeploymentLookupRef.current = null;
+    if (nodeDeploymentLookupDialogTimerRef.current !== undefined) {
+      window.clearTimeout(nodeDeploymentLookupDialogTimerRef.current);
+      nodeDeploymentLookupDialogTimerRef.current = undefined;
+    }
+    setHtmlShareDialog(null);
+    setHtmlSharePendingRequest(null);
+    setHtmlShareLookup(null);
+    setHtmlSharePhase(HtmlSharePhase.Idle);
+    setSubscriptionPrompt(null);
+    setNodeDeploymentLookup(null);
+    setNodeDeploymentDialog(null);
+    setNodeDeploymentPersistenceOperations({});
+    setIsNodeDeploymentDialogOpen(false);
+    setIsNodeDeploymentLookupPending(false);
+    setIsNodeDeploymentBusy(false);
+    setIsNodeDeploymentAccessUpdating(false);
+    setIsHtmlShareStatusUpdating(false);
+  }, [authState.accountGeneration, authState.ownerAccountKey]);
+
+  useEffect(() => {
     if (
       !browserLocalServiceUrl ||
       !selectedNodeDeploymentLookupKey ||
-      !authState.isLoggedIn ||
-      authState.quota?.subscriptionStatus !== 'active'
+      !getArtifactSubscriptionDecision({
+        isLoggedIn: authState.isLoggedIn,
+        subscriptionStatus: authState.quota?.subscriptionStatus,
+        accountMode: authState.quota?.accountMode ?? authState.user?.accountMode,
+        shareEntitled: authState.quota?.shareEntitled,
+        deploymentEntitled: authState.quota?.deploymentEntitled,
+      }, ArtifactSubscriptionFeature.Deployment).allowed
     ) {
       setNodeDeploymentLookup(null);
       return;
@@ -1326,7 +1360,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     };
   }, [
     authState.isLoggedIn,
-    authState.quota?.subscriptionStatus,
+    authState.quota,
+    authState.user?.accountMode,
     browserLocalServiceUrl,
     browserLocalServiceProjectDirectory,
     selectedNodeDeploymentLookupKey,
@@ -1708,16 +1743,26 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const ensureArtifactSubscriptionAllowed = useCallback(async (
     feature: ArtifactSubscriptionFeatureValue,
   ): Promise<boolean> => {
+    const requestAccountGeneration = publishingAccountGenerationRef.current;
     const decision = await resolveArtifactSubscriptionDecision({
       isLoggedIn: authState.isLoggedIn,
       subscriptionStatus: authState.quota?.subscriptionStatus,
+      accountMode: authState.quota?.accountMode ?? authState.user?.accountMode,
+      shareEntitled: authState.quota?.shareEntitled,
+      deploymentEntitled: authState.quota?.deploymentEntitled,
     }, async () => {
       const refreshed = await authService.refreshAuthState();
       return {
         isLoggedIn: refreshed.isLoggedIn,
         subscriptionStatus: refreshed.quota?.subscriptionStatus,
+        accountMode: refreshed.quota?.accountMode ?? refreshed.user?.accountMode,
+        shareEntitled: refreshed.quota?.shareEntitled,
+        deploymentEntitled: refreshed.quota?.deploymentEntitled,
       };
-    });
+    }, feature);
+    if (publishingAccountGenerationRef.current !== requestAccountGeneration) {
+      return false;
+    }
     if (!decision.allowed) {
       setHtmlShareDialog(null);
       setHtmlSharePendingRequest(null);
@@ -1725,7 +1770,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       return false;
     }
     return true;
-  }, [authState.isLoggedIn, authState.quota?.subscriptionStatus]);
+  }, [authState.isLoggedIn, authState.quota, authState.user?.accountMode]);
 
   const handleCopyShareLink = useCallback(
     async (url?: string, shareCode?: string) => {
@@ -3255,6 +3300,11 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         throw new Error(reservation?.error || t('siteQuotaReservationFailed'));
       }
       quotaReservationId = reservation.data.reservationId;
+      window.electron?.log?.fromRenderer?.(
+        'debug',
+        'ArtifactPanel',
+        `Reserved a site deployment slot; target=${currentDialog.deployment?.shareId ?? 'new'}.`,
+      );
       setNodeDeploymentDialog(previous => previous
         ? {
             ...previous,
@@ -3302,6 +3352,11 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         throw new Error(result?.error || t('nodeDeploymentFailedMessage'));
       }
       deploymentAccepted = true;
+      window.electron?.log?.fromRenderer?.(
+        'info',
+        'ArtifactPanel',
+        `Site deployment accepted; deployment=${result.deployment.deploymentId}.`,
+      );
       const deployment = result.deployment;
       const accessStatusError = result.accessSyncError;
       rememberLocalServiceProjectDirectory(
@@ -3347,7 +3402,26 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         : previous);
     } finally {
       if (quotaReservationId && !deploymentAccepted) {
-        await window.electron?.sites?.releaseQuotaReservation(quotaReservationId).catch(() => undefined);
+        try {
+          const released = await window.electron?.sites?.releaseQuotaReservation(
+            quotaReservationId,
+          );
+          if (!released?.success) {
+            window.electron?.log?.fromRenderer?.(
+              'warn',
+              'ArtifactPanel',
+              `Failed to release unused site deployment reservation; `
+              + `code=${released?.code ?? 'unknown'}.`,
+            );
+          }
+        } catch (releaseError) {
+          window.electron?.log?.fromRenderer?.(
+            'warn',
+            'ArtifactPanel',
+            `Site deployment reservation release IPC failed; `
+            + `errorType=${releaseError instanceof Error ? releaseError.name : typeof releaseError}.`,
+          );
+        }
       }
       if (nodeDeploymentActionRunIdRef.current === runId) {
         setIsNodeDeploymentBusy(false);
@@ -3583,6 +3657,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
   const createHtmlShare = useCallback(async (request: HtmlSharePendingRequest) => {
     if (isHtmlSharing) return;
+    const requestAccountGeneration = publishingAccountGenerationRef.current;
     setHtmlShareDialog(null);
     setHtmlSharePendingRequest(null);
     try {
@@ -3613,6 +3688,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
               content: request.content,
               remoteUrl: request.remoteUrl,
             });
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       await handleHtmlShareResult(result);
       rememberHtmlShare(request.lookupKey, result);
       window.electron?.log?.fromRenderer?.(
@@ -3621,6 +3697,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         `Created ${request.sourceType} share for artifact ${request.artifactId}.`,
       );
     } catch (error) {
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       window.electron?.log?.fromRenderer?.(
         'warn',
         'ArtifactPanel',
@@ -3666,6 +3743,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         !(allowActiveLimitRestore && canRestoreActiveLimitDisabledHtmlShare))
     )
       return;
+    const requestAccountGeneration = publishingAccountGenerationRef.current;
     const request = htmlSharePendingRequest;
     const shareId = htmlShareDialog.shareId;
     const currentStatus = htmlShareDialog.status;
@@ -3720,6 +3798,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
               remoteUrl: request.remoteUrl,
               currentStatus,
             });
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       if (!result?.success || !result.url) {
         throw new Error(getHtmlShareFailureMessage(result));
       }
@@ -3761,6 +3840,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         };
       });
     } catch (error) {
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       setHtmlSharePhase(HtmlSharePhase.Failed);
       const message = error instanceof Error ? error.message : t('htmlShareFailed');
       window.electron?.log?.fromRenderer?.(
@@ -3814,6 +3894,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     if (accessMode === normalizeHtmlShareAccessMode(htmlShareDialog.accessMode)) return;
     const shareId = htmlShareDialog.shareId;
     const request = htmlSharePendingRequest;
+    const requestAccountGeneration = publishingAccountGenerationRef.current;
     setIsHtmlShareStatusUpdating(true);
     setHtmlShareDialog(previous => previous && previous.shareId === shareId
       ? { ...previous, statusError: undefined }
@@ -3823,6 +3904,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         shareId,
         accessMode,
       });
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       if (!result?.success || !result.url) {
         throw new Error(getHtmlShareFailureMessage(result));
       }
@@ -3860,13 +3942,16 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         };
       });
     } catch (error) {
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       const message =
         error instanceof Error ? error.message : t('htmlShareAccessModeUpdateFailed');
       setHtmlShareDialog(previous => previous && previous.shareId === shareId
         ? { ...previous, statusError: message }
         : previous);
     } finally {
-      setIsHtmlShareStatusUpdating(false);
+      if (publishingAccountGenerationRef.current === requestAccountGeneration) {
+        setIsHtmlShareStatusUpdating(false);
+      }
     }
   }, [
     htmlShareDialog,
@@ -3887,6 +3972,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     }
     const shareId = htmlShareDialog.shareId;
     const previousStatus = htmlShareDialog.targetStatus;
+    const requestAccountGeneration = publishingAccountGenerationRef.current;
     const nextStatus =
       previousStatus === HtmlShareStatus.Live ? HtmlShareStatus.Disabled : HtmlShareStatus.Live;
     const request = htmlSharePendingRequest;
@@ -3900,7 +3986,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       try {
         await updateHtmlShare({ allowActiveLimitRestore: true });
       } finally {
-        setIsHtmlShareStatusUpdating(false);
+        if (publishingAccountGenerationRef.current === requestAccountGeneration) {
+          setIsHtmlShareStatusUpdating(false);
+        }
       }
       return;
     }
@@ -3926,6 +4014,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         shareId,
         status: nextStatus,
       });
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       if (!result?.success || !result.url) {
         throw new Error(getHtmlShareFailureMessage(result));
       }
@@ -3950,6 +4039,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
           refreshedShare = null;
         }
       }
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       const resultStatus =
         getConfigurableHtmlShareStatus(refreshedShare?.status ?? result.status) ?? nextStatus;
       const refreshedResult = {
@@ -3990,6 +4080,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         };
       });
     } catch (error) {
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       const message =
         error instanceof Error ? error.message : t('htmlShareStatusUpdateFailed');
       setHtmlShareDialog(previous => {
@@ -4008,7 +4099,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         };
       });
     } finally {
-      setIsHtmlShareStatusUpdating(false);
+      if (publishingAccountGenerationRef.current === requestAccountGeneration) {
+        setIsHtmlShareStatusUpdating(false);
+      }
     }
   }, [
     htmlShareDialog,

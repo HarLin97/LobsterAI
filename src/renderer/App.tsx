@@ -164,6 +164,8 @@ const App: React.FC = () => {
   const pendingPermission = useSelector(selectFirstCurrentSessionPendingPermission);
   const pendingPermissions = useSelector(selectPendingPermissions);
   const authUser = useSelector((state: RootState) => state.auth.user);
+  const authOwnerAccountKey = useSelector((state: RootState) => state.auth.ownerAccountKey);
+  const authAccountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
   const isWindows = window.electron.platform === 'win32';
   const [minimizedPermissionIds, setMinimizedPermissionIds] = useState<string[]>([]);
   const isPendingPermissionMinimized = pendingPermission
@@ -1392,6 +1394,7 @@ const App: React.FC = () => {
               />
             ) : mainView === 'sites' ? (
               <SitesView
+                key={`${authOwnerAccountKey ?? 'unauthenticated'}:${authAccountGeneration}`}
                 isAuthenticated={Boolean(authUser)}
                 onCreateSiteByChat={handleCreateSiteByChat}
                 isSidebarCollapsed={isSidebarCollapsed}
