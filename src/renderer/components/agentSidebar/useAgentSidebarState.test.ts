@@ -121,6 +121,26 @@ test('deriveAgentSidebarIndicator prioritizes pending permission state', () => {
   )).toBe(AgentSidebarIndicator.PendingPermission);
 });
 
+test('deriveAgentSidebarIndicator uses unread completion over a stale running preview', () => {
+  const session = makeSession('completed-in-background', 100, 200, CoworkSessionStatusValue.Running);
+
+  expect(deriveAgentSidebarIndicator(
+    session,
+    new Set([session.id]),
+    new Set(),
+  )).toBe(AgentSidebarIndicator.CompletedUnread);
+});
+
+test('deriveAgentSidebarIndicator keeps a running task active without completion unread state', () => {
+  const session = makeSession('running-in-background', 100, 200, CoworkSessionStatusValue.Running);
+
+  expect(deriveAgentSidebarIndicator(
+    session,
+    new Set(),
+    new Set(),
+  )).toBe(AgentSidebarIndicator.Running);
+});
+
 test('collapseAgentSidebarTaskList resets one agent history list to preview mode', () => {
   expect(collapseAgentSidebarTaskList(['agent-1', 'agent-2'], 'agent-1')).toEqual(['agent-2']);
 });

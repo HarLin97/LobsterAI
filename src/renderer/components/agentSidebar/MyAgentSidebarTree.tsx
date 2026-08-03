@@ -15,7 +15,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { AgentId } from '@shared/agent';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { agentService } from '../../services/agent';
@@ -25,7 +25,7 @@ import { RootState } from '../../store';
 import { selectCurrentSessionId } from '../../store/selectors/coworkSelectors';
 import { setDraftCollaborationMode } from '../../store/slices/coworkSlice';
 import { CoworkCollaborationMode } from '../../types/cowork';
-import { isDefaultAgentId } from '../../utils/agentDisplay';
+import { getAgentDisplayName, isDefaultAgentId } from '../../utils/agentDisplay';
 import AgentCreateModal from '../agent/AgentCreateModal';
 import AgentSettingsPanel from '../agent/AgentSettingsPanel';
 import {
@@ -35,12 +35,21 @@ import {
   type CoworkSwitchAgentEventDetail,
   CoworkUiEvent,
 } from '../cowork/constants';
+import UserGroupIcon from '../icons/UserGroupIcon';
+import AgentSidebarActivityView from './AgentSidebarActivityView';
+import AgentTaskRow from './AgentTaskRow';
 import AgentTreeNode from './AgentTreeNode';
 import {
   type AgentSidebarBatchItem,
   createSessionBatchItem,
+  createSessionBatchKey,
 } from './batchSelection';
 import MyAgentSidebarHeader from './MyAgentSidebarHeader';
+import type {
+  AgentSidebarActivityItem,
+  AgentSidebarActivityView as AgentSidebarActivityViewModel,
+} from './taskFilter';
+import { buildAgentSidebarActivityView } from './taskFilter';
 import type { AgentSidebarAgentNode, AgentSidebarTaskNode } from './types';
 import { useAgentSidebarState } from './useAgentSidebarState';
 
@@ -49,7 +58,9 @@ interface MyAgentSidebarTreeProps {
   batchAgentId: string | null;
   deletedSessionIds: string[];
   selectedKeys: Set<string>;
+  isTaskFilterActive: boolean;
   onShowCowork: () => void;
+  onTaskFilterSummaryChange: (hasUnreadCompletedTasks: boolean) => void;
   onTaskSelected?: (params: {
     agentType: 'main' | 'custom';
     isCurrentSession: boolean;
@@ -72,6 +83,31 @@ interface MyAgentSidebarTreeProps {
   onEnterBatchMode: (sessionId: string, agentId: string) => void;
   onBatchSelectableItemsChange: (items: AgentSidebarBatchItem[]) => void;
 }
+
+const EMPTY_TASK_ACTIVITY_VIEW: AgentSidebarActivityViewModel = {
+  priority: [],
+  recent: [],
+};
+
+const logTaskNavigationIssue = (
+  level: 'warn' | 'error',
+  message: string,
+  error?: unknown,
+): void => {
+  if (level === 'error') {
+    console.error(`[AgentSidebar] ${message}`, error);
+  } else {
+    console.warn(`[AgentSidebar] ${message}`);
+  }
+  const persistedMessage = error === undefined
+    ? message
+    : `${message} error=${error instanceof Error ? error.message : String(error)}`;
+  try {
+    window.electron?.log?.fromRenderer?.(level, 'AgentSidebar', persistedMessage);
+  } catch {
+    // Best-effort renderer diagnostics only.
+  }
+};
 
 const SortableAgentNode: React.FC<{
   agent: AgentSidebarAgentNode;
@@ -111,7 +147,9 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   batchAgentId,
   deletedSessionIds,
   selectedKeys,
+  isTaskFilterActive,
   onShowCowork,
+  onTaskFilterSummaryChange,
   onTaskSelected,
   onSidebarAction,
   onToggleSelection,
@@ -136,6 +174,8 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   );
   const {
     agentNodes,
+    activityAgentNodes,
+    hasUnreadCompletedTasks,
     patchTaskPreview,
     removeTaskPreview,
     removeTaskPreviews,
@@ -146,7 +186,19 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     expandTasks,
     collapseTasks,
     toggleAgentExpanded,
-  } = useAgentSidebarState();
+  } = useAgentSidebarState({ includeActivityTasks: isTaskFilterActive });
+  const activityView = useMemo(
+    () => (
+      isTaskFilterActive
+        ? buildAgentSidebarActivityView(activityAgentNodes)
+        : EMPTY_TASK_ACTIVITY_VIEW
+    ),
+    [activityAgentNodes, isTaskFilterActive],
+  );
+
+  useEffect(() => {
+    onTaskFilterSummaryChange(hasUnreadCompletedTasks);
+  }, [hasUnreadCompletedTasks, onTaskFilterSummaryChange]);
 
   const getAgentType = useCallback((agentId: string): 'main' | 'custom' => (
     isDefaultAgentId(agentId) ? 'main' : 'custom'
@@ -179,7 +231,26 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
       // Clear subagent detail view so the main session detail is shown
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.SelectSubagent, { detail: null }));
       const session = await coworkService.loadSession(task.id);
+      if (!session) {
+        logTaskNavigationIssue(
+          'warn',
+          `failed to open task session ${task.id} for agent ${task.agentId}.`,
+        );
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('sidebarTaskOpenFailed'),
+        }));
+      }
       return session;
+    } catch (error) {
+      logTaskNavigationIssue(
+        'error',
+        `task navigation rejected for session ${task.id} and agent ${task.agentId}.`,
+        error,
+      );
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('sidebarTaskOpenFailed'),
+      }));
+      return null;
     } finally {
       coworkService.finishSessionNavigation(task.id);
     }
@@ -456,6 +527,34 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     </SortableAgentNode>
   );
 
+  const renderActivityTask = (item: AgentSidebarActivityItem) => {
+    const { agent, task } = item;
+    const isBatchAgent = isBatchMode && batchAgentId === agent.id;
+    const isOutsideBatchAgent = isBatchMode && batchAgentId !== null && batchAgentId !== agent.id;
+
+    return (
+      <AgentTaskRow
+        key={task.id}
+        task={task}
+        isBatchMode={isBatchAgent}
+        isSelected={selectedKeys.has(createSessionBatchKey(task.id))}
+        contextLabel={getAgentDisplayName(agent)}
+        contextIcon={<UserGroupIcon className="h-3 w-3" />}
+        isSelectionDisabled={isOutsideBatchAgent}
+        showBatchOption={!isBatchMode}
+        onSelect={() => void handleSelectTask(task)}
+        onDelete={() => handleDeleteTask(task)}
+        onShare={() => handleShareTask(task)}
+        onTogglePin={(pinned) => handleToggleTaskPin(task, pinned)}
+        onRename={(title) => handleRenameTask(task, title)}
+        onToggleSelection={() => onToggleSelection(createSessionBatchKey(task.id), task.agentId)}
+        onEnterBatchMode={() => handleEnterBatchMode(task)}
+        onSidebarAction={onSidebarAction}
+        analyticsParams={getTaskActionParams(task)}
+      />
+    );
+  };
+
   const renderSortableAgentGroup = (agents: AgentSidebarAgentNode[]) => (
     <DndContext
       sensors={sensors}
@@ -498,46 +597,52 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   }, [agentNodes, batchAgentId, onBatchSelectableItemsChange]);
 
   return (
-    <div className="pb-3" role="tree" aria-label={i18nService.t('myAgents')}>
-      {hasPinnedAgents && (
-        <div className="space-y-0.5">
-          <div className="sticky top-0 z-30 -ml-[6px] flex h-10 w-[calc(100%+12px)] items-center bg-surface-raised pl-3 pr-1">
-            <h2 className="min-w-0 truncate text-sm font-normal text-secondary">
-              {i18nService.t('myAgentSidebarPinned')}
-            </h2>
-          </div>
-          {renderSortableAgentGroup(pinnedAgentNodes)}
-        </div>
-      )}
+    <div className="pb-3">
+      {isTaskFilterActive ? (
+        <AgentSidebarActivityView activity={activityView} renderTask={renderActivityTask} />
+      ) : (
+        <div role="tree" aria-label={i18nService.t('myAgents')}>
+          {hasPinnedAgents && (
+            <div className="space-y-0.5">
+              <div className="sticky top-0 z-30 -ml-[6px] flex h-10 w-[calc(100%+12px)] items-center bg-surface-raised pl-3 pr-1">
+                <h2 className="min-w-0 truncate text-sm font-normal text-secondary">
+                  {i18nService.t('myAgentSidebarPinned')}
+                </h2>
+              </div>
+              {renderSortableAgentGroup(pinnedAgentNodes)}
+            </div>
+          )}
 
-      <MyAgentSidebarHeader
-        onCreateAgent={() => {
-          setCreateAgentSource('home_agent_sidebar');
-          setIsCreateOpen(true);
-        }}
-      />
-
-      {agentNodes.length === 0 ? (
-        <div className="px-3 py-6 text-center">
-          <p className="text-xs font-medium text-secondary">
-            {i18nService.t('myAgentSidebarNoAgents')}
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              setCreateAgentSource('home_agent_sidebar_empty');
+          <MyAgentSidebarHeader
+            onCreateAgent={() => {
+              setCreateAgentSource('home_agent_sidebar');
               setIsCreateOpen(true);
             }}
-            className="mt-3 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
-          >
-            {i18nService.t('createNewAgent')}
-          </button>
+          />
+
+          {agentNodes.length === 0 ? (
+            <div className="px-3 py-6 text-center">
+              <p className="text-xs font-medium text-secondary">
+                {i18nService.t('myAgentSidebarNoAgents')}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateAgentSource('home_agent_sidebar_empty');
+                  setIsCreateOpen(true);
+                }}
+                className="mt-3 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
+              >
+                {i18nService.t('createNewAgent')}
+              </button>
+            </div>
+          ) : projectAgentNodes.length > 0 ? (
+            <div className="space-y-0.5 px-0">
+              {renderSortableAgentGroup(projectAgentNodes)}
+            </div>
+          ) : null}
         </div>
-      ) : projectAgentNodes.length > 0 ? (
-        <div className="space-y-0.5 px-0">
-          {renderSortableAgentGroup(projectAgentNodes)}
-        </div>
-      ) : null}
+      )}
 
       <AgentCreateModal
         isOpen={isCreateOpen}

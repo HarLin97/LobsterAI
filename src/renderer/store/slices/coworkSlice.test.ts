@@ -25,6 +25,7 @@ import coworkReducer, {
   deleteSession,
   finishSessionNavigation,
   openBtwThread,
+  setAgentSessions,
   setBtwDraft,
   setBtwSelectedTextSnippets,
   setConfig,
@@ -685,6 +686,102 @@ test('updateSessionStatus marks completed inactive sessions unread', () => {
   );
 
   expect(completedState.unreadSessionIds).toEqual(['session-1']);
+  expect(completedState.completedUnreadSessionIds).toEqual(['session-1']);
+});
+
+test('agent-scoped session refresh preserves unread tasks from other agents', () => {
+  let state = coworkReducer(undefined, setSessions([{
+    id: 'agent-one-session',
+    title: 'Agent one task',
+    status: CoworkSessionStatusValue.Running,
+    pinned: false,
+    agentId: 'agent-one',
+    createdAt: 1,
+    updatedAt: 1,
+  }]));
+  state = coworkReducer(state, updateSessionStatus({
+    sessionId: 'agent-one-session',
+    status: CoworkSessionStatusValue.Completed,
+  }));
+
+  state = coworkReducer(state, setAgentSessions([{
+    id: 'agent-two-session',
+    title: 'Agent two task',
+    status: CoworkSessionStatusValue.Completed,
+    pinned: false,
+    agentId: 'agent-two',
+    createdAt: 2,
+    updatedAt: 2,
+  }]));
+
+  expect(state.unreadSessionIds).toEqual(['agent-one-session']);
+  expect(state.completedUnreadSessionIds).toEqual(['agent-one-session']);
+});
+
+test('full session refresh prunes unread completion state outside the snapshot', () => {
+  let state = coworkReducer(undefined, setSessions([{
+    id: 'stale-session',
+    title: 'Stale task',
+    status: CoworkSessionStatusValue.Running,
+    pinned: false,
+    agentId: 'main',
+    createdAt: 1,
+    updatedAt: 1,
+  }]));
+  state = coworkReducer(state, updateSessionStatus({
+    sessionId: 'stale-session',
+    status: CoworkSessionStatusValue.Completed,
+  }));
+
+  state = coworkReducer(state, setSessions([]));
+
+  expect(state.unreadSessionIds).toEqual([]);
+  expect(state.completedUnreadSessionIds).toEqual([]);
+});
+
+test('running a completed task again clears only its completion unread state', () => {
+  let state = coworkReducer(undefined, setSessions([{
+    id: 'rerun-session',
+    title: 'Rerun task',
+    status: CoworkSessionStatusValue.Running,
+    pinned: false,
+    agentId: 'main',
+    createdAt: 1,
+    updatedAt: 1,
+  }]));
+  state = coworkReducer(state, updateSessionStatus({
+    sessionId: 'rerun-session',
+    status: CoworkSessionStatusValue.Completed,
+  }));
+
+  state = coworkReducer(state, updateSessionStatus({
+    sessionId: 'rerun-session',
+    status: CoworkSessionStatusValue.Running,
+  }));
+
+  expect(state.unreadSessionIds).toEqual(['rerun-session']);
+  expect(state.completedUnreadSessionIds).toEqual([]);
+});
+
+test('deleting a session clears its completion unread state', () => {
+  let state = coworkReducer(undefined, setSessions([{
+    id: 'deleted-session',
+    title: 'Deleted task',
+    status: CoworkSessionStatusValue.Running,
+    pinned: false,
+    agentId: 'main',
+    createdAt: 1,
+    updatedAt: 1,
+  }]));
+  state = coworkReducer(state, updateSessionStatus({
+    sessionId: 'deleted-session',
+    status: CoworkSessionStatusValue.Completed,
+  }));
+
+  state = coworkReducer(state, deleteSession('deleted-session'));
+
+  expect(state.unreadSessionIds).toEqual([]);
+  expect(state.completedUnreadSessionIds).toEqual([]);
 });
 
 test('updateSessionStatus does not mark the active completed session unread', () => {
