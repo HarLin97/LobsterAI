@@ -5,7 +5,6 @@ import {
 } from 'electron';
 
 import {
-  type ActivityAction,
   ActivityContainerApiVersion,
   type ActivityHostExecuteActionInput,
   type ActivityHostGetContextInput,
@@ -15,8 +14,6 @@ import {
   type ActivityPlacement as ActivityPlacementType,
   type ActivityResult,
   ActivitySlotState,
-  DailyCheckInAction,
-  OneTimeCreditAction,
 } from '../../../shared/activity/constants';
 import { AuthSessionStatus } from '../../../shared/auth/constants';
 import {
@@ -55,11 +52,6 @@ const containerApiVersionByPlacement: Record<ActivityPlacementType, number> = {
     ActivityContainerApiVersion.NativeStartupCreditV1,
 };
 
-const actionByPlacement: Record<ActivityPlacementType, ActivityAction> = {
-  [ActivityPlacement.DesktopSidebar]: DailyCheckInAction.CheckIn,
-  [ActivityPlacement.DesktopStartupModal]: OneTimeCreditAction.Claim,
-};
-
 function validateSlotInput(
   input: ActivityHostGetSlotInput | undefined,
 ): asserts input is ActivityHostGetSlotInput {
@@ -85,17 +77,11 @@ function validateExecuteInput(
   input: ActivityHostExecuteActionInput | undefined,
 ): asserts input is ActivityHostExecuteActionInput {
   validateActivityBinding(input);
-  if (input.actionId !== actionByPlacement[input.placement]) {
-    throw new Error('Invalid activity action');
-  }
-  if (!/^[A-Za-z0-9._:-]{1,64}$/.test(input.idempotencyKey)) {
+  if (!/^[a-z0-9_-]{1,64}$/.test(input.actionId)
+      || !/^[A-Za-z0-9._:-]{1,64}$/.test(input.idempotencyKey)) {
     throw new Error('Invalid activity idempotency key');
   }
 }
-
-const reportHandlerFailure = (operation: string, error: unknown): void => {
-  console.warn(`[Activity] ${operation} failed:`, error);
-};
 
 export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void {
   const actionsInFlight = new Set<string>();
@@ -188,7 +174,6 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
         validateSlotInput(input);
         return await loadSlot(input);
       } catch (error) {
-        reportHandlerFailure('slot request', error);
         return failure(error);
       }
     },
@@ -207,7 +192,6 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
           input.configRevision,
         );
       } catch (error) {
-        reportHandlerFailure('context request', error);
         return failure(error);
       }
     },
@@ -243,7 +227,6 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
           actionsInFlight.delete(actionKey);
         }
       } catch (error) {
-        reportHandlerFailure('action request', error);
         return failure(error);
       }
     },

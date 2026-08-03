@@ -20,7 +20,6 @@ import { HtmlShareAccessMode, HtmlShareStatus } from '../../../shared/htmlShare/
 import {
   SiteAction,
   type SiteAnalytics,
-  SiteDeploymentStatus,
   type SiteDetail,
   SiteErrorCode,
   SiteFilterStatus,
@@ -60,36 +59,7 @@ interface SiteActionMenuState {
 }
 
 const PAGE_SIZE = 10;
-const DEPLOYING_STATUSES = new Set<string>(Object.values(SiteDeploymentStatus));
-
-type SitesRendererLogLevel = 'debug' | 'info' | 'warn';
-
-const logSitesDiagnostic = (
-  level: SitesRendererLogLevel,
-  message: string,
-  error?: unknown,
-): void => {
-  const formatted = `[SitesView] ${message}`;
-  if (level === 'warn') {
-    console.warn(formatted, ...(error === undefined ? [] : [error]));
-  } else if (level === 'debug') {
-    console.debug(formatted);
-  } else {
-    console.log(formatted);
-  }
-  try {
-    const persistedMessage = error === undefined
-      ? message
-      : `${message}; errorType=${error instanceof Error ? error.name : typeof error}`;
-    window.electron?.log?.fromRenderer?.(level, 'SitesView', persistedMessage);
-  } catch {
-    // Diagnostics must never interrupt a site-management action.
-  }
-};
-
-const resolveUnexpectedSiteError = (error: unknown, fallback: string): string => (
-  error instanceof Error && error.message.trim() ? error.message : fallback
-);
+const DEPLOYING_STATUSES = new Set(['queued', 'building', 'deploying', 'health_checking']);
 
 const statusTheme: Record<SiteStatusValue, string> = {
   [SiteStatus.Online]: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
@@ -266,27 +236,14 @@ const SitesView: React.FC<SitesViewProps> = ({
     HtmlShareAccessMode.Public,
   );
   const listRequestRef = useRef(0);
-  const listRequestsInFlightRef = useRef(0);
   const detailRequestRef = useRef(0);
   const analyticsRequestRef = useRef(0);
   const shareRequestRef = useRef(0);
-  const mountedRef = useRef(true);
   const siteActionMenuRef = useRef<HTMLDivElement>(null);
   const requestedAnalyticsDates = useMemo(
     () => analyticsDateValues(analyticsRange),
     [analyticsRange],
   );
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      listRequestRef.current += 1;
-      detailRequestRef.current += 1;
-      analyticsRequestRef.current += 1;
-      shareRequestRef.current += 1;
-    };
-  }, []);
 
   useEffect(() => {
     if (!siteActionMenu) return undefined;
@@ -321,45 +278,22 @@ const SitesView: React.FC<SitesViewProps> = ({
   const loadSites = useCallback(
     async (background = false) => {
       if (!isAuthenticated) return;
-      // Deployment polling must not stack IPC/network work when a prior list
-      // request is still pending on a slow or disconnected network.
-      if (background && listRequestsInFlightRef.current > 0) return;
-      listRequestsInFlightRef.current += 1;
       const requestId = ++listRequestRef.current;
       if (!background) setListLoading(true);
       setListError(null);
-      try {
-        const result = await window.electron.sites.list({
-          page,
-          pageSize: PAGE_SIZE,
-          keyword: keyword || undefined,
-          siteStatus: statusFilter,
-        });
-        if (!mountedRef.current || requestId !== listRequestRef.current) return;
-        if (result.success && result.data) {
-          setListData(result.data);
-        } else {
-          const message = result.error || i18nService.t('sitesLoadFailed');
-          setListError(message);
-          if (!background) {
-            logSitesDiagnostic(
-              'warn',
-              `site list request failed; page=${page}; code=${result.code ?? 'unknown'}`,
-            );
-          }
-        }
-      } catch (error) {
-        if (!mountedRef.current || requestId !== listRequestRef.current) return;
-        setListError(resolveUnexpectedSiteError(error, i18nService.t('sitesLoadFailed')));
-        if (!background) {
-          logSitesDiagnostic('warn', `site list IPC failed; page=${page}`, error);
-        }
-      } finally {
-        listRequestsInFlightRef.current = Math.max(0, listRequestsInFlightRef.current - 1);
-        if (mountedRef.current && requestId === listRequestRef.current) {
-          setListLoading(false);
-        }
+      const result = await window.electron.sites.list({
+        page,
+        pageSize: PAGE_SIZE,
+        keyword: keyword || undefined,
+        siteStatus: statusFilter,
+      });
+      if (requestId !== listRequestRef.current) return;
+      if (result.success && result.data) {
+        setListData(result.data);
+      } else {
+        setListError(result.error || i18nService.t('sitesLoadFailed'));
       }
+      setListLoading(false);
     },
     [isAuthenticated, keyword, page, statusFilter],
   );
@@ -392,31 +326,17 @@ const SitesView: React.FC<SitesViewProps> = ({
     setDetailLoading(true);
     setActionError(null);
     setDetailTab(tab);
-    logSitesDiagnostic('debug', `opening site detail; shareId=${site.shareId}; tab=${tab}`);
-    try {
-      const result = await window.electron.sites.get(site.shareId);
-      if (!mountedRef.current || requestId !== detailRequestRef.current) return;
-      if (result.success && result.data) {
-        setSelectedSite(result.data);
-        setTitleDraft(result.data.title);
-        setAccessModeDraft(result.data.accessMode);
-        setAnalytics(null);
-      } else {
-        setListError(result.error || i18nService.t('sitesLoadFailed'));
-        logSitesDiagnostic(
-          'warn',
-          `site detail request failed; shareId=${site.shareId}; code=${result.code ?? 'unknown'}`,
-        );
-      }
-    } catch (error) {
-      if (!mountedRef.current || requestId !== detailRequestRef.current) return;
-      setListError(resolveUnexpectedSiteError(error, i18nService.t('sitesLoadFailed')));
-      logSitesDiagnostic('warn', `site detail IPC failed; shareId=${site.shareId}`, error);
-    } finally {
-      if (mountedRef.current && requestId === detailRequestRef.current) {
-        setDetailLoading(false);
-      }
+    const result = await window.electron.sites.get(site.shareId);
+    if (requestId !== detailRequestRef.current) return;
+    if (result.success && result.data) {
+      setSelectedSite(result.data);
+      setTitleDraft(result.data.title);
+      setAccessModeDraft(result.data.accessMode);
+      setAnalytics(null);
+    } else {
+      setListError(result.error || i18nService.t('sitesLoadFailed'));
     }
+    setDetailLoading(false);
   }, []);
 
   const closeShareDialog = useCallback(() => {
@@ -439,28 +359,15 @@ const SitesView: React.FC<SitesViewProps> = ({
     setShareError(null);
     setShareLinkCopied(false);
     const requestId = ++shareRequestRef.current;
-    try {
-      const result = await window.electron.sites.get(site.shareId);
-      if (!mountedRef.current || requestId !== shareRequestRef.current) return;
-      if (result.success && result.data) {
-        setShareSiteDetail(result.data);
-        setShareAccessModeDraft(result.data.accessMode);
-      } else {
-        setShareError(result.error || i18nService.t('sitesShareLoadFailed'));
-        logSitesDiagnostic(
-          'warn',
-          `share dialog request failed; shareId=${site.shareId}; code=${result.code ?? 'unknown'}`,
-        );
-      }
-    } catch (error) {
-      if (!mountedRef.current || requestId !== shareRequestRef.current) return;
-      setShareError(resolveUnexpectedSiteError(error, i18nService.t('sitesShareLoadFailed')));
-      logSitesDiagnostic('warn', `share dialog IPC failed; shareId=${site.shareId}`, error);
-    } finally {
-      if (mountedRef.current && requestId === shareRequestRef.current) {
-        setShareDialogLoading(false);
-      }
+    const result = await window.electron.sites.get(site.shareId);
+    if (requestId !== shareRequestRef.current) return;
+    if (result.success && result.data) {
+      setShareSiteDetail(result.data);
+      setShareAccessModeDraft(result.data.accessMode);
+    } else {
+      setShareError(result.error || i18nService.t('sitesShareLoadFailed'));
     }
+    setShareDialogLoading(false);
   }, []);
 
   const loadAnalytics = useCallback(async () => {
@@ -469,37 +376,17 @@ const SitesView: React.FC<SitesViewProps> = ({
     setAnalyticsLoading(true);
     setActionError(null);
     const analyticsDates = analyticsDateValues(analyticsRange);
-    try {
-      const result = await window.electron.sites.getAnalytics(selectedSite.shareId, {
-        ...analyticsDates,
-        limit: 10,
-      });
-      if (!mountedRef.current || requestId !== analyticsRequestRef.current) return;
-      if (result.success && result.data) {
-        setAnalytics(result.data);
-      } else {
-        setActionError(result.error || i18nService.t('sitesAnalyticsLoadFailed'));
-        logSitesDiagnostic(
-          'warn',
-          `site analytics request failed; shareId=${selectedSite.shareId}; `
-          + `range=${analyticsRange}; code=${result.code ?? 'unknown'}`,
-        );
-      }
-    } catch (error) {
-      if (!mountedRef.current || requestId !== analyticsRequestRef.current) return;
-      setActionError(
-        resolveUnexpectedSiteError(error, i18nService.t('sitesAnalyticsLoadFailed')),
-      );
-      logSitesDiagnostic(
-        'warn',
-        `site analytics IPC failed; shareId=${selectedSite.shareId}; range=${analyticsRange}`,
-        error,
-      );
-    } finally {
-      if (mountedRef.current && requestId === analyticsRequestRef.current) {
-        setAnalyticsLoading(false);
-      }
+    const result = await window.electron.sites.getAnalytics(selectedSite.shareId, {
+      ...analyticsDates,
+      limit: 10,
+    });
+    if (requestId !== analyticsRequestRef.current) return;
+    if (result.success && result.data) {
+      setAnalytics(result.data);
+    } else {
+      setActionError(result.error || i18nService.t('sitesAnalyticsLoadFailed'));
     }
+    setAnalyticsLoading(false);
   }, [analyticsRange, selectedSite]);
 
   useEffect(() => {
@@ -528,67 +415,26 @@ const SitesView: React.FC<SitesViewProps> = ({
       return;
     setActionLoading(true);
     setActionError(null);
-    try {
-      const result = await window.electron.sites.updateTitle({
-        shareId: selectedSite.shareId,
-        title: titleDraft.trim(),
-      });
-      if (!mountedRef.current) return;
-      if (result.success && result.data) {
-        applyUpdatedSite(result.data);
-        logSitesDiagnostic('info', `site title updated; shareId=${selectedSite.shareId}`);
-      } else {
-        setActionError(result.error || i18nService.t('sitesUpdateFailed'));
-        logSitesDiagnostic(
-          'warn',
-          `site title update failed; shareId=${selectedSite.shareId}; `
-          + `code=${result.code ?? 'unknown'}`,
-        );
-      }
-    } catch (error) {
-      if (!mountedRef.current) return;
-      setActionError(resolveUnexpectedSiteError(error, i18nService.t('sitesUpdateFailed')));
-      logSitesDiagnostic('warn', `site title IPC failed; shareId=${selectedSite.shareId}`, error);
-    } finally {
-      if (mountedRef.current) setActionLoading(false);
-    }
+    const result = await window.electron.sites.updateTitle({
+      shareId: selectedSite.shareId,
+      title: titleDraft.trim(),
+    });
+    if (result.success && result.data) applyUpdatedSite(result.data);
+    else setActionError(result.error || i18nService.t('sitesUpdateFailed'));
+    setActionLoading(false);
   };
 
   const saveAccessMode = async () => {
     if (readOnly || !selectedSite || accessModeDraft === selectedSite.accessMode) return;
     setActionLoading(true);
     setActionError(null);
-    try {
-      const result = await window.electron.sites.updateAccessMode({
-        shareId: selectedSite.shareId,
-        accessMode: accessModeDraft,
-      });
-      if (!mountedRef.current) return;
-      if (result.success && result.data) {
-        applyUpdatedSite(result.data);
-        logSitesDiagnostic(
-          'info',
-          `site access mode updated; shareId=${selectedSite.shareId}; mode=${accessModeDraft}`,
-        );
-      } else {
-        setActionError(result.error || i18nService.t('sitesUpdateFailed'));
-        logSitesDiagnostic(
-          'warn',
-          `site access mode update failed; shareId=${selectedSite.shareId}; `
-          + `code=${result.code ?? 'unknown'}`,
-        );
-      }
-    } catch (error) {
-      if (!mountedRef.current) return;
-      setActionError(resolveUnexpectedSiteError(error, i18nService.t('sitesUpdateFailed')));
-      logSitesDiagnostic(
-        'warn',
-        `site access mode IPC failed; shareId=${selectedSite.shareId}`,
-        error,
-      );
-    } finally {
-      if (mountedRef.current) setActionLoading(false);
-    }
+    const result = await window.electron.sites.updateAccessMode({
+      shareId: selectedSite.shareId,
+      accessMode: accessModeDraft,
+    });
+    if (result.success && result.data) applyUpdatedSite(result.data);
+    else setActionError(result.error || i18nService.t('sitesUpdateFailed'));
+    setActionLoading(false);
   };
 
   const updateShareAccessMode = async () => {
@@ -603,39 +449,19 @@ const SitesView: React.FC<SitesViewProps> = ({
     setShareError(null);
     setShareLinkCopied(false);
 
-    try {
-      const result = await window.electron.sites.updateAccessMode({
-        shareId: shareSite.shareId,
-        accessMode: shareAccessModeDraft,
-      });
-      if (!mountedRef.current) return;
-      if (!result.success || !result.data) {
-        setShareError(result.error || i18nService.t('sitesUpdateFailed'));
-        logSitesDiagnostic(
-          'warn',
-          `share access mode update failed; shareId=${shareSite.shareId}; `
-          + `code=${result.code ?? 'unknown'}`,
-        );
-        return;
-      }
-      setShareSite(result.data);
-      setShareSiteDetail(result.data);
-      void loadSites(true);
-      logSitesDiagnostic(
-        'info',
-        `share access mode updated; shareId=${shareSite.shareId}; mode=${shareAccessModeDraft}`,
-      );
-    } catch (error) {
-      if (!mountedRef.current) return;
-      setShareError(resolveUnexpectedSiteError(error, i18nService.t('sitesUpdateFailed')));
-      logSitesDiagnostic(
-        'warn',
-        `share access mode IPC failed; shareId=${shareSite.shareId}`,
-        error,
-      );
-    } finally {
-      if (mountedRef.current) setShareActionLoading(false);
+    const result = await window.electron.sites.updateAccessMode({
+      shareId: shareSite.shareId,
+      accessMode: shareAccessModeDraft,
+    });
+    if (!result.success || !result.data) {
+      setShareError(result.error || i18nService.t('sitesUpdateFailed'));
+      setShareActionLoading(false);
+      return;
     }
+    setShareSite(result.data);
+    setShareSiteDetail(result.data);
+    void loadSites(true);
+    setShareActionLoading(false);
   };
 
   const copyShareLink = async () => {
@@ -665,39 +491,17 @@ const SitesView: React.FC<SitesViewProps> = ({
     if (readOnly || !selectedSite || !confirmAction) return;
     setActionLoading(true);
     setActionError(null);
-    const action = confirmAction;
-    try {
-      const result = await window.electron.sites.updateAccessStatus({
-        shareId: selectedSite.shareId,
-        status: action === 'stop' ? HtmlShareStatus.Disabled : HtmlShareStatus.Live,
-      });
-      if (!mountedRef.current) return;
-      if (result.success && result.data) {
-        applyUpdatedSite(result.data);
-        setConfirmAction(null);
-        logSitesDiagnostic(
-          'info',
-          `site access status updated; shareId=${selectedSite.shareId}; action=${action}`,
-        );
-      } else {
-        setActionError(result.error || i18nService.t('sitesUpdateFailed'));
-        logSitesDiagnostic(
-          'warn',
-          `site access status update failed; shareId=${selectedSite.shareId}; `
-          + `action=${action}; code=${result.code ?? 'unknown'}`,
-        );
-      }
-    } catch (error) {
-      if (!mountedRef.current) return;
-      setActionError(resolveUnexpectedSiteError(error, i18nService.t('sitesUpdateFailed')));
-      logSitesDiagnostic(
-        'warn',
-        `site access status IPC failed; shareId=${selectedSite.shareId}; action=${action}`,
-        error,
-      );
-    } finally {
-      if (mountedRef.current) setActionLoading(false);
+    const result = await window.electron.sites.updateAccessStatus({
+      shareId: selectedSite.shareId,
+      status: confirmAction === 'stop' ? HtmlShareStatus.Disabled : HtmlShareStatus.Live,
+    });
+    if (result.success && result.data) {
+      applyUpdatedSite(result.data);
+      setConfirmAction(null);
+    } else {
+      setActionError(result.error || i18nService.t('sitesUpdateFailed'));
     }
+    setActionLoading(false);
   };
 
   const deleteSelectedSite = async () => {
@@ -705,36 +509,22 @@ const SitesView: React.FC<SitesViewProps> = ({
       return;
     setActionLoading(true);
     setActionError(null);
-    try {
-      const result = await window.electron.sites.delete(selectedSite.shareId);
-      if (!mountedRef.current) return;
-      if (result.success) {
-        logSitesDiagnostic('info', `site deleted; shareId=${selectedSite.shareId}`);
-        setDeleteConfirmOpen(false);
-        setDeleteConfirmText('');
-        setSelectedSite(null);
-        setAnalytics(null);
-        if (page === 1) void loadSites(true);
-        else setPage(1);
-      } else {
-        setActionError(
-          result.code === SiteErrorCode.DeleteRequiresStopped
-            ? i18nService.t('sitesDeleteRequiresStopped')
-            : result.error || i18nService.t('sitesDeleteFailed'),
-        );
-        logSitesDiagnostic(
-          'warn',
-          `site deletion failed; shareId=${selectedSite.shareId}; `
-          + `code=${result.code ?? 'unknown'}`,
-        );
-      }
-    } catch (error) {
-      if (!mountedRef.current) return;
-      setActionError(resolveUnexpectedSiteError(error, i18nService.t('sitesDeleteFailed')));
-      logSitesDiagnostic('warn', `site deletion IPC failed; shareId=${selectedSite.shareId}`, error);
-    } finally {
-      if (mountedRef.current) setActionLoading(false);
+    const result = await window.electron.sites.delete(selectedSite.shareId);
+    if (result.success) {
+      setDeleteConfirmOpen(false);
+      setDeleteConfirmText('');
+      setSelectedSite(null);
+      setAnalytics(null);
+      if (page === 1) void loadSites(true);
+      else setPage(1);
+    } else {
+      setActionError(
+        result.code === SiteErrorCode.DeleteRequiresStopped
+          ? i18nService.t('sitesDeleteRequiresStopped')
+          : result.error || i18nService.t('sitesDeleteFailed'),
+      );
     }
+    setActionLoading(false);
   };
 
   if (!isAuthenticated) {
@@ -781,16 +571,14 @@ const SitesView: React.FC<SitesViewProps> = ({
     return (
       <div
         data-skin-management-page="true"
-        className="relative z-10 flex h-full min-h-0 flex-col overflow-x-auto bg-background"
+        className="relative z-10 flex h-full min-h-0 flex-col bg-background"
       >
-        <div className="min-w-[720px] shrink-0">
-          <SitesTopBar
-            isSidebarCollapsed={isSidebarCollapsed}
-            onToggleSidebar={onToggleSidebar}
-            updateBadge={updateBadge}
-          />
-        </div>
-        <header className="flex h-[52px] min-w-[720px] shrink-0 items-center gap-2 border-b border-border px-4">
+        <SitesTopBar
+          isSidebarCollapsed={isSidebarCollapsed}
+          onToggleSidebar={onToggleSidebar}
+          updateBadge={updateBadge}
+        />
+        <header className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border px-4">
           <button
             type="button"
             onClick={leaveSiteDetail}
@@ -835,7 +623,7 @@ const SitesView: React.FC<SitesViewProps> = ({
             {i18nService.t('sitesVisit')}
           </button>
         </header>
-        <main className="min-h-0 min-w-[720px] flex-1 overflow-y-auto p-6">
+        <main className="min-h-0 flex-1 overflow-y-auto p-6">
           {actionError && (
             <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-sm text-red-600">
               {actionError}
@@ -1140,7 +928,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         <Modal
           isOpen={confirmAction !== null}
           onClose={() => !actionLoading && setConfirmAction(null)}
-          className="w-[430px] max-w-[calc(100vw-32px)] rounded-2xl border border-border bg-background p-6 shadow-2xl"
+          className="w-[430px] rounded-2xl border border-border bg-background p-6 shadow-2xl"
         >
           <h2 className="text-base font-semibold text-foreground">
             {confirmAction === 'stop'
@@ -1196,7 +984,7 @@ const SitesView: React.FC<SitesViewProps> = ({
             setDeleteConfirmText('');
             setActionError(null);
           }}
-          className="w-[460px] max-w-[calc(100vw-32px)] rounded-2xl border border-border bg-background p-6 shadow-2xl"
+          className="w-[460px] rounded-2xl border border-border bg-background p-6 shadow-2xl"
         >
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/10 text-red-600">
             <TrashIcon className="h-5 w-5" />
@@ -1261,7 +1049,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         <Modal
           isOpen={leaveConfirmOpen}
           onClose={() => setLeaveConfirmOpen(false)}
-          className="w-[430px] max-w-[calc(100vw-32px)] rounded-2xl border border-border bg-background p-6 shadow-2xl"
+          className="w-[430px] rounded-2xl border border-border bg-background p-6 shadow-2xl"
         >
           <h2 className="text-base font-semibold text-foreground">
             {i18nService.t('sitesDiscardConfirmTitle')}
@@ -1328,20 +1116,20 @@ const SitesView: React.FC<SitesViewProps> = ({
           updateBadge={updateBadge}
         />
       </div>
-      <header className="mx-auto w-full min-w-[720px] max-w-[1120px] shrink-0 px-6 py-6">
+      <header className="mx-auto w-full min-w-[720px] max-w-[840px] shrink-0 px-6 py-4">
         <div className="flex items-center justify-between gap-4">
           <p className="text-sm text-secondary">{i18nService.t('sitesSubtitle')}</p>
           {isUnfilteredEmpty && createSiteButton(true)}
         </div>
         {!isUnfilteredEmpty && (
-          <div className="mt-4 flex flex-nowrap items-center gap-2.5">
+          <div className="mt-3 flex flex-nowrap items-center gap-2.5">
             <div className="relative min-w-[280px] flex-1">
               <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-secondary" />
               <input
                 value={keywordInput}
                 onChange={event => setKeywordInput(event.target.value)}
                 placeholder={i18nService.t('sitesSearchPlaceholder')}
-                className="h-9 w-full rounded-xl border border-border bg-surface pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-secondary focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-lg border border-border bg-surface pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-secondary focus:border-primary"
               />
             </div>
             <div className="flex h-9 rounded-lg border border-border bg-surface p-0.5">
@@ -1379,7 +1167,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         )}
       </header>
       <main className="min-h-0 w-full min-w-[720px] flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-        <div className="mx-auto w-full max-w-[1120px] px-6 pb-6">
+        <div className="mx-auto w-full max-w-[840px] px-6 pb-6">
           {listError && (
             <div className="mb-3 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-sm text-red-600">
               <span>{listError}</span>

@@ -1,6 +1,5 @@
 import { configureStore } from '@reduxjs/toolkit';
 
-import enterpriseAccountReducer from '../features/enterpriseAccount/enterpriseAccountSlice';
 import agentReducer from './slices/agentSlice';
 import artifactReducer from './slices/artifactSlice';
 import asrQuotaReducer from './slices/asrQuotaSlice';
@@ -26,7 +25,6 @@ export const store = configureStore({
     agent: agentReducer,
     asrQuota: asrQuotaReducer,
     auth: authReducer,
-    enterpriseAccount: enterpriseAccountReducer,
     artifact: artifactReducer,
     kit: kitReducer,
   },

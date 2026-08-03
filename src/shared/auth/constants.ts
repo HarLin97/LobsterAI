@@ -109,7 +109,6 @@ export type AuthSessionChangedEvent = {
 
 export const AuthSubscriptionStatus = {
   Active: 'active',
-  Enterprise: 'enterprise',
   Free: 'free',
 } as const;
 

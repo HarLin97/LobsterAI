@@ -45,14 +45,6 @@ interface QueuedFollowUpOperation {
   cancelled: boolean;
 }
 
-export const isQueuedSteerAccountCurrent = (
-  queuedSteer: Pick<CoworkPendingSteer, 'ownerAccountKey' | 'accountGeneration'>,
-  authState: Pick<RootState['auth'], 'ownerAccountKey' | 'accountGeneration'>,
-): boolean => (
-  queuedSteer.ownerAccountKey === authState.ownerAccountKey
-  && queuedSteer.accountGeneration === authState.accountGeneration
-);
-
 export class CoworkQueuedFollowUpCoordinator {
   private readonly inFlightBySessionId = new Map<string, QueuedFollowUpOperation>();
   private readonly startingQueuedTurnSessionIds = new Set<string>();
@@ -145,30 +137,12 @@ export class CoworkQueuedFollowUpCoordinator {
       );
       return false;
     }
-    if (!this.isQueuedSteerCurrent(queuedSteer)) {
-      this.removeQueuedSteerIfUnchanged(queuedSteer);
-      this.dependencies.log(
-        'warn',
-        `discarded queued follow-up interrupt because the authenticated account changed; `
-        + `session=${sessionId}; id=${steerId}.`,
-      );
-      return false;
-    }
 
     const operation: QueuedFollowUpOperation = { steerId, cancelled: false };
     this.interruptingBySessionId.set(sessionId, operation);
     try {
       const stopped = await this.dependencies.stopSession(sessionId);
-      if (
-        !stopped
-        || operation.cancelled
-        || !this.isQueuedSteerCurrent(queuedSteer)
-      ) {
-        if (!this.isQueuedSteerCurrent(queuedSteer)) {
-          this.removeQueuedSteerIfUnchanged(queuedSteer);
-        }
-        return false;
-      }
+      if (!stopped || operation.cancelled) return false;
       return await this.submit(sessionId, steerId, CoworkQueuedFollowUpTrigger.Interrupted);
     } catch (error) {
       this.dependencies.log(
@@ -212,15 +186,6 @@ export class CoworkQueuedFollowUpCoordinator {
           + `session=${sessionId}; id=${requestedSteerId}; trigger=${trigger}.`,
         );
       }
-      return false;
-    }
-    if (!this.isQueuedSteerCurrent(queuedSteer)) {
-      this.removeQueuedSteerIfUnchanged(queuedSteer);
-      this.dependencies.log(
-        'warn',
-        `discarded queued follow-up because the authenticated account changed; `
-        + `session=${sessionId}; id=${queuedSteer.id}; trigger=${trigger}.`,
-      );
       return false;
     }
 
@@ -274,15 +239,6 @@ export class CoworkQueuedFollowUpCoordinator {
         );
         return false;
       }
-      if (!this.isQueuedSteerCurrent(queuedSteer)) {
-        this.removeQueuedSteerIfUnchanged(queuedSteer);
-        this.dependencies.log(
-          'warn',
-          `discarded queued follow-up because the authenticated account changed during preparation; `
-          + `session=${sessionId}; id=${queuedSteer.id}.`,
-        );
-        return false;
-      }
       if (!prepared.success) {
         this.rejectPreparationFailure(queuedSteer, prepared.failure);
         return false;
@@ -298,14 +254,6 @@ export class CoworkQueuedFollowUpCoordinator {
           `cancelled queued follow-up submit because the item was removed during preparation; `
           + `session=${sessionId}; id=${queuedSteer.id}.`,
         );
-        return false;
-      }
-      if (
-        stillQueued.ownerAccountKey !== queuedSteer.ownerAccountKey
-        || stillQueued.accountGeneration !== queuedSteer.accountGeneration
-        || !this.isQueuedSteerCurrent(queuedSteer)
-      ) {
-        this.removeQueuedSteerIfUnchanged(queuedSteer);
         return false;
       }
 
@@ -328,11 +276,8 @@ export class CoworkQueuedFollowUpCoordinator {
         selectedTextSnippets: prepared.payload.selectedTextSnippets,
         browserAnnotations: queuedSteer.browserAnnotations,
       });
-      if (operation.cancelled || !this.isQueuedSteerCurrent(queuedSteer)) {
+      if (operation.cancelled) {
         this.startingQueuedTurnSessionIds.delete(sessionId);
-        if (!this.isQueuedSteerCurrent(queuedSteer)) {
-          this.removeQueuedSteerIfUnchanged(queuedSteer);
-        }
         return false;
       }
       if (!sent) {
@@ -368,10 +313,6 @@ export class CoworkQueuedFollowUpCoordinator {
         `failed to submit queued follow-up; session=${sessionId}; id=${queuedSteer.id}; trigger=${trigger}.`,
         error,
       );
-      if (!this.isQueuedSteerCurrent(queuedSteer)) {
-        this.removeQueuedSteerIfUnchanged(queuedSteer);
-        return false;
-      }
       this.dependencies.dispatch(updateSteerStatus({
         sessionId,
         steerId: queuedSteer.id,
@@ -393,31 +334,6 @@ export class CoworkQueuedFollowUpCoordinator {
       return state.currentSession.status;
     }
     return state.sessions.find(session => session.id === sessionId)?.status;
-  }
-
-  private isQueuedSteerCurrent(queuedSteer: CoworkPendingSteer): boolean {
-    return isQueuedSteerAccountCurrent(
-      queuedSteer,
-      this.dependencies.getState().auth,
-    );
-  }
-
-  private removeQueuedSteerIfUnchanged(queuedSteer: CoworkPendingSteer): void {
-    const current = selectQueuedFollowUp(
-      this.dependencies.getState().cowork.pendingSteers[queuedSteer.sessionId] ?? [],
-      queuedSteer.id,
-    );
-    if (
-      !current
-      || current.ownerAccountKey !== queuedSteer.ownerAccountKey
-      || current.accountGeneration !== queuedSteer.accountGeneration
-    ) {
-      return;
-    }
-    this.dependencies.dispatch(removePendingSteer({
-      sessionId: queuedSteer.sessionId,
-      steerId: queuedSteer.id,
-    }));
   }
 
   private rejectPreparationFailure(

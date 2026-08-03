@@ -28,7 +28,6 @@ const ArtifactSubscriptionPromptDialog = ({
   const titleId = useId();
   const descriptionId = useId();
   const copyKeys = getArtifactSubscriptionPromptCopyKeys(feature, reason);
-  const canSubscribe = reason !== 'enterprise_unavailable';
 
   useEffect(() => {
     previousFocusRef.current =
@@ -103,15 +102,13 @@ const ArtifactSubscriptionPromptDialog = ({
           >
             {i18nService.t('cancel')}
           </button>
-          {canSubscribe && (
-            <button
-              type="button"
-              onClick={onSubscribe}
-              className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90"
-            >
-              {i18nService.t('subscriptionGateOpenAction')}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={onSubscribe}
+            className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            {i18nService.t('subscriptionGateOpenAction')}
+          </button>
         </div>
       </div>
     </div>
