@@ -1062,7 +1062,7 @@ export const LogReporterActionPrefix = {
 #### 2.4.41 `lobsterai_im_prompt_submit`
 
 - 状态：已实现。
-- 触发时机：OpenClaw 接收到 IM channel 消息、将其映射到 LobsterAI 本地会话，并成功创建对应 Agent turn 后发送。同一 run 的重复生命周期事件或恢复重试不重复发送；进程内仅保留最近 2000 个已上报 run ID，避免去重集合随运行时间无限增长。
+- 触发时机：OpenClaw 接收到 IM channel 消息、成功创建对应 Agent turn，并发送 `sessions.changed phase=start` 后，LobsterAI 将 channel 映射到本地会话并发送事件。对于仍通过 `agent` / `chat` 事件创建本地 ActiveTurn 的兼容链路，在 ActiveTurn 创建后使用同一方法回退触发。两条路径共享 run ID 去重，同一 run 的重复生命周期事件、恢复重试或双路径命中不重复发送；进程内仅保留最近 2000 个已上报 run ID，避免去重集合随运行时间无限增长。
 - 事件含义：统计从 IM 侧成功进入 Agent 执行链路的任务提交量，并区分平台、新任务/续聊和 Agent 路由。该事件不替代 `lobsterai_prompt_submit`；后者继续只统计桌面端首页和历史对话输入框提交。
 - 排除范围：
   - 不统计桌面端 managed session、定时任务、子 Agent 会话、心跳、通知投递镜像或失效 Agent 绑定产生的事件。

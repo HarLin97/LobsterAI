@@ -7172,6 +7172,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (isNewlyKnownSession) {
       this.notifySessionsChanged(sessionId);
     }
+    if (phase === AgentLifecyclePhase.Start && runId) {
+      this.reportChannelPromptSubmit(sessionId, sessionKey, runId);
+    }
   }
 
   /**

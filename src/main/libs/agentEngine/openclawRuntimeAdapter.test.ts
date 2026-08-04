@@ -2200,12 +2200,59 @@ test('sessions.changed drives IM loading status without creating a local active 
   ]);
 });
 
+test('sessions.changed start reports an IM prompt once across lifecycle and ActiveTurn paths', () => {
+  const sessionKey = 'agent:main:openclaw-weixin:bot-1:direct:user-1';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const observedStatuses: string[] = [];
+  const onChannelPromptSubmit = vi.fn(() => {
+    observedStatuses.push(session.status);
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {}, { onChannelPromptSubmit });
+  adapter.channelSessionSync = {
+    isChannelSessionKey: (key: string) => key === sessionKey,
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+  adapter.prefetchChannelUserMessages = vi.fn();
+  adapter.startTurnTimeoutWatchdog = vi.fn();
+
+  const lifecycleStart = {
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-lifecycle',
+      phase: 'start',
+      status: 'running',
+    },
+  };
+  adapter.handleGatewayEvent(lifecycleStart);
+  adapter.handleGatewayEvent(lifecycleStart);
+
+  expect(onChannelPromptSubmit).toHaveBeenCalledOnce();
+  expect(onChannelPromptSubmit).toHaveBeenLastCalledWith({
+    agentId: 'main',
+    conversationState: 'new_task',
+    isMainAgent: true,
+    platform: 'weixin',
+  });
+  expect(observedStatuses).toEqual(['running']);
+  expect(adapter.activeTurns.has(session.id)).toBe(false);
+
+  adapter.ensureActiveTurn(session.id, sessionKey, 'im-run-lifecycle');
+
+  expect(adapter.activeTurns.has(session.id)).toBe(true);
+  expect(onChannelPromptSubmit).toHaveBeenCalledOnce();
+});
+
 test('sessions.changed IM status handling excludes desktop, cron, main, subagent, and stale bindings', () => {
   const validSessionKey = 'agent:main:feishu:dm:ou_123';
   const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
     sessionId: 'session-1',
   });
-  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const onChannelPromptSubmit = vi.fn();
+  const adapter = new OpenClawRuntimeAdapter(store, {}, { onChannelPromptSubmit });
   const resolveOrCreateSession = vi.fn(() => session.id);
   adapter.channelSessionSync = {
     isCurrentBindingKey: (key: string) => key !== validSessionKey,
@@ -2232,6 +2279,7 @@ test('sessions.changed IM status handling excludes desktop, cron, main, subagent
 
   expect(session.status).toBe('completed');
   expect(resolveOrCreateSession).not.toHaveBeenCalled();
+  expect(onChannelPromptSubmit).not.toHaveBeenCalled();
   expect(getUpdateSessionCalls().some((call) => 'status' in call.patch)).toBe(false);
 });
 

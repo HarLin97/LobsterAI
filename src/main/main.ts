@@ -1922,7 +1922,9 @@ const getMainLogReporter = (): MainLogReporter => {
       appVersion: app.getVersion(),
       fetch: async (url, signal) => {
         const response = await session.defaultSession.fetch(url, { method: 'GET', signal });
-        return { ok: response.ok, status: response.status };
+        const result = { ok: response.ok, status: response.status };
+        await response.body?.cancel();
+        return result;
       },
       store: getStore(),
     });
