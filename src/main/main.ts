@@ -362,7 +362,6 @@ import {
 import { collectReferencedEnvVarNames, pickReferencedSecretEnvVars } from './libs/openclawSecretEnv';
 import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
-import { sanitizeProfileSummary } from './libs/profileSummary';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { packageNodeServiceDeployment } from './libs/shareDeployment/nodeServiceDeploymentPackager';
@@ -5847,9 +5846,37 @@ if (!gotTheLock) {
       if (!resp.ok) return { success: false };
       const body = (await resp.json()) as { code: number; data: Record<string, unknown> };
       if (body.code !== 0 || !body.data) return { success: false };
-      return { success: true, data: sanitizeProfileSummary(body.data) };
+      return { success: true, data: body.data };
     } catch {
       return { success: false };
+    }
+  });
+
+  ipcMain.handle(AuthIpcChannel.ClaimCreditsFinalReward, async (_event, payload: { campaignCode?: string }) => {
+    try {
+      const campaignCode = payload?.campaignCode?.trim();
+      if (!campaignCode) return { success: false, error: 'Missing campaign code' };
+      const serverBaseUrl = getServerApiBaseUrl();
+      const url = appendKeyfromQuery(`${serverBaseUrl}/api/credits-reset-campaign/free-credits/claim`);
+      const resp = await fetchWithAuth(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignCode }),
+      });
+      const body = (await resp.json()) as {
+        code: number;
+        message?: string;
+        data?: Record<string, unknown>;
+      };
+      if (!resp.ok || body.code !== 0 || !body.data) {
+        return { success: false, error: body.message || `Claim failed (${resp.status})` };
+      }
+      return { success: true, data: body.data };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Claim failed',
+      };
     }
   });
 
