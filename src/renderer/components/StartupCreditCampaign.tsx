@@ -17,6 +17,8 @@ import React, {
 import { createPortal } from 'react-dom';
 import { useSelector } from 'react-redux';
 
+import startupCreditActionArtworkUrl from '../assets/startup-credit-action.png';
+import startupCreditPosterArtworkUrl from '../assets/startup-credit-poster.png';
 import { authService } from '../services/auth';
 import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
@@ -32,7 +34,6 @@ import {
   STARTUP_CREDIT_OPEN_EVENT,
 } from './startupCreditCampaignBridge';
 import {
-  buildStartupCreditPosterUrl,
   canClaimStartupCredit,
   clearPendingStartupCreditClaim,
   createStartupCreditIdempotencyKey,
@@ -193,12 +194,9 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   const exposureReportedRef = useRef(false);
   const exposureStartedAtRef = useRef<number | null>(null);
   const reportedLoginSuccessRef = useRef(new Set<string>());
-  const posterUrl = snapshot
-    ? buildStartupCreditPosterUrl(
-        snapshot.descriptor.posterUrl,
-        snapshot.descriptor.configRevision,
-      )
-    : null;
+  // This one-off campaign ships its final offer artwork with the client. The
+  // server still controls availability, timing, state, and reward fulfillment.
+  const posterUrl = snapshot ? startupCreditPosterArtworkUrl : null;
 
   const openOffer = useCallback((source: StartupCreditCampaignSourceType): void => {
     offerSourceRef.current = source;
@@ -549,12 +547,15 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     setPosterLoad(current => current.url === posterUrl && current.settled
       ? current
       : { url: posterUrl, settled: false, failed: false });
-    void preloadStartupCreditPoster(posterUrl).then((success) => {
+    void Promise.all([
+      preloadStartupCreditPoster(posterUrl),
+      preloadStartupCreditPoster(startupCreditActionArtworkUrl),
+    ]).then(([posterSuccess, actionArtworkSuccess]) => {
       if (!active) return;
       setPosterLoad({
         url: posterUrl,
         settled: true,
-        failed: !success,
+        failed: !posterSuccess || !actionArtworkSuccess,
       });
     });
     return () => {
@@ -844,16 +845,16 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
       >
         <button
           type="button"
-          className={`absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:cursor-wait disabled:opacity-60 ${
+          className={`absolute z-10 flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:cursor-wait disabled:opacity-60 ${
             shouldShowPoster
-              ? 'bg-black/35 text-white hover:bg-black/50'
-              : 'bg-surface-raised text-secondary hover:text-foreground'
+              ? 'right-[2%] top-[2%] bg-transparent text-transparent hover:bg-white/10'
+              : 'right-3 top-3 bg-surface-raised text-secondary hover:text-foreground'
           }`}
           aria-label={i18nService.t('close')}
           onClick={closeByUser}
           disabled={isBusy}
         >
-          <XMarkIcon className="h-5 w-5" />
+          <XMarkIcon className={`h-5 w-5 ${shouldShowPoster ? 'opacity-0' : ''}`} />
         </button>
         {shouldShowPoster && descriptor && posterUrl ? (
           <div className="relative overflow-hidden rounded-2xl bg-surface">
@@ -878,13 +879,21 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
                 type="button"
                 disabled={isBusy}
                 onClick={() => void handlePrimaryAction()}
-                className="absolute inset-x-[13%] bottom-[7%] flex h-11 items-center justify-center rounded-lg bg-[#292c32] px-4 text-sm font-semibold text-white shadow-lg transition-colors hover:bg-black disabled:cursor-wait disabled:opacity-70"
-              >
-                {modalView === CampaignModalView.Claiming
+                aria-label={modalView === CampaignModalView.Claiming
                   ? i18nService.t('startupCreditClaiming')
                   : modalView === CampaignModalView.StartingLogin
                     ? i18nService.t('startupCreditStartingLogin')
-                    : descriptor?.actionText}
+                    : descriptor.actionText}
+                className="absolute bottom-[1.5%] left-1/2 w-[60%] -translate-x-1/2 overflow-hidden bg-transparent transition-transform hover:scale-[1.015] disabled:cursor-wait disabled:opacity-70"
+                style={{ aspectRatio: '3.32 / 1' }}
+              >
+                <img
+                  src={startupCreditActionArtworkUrl}
+                  alt=""
+                  aria-hidden="true"
+                  className="pointer-events-none h-full w-full object-cover"
+                  style={{ objectPosition: '50% 49%' }}
+                />
               </button>
             )}
           </div>

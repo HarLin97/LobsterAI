@@ -1,4 +1,4 @@
-import { ArrowPathIcon, ExclamationTriangleIcon, GiftIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import type { CoworkBrowserAnnotationMessageBatch } from '@shared/cowork/browserAnnotations';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
@@ -7,6 +7,7 @@ import { buildGoalSettingMessageMetadata } from '../../../common/goalCommandDisp
 import { buildSessionTitleFromInput } from '../../../common/sessionTitle';
 import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
+import startupCreditEntryGiftUrl from '../../assets/startup-credit-entry-gift.svg';
 import { agentService } from '../../services/agent';
 import { coworkService } from '../../services/cowork';
 import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
@@ -755,7 +756,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({
             onClick={() => openStartupCreditCampaign()}
             className="mr-2 inline-flex h-8 max-w-[240px] items-center gap-1.5 rounded-full border border-border bg-surface/90 px-3 text-xs font-medium text-foreground shadow-subtle transition-colors hover:bg-surface-raised"
           >
-            <GiftIcon className="h-4 w-4 shrink-0 text-primary" />
+            <img
+              src={startupCreditEntryGiftUrl}
+              alt=""
+              aria-hidden="true"
+              className="h-4 w-4 shrink-0"
+            />
             <span className="truncate">
               {startupCreditEntry.label || i18nService.t('startupCreditMenuEntry')}
             </span>
