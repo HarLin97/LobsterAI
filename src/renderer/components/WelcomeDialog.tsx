@@ -82,17 +82,14 @@ const WelcomeDialog: React.FC<WelcomeDialogProps> = ({ onLogin, onCustomModel })
         </h1>
 
         {/* promo: quiet tinted chip sitting right above login, so the incentive reads as "log in to get it" */}
-        <div className="flex items-center gap-1.5 mb-3 px-3 py-1 rounded-full border text-xs font-medium select-none text-[#E5482C] bg-[#FF5A36]/10 border-[#FF5A36]/20 dark:text-[#FF9275] dark:bg-[#FF6D4A]/[0.14] dark:border-[#FF6D4A]/30">
-          <svg viewBox="0 0 16 16" className="h-3 w-3 shrink-0" fill="currentColor" aria-hidden="true">
-            <path d="M8 1.5c.25 2.7 1.05 4.4 1.95 5.3.9.9 2.6 1.7 5.3 1.95-2.7.25-4.4 1.05-5.3 1.95-.9.9-1.7 2.6-1.95 5.3-.25-2.7-1.05-4.4-1.95-5.3-.9-.9-2.6-1.7-5.3-1.95 2.7-.25 4.4-1.05 5.3-1.95.9-.9 1.7-2.6 1.95-5.3z" />
-          </svg>
+        <div className="mb-3 px-3 py-1 rounded-full border text-xs font-medium select-none text-[#E5482C] bg-[#FF5A36]/10 border-[#FF5A36]/20 dark:text-[#FF9275] dark:bg-[#FF6D4A]/[0.14] dark:border-[#FF6D4A]/30">
           {i18nService.t('welcomePromo')}
         </div>
 
         {/* primary: login */}
         <button
           onClick={onLogin}
-          className="w-full h-11 rounded-xl text-sm font-medium bg-foreground text-surface transition-opacity hover:opacity-90 active:opacity-80"
+          className="w-full h-11 rounded-xl text-sm font-medium bg-foreground text-surface transition-opacity hover:opacity-90 active:opacity-80 outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
         >
           {i18nService.t('welcomeLogin')}
         </button>
@@ -100,7 +97,7 @@ const WelcomeDialog: React.FC<WelcomeDialogProps> = ({ onLogin, onCustomModel })
         {/* secondary: custom model — quiet ghost style */}
         <button
           onClick={onCustomModel}
-          className="mt-3 w-full h-11 rounded-xl text-sm font-medium text-secondary border border-border bg-transparent hover:text-foreground hover:bg-surface-raised transition-colors"
+          className="mt-3 w-full h-11 rounded-xl text-sm font-medium text-secondary border border-border bg-transparent hover:text-foreground hover:bg-surface-raised transition-colors outline-none focus-visible:ring-2 focus-visible:ring-foreground/25 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
         >
           {i18nService.t('welcomeCustomModel')}
         </button>
@@ -113,7 +110,7 @@ const WelcomeDialog: React.FC<WelcomeDialogProps> = ({ onLogin, onCustomModel })
           <a
             href={SERVICE_TERMS_URL}
             onClick={handleTermsClick}
-            className="underline underline-offset-2 hover:text-foreground"
+            className="underline underline-offset-2 hover:text-foreground rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-foreground/25"
           >
             {linkText}
           </a>
