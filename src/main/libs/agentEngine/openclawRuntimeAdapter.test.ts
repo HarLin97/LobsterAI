@@ -680,6 +680,40 @@ test('resolveOpenClawRuntimeErrorMessage classifies generic error from safe fetc
   })).toContain('网络连接失败');
 });
 
+test('resolveOpenClawRuntimeErrorMessage prefers Qwen 503 capacity evidence over rate-limit wrappers', () => {
+  const rawErrorPreview =
+    '<503> InternalError.Algo: An error occurred in model serving, error message is: '
+    + '[Too many requests. Your requests are being throttled due to system capacity limits. Please try again later.]';
+
+  const displayMessage = resolveOpenClawRuntimeErrorMessage(
+    '⚠️ API rate limit reached. Please try again later.',
+    {
+      provider: 'lobsterai-server',
+      model: 'qwen3.5-plus-2026-04-20',
+      failoverReason: 'rate_limit',
+      providerRuntimeFailureKind: 'rate_limit',
+      rawErrorPreview,
+    },
+  );
+
+  expect(displayMessage).toContain('模型服务当前繁忙或容量不足');
+  expect(displayMessage).not.toContain('请求过于频繁');
+});
+
+test('resolveOpenClawRuntimeErrorMessage keeps genuine HTTP 429 errors as rate limits', () => {
+  expect(resolveOpenClawRuntimeErrorMessage(
+    '⚠️ API rate limit reached. Please try again later.',
+    {
+      provider: 'lobsterai-server',
+      model: 'qwen3.5-plus-2026-04-20',
+      failoverReason: 'rate_limit',
+      providerRuntimeFailureKind: 'rate_limit',
+      httpCode: '429',
+      rawErrorPreview: '429 Too Many Requests',
+    },
+  )).toContain('请求过于频繁');
+});
+
 test('resolveOpenClawRuntimeErrorMessage prefers safe metadata over stale quota signal', () => {
   consumeRecentOpenClawTokenProxyQuotaError();
   __openClawTokenProxyTestUtils.rememberQuotaError({

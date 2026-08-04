@@ -241,8 +241,15 @@ test('rate: too many requests', () => {
   expect(classifyError('Too many requests, please slow down')).toBe('coworkErrorRateLimit');
 });
 
-test('rate: Anthropic overloaded', () => {
-  expect(classifyError('overloaded_error: Overloaded')).toBe('coworkErrorRateLimit');
+test('capacity: Anthropic overloaded', () => {
+  expect(classifyError('overloaded_error: Overloaded')).toBe('coworkErrorModelOverloaded');
+});
+
+test('capacity: Qwen inner 503 system-capacity throttle wins over too-many-requests wording', () => {
+  expect(classifyError(
+    '<503> InternalError.Algo: An error occurred in model serving, error message is: '
+      + '[Too many requests. Your requests are being throttled due to system capacity limits. Please try again later.]',
+  )).toBe('coworkErrorModelOverloaded');
 });
 
 test('rate: Gemini RESOURCE_EXHAUSTED', () => {

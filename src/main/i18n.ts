@@ -84,6 +84,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorModelResponseTimeout: '模型响应超时，请稍后重试。',
     coworkErrorNetworkError: '网络连接失败，请检查网络设置。',
     coworkErrorRateLimit: '请求过于频繁，请稍后再试。',
+    coworkErrorModelOverloaded: '模型服务当前繁忙或容量不足，请稍后重试。',
     coworkErrorContentFiltered: '内容未通过安全审核，请修改后重试。',
     coworkErrorServerError: '服务端出现错误，请稍后重试。',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
@@ -405,6 +406,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorModelResponseTimeout: 'The model response timed out. Please try again.',
     coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
     coworkErrorRateLimit: 'Too many requests. Please try again later.',
+    coworkErrorModelOverloaded:
+      'The model service is temporarily busy or at capacity. Please try again later.',
     coworkErrorContentFiltered:
       'Content did not pass the safety review. Please modify and try again.',
     coworkErrorServerError: 'Server error occurred. Please try again later.',

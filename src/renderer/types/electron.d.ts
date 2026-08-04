@@ -1,4 +1,13 @@
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
+import type {
+  ActivityActionResponse,
+  ActivityContextResponse,
+  ActivityHostExecuteActionInput,
+  ActivityHostGetContextInput,
+  ActivityHostGetSlotInput,
+  ActivityResult,
+  ActivitySlotResponse,
+} from '../../shared/activity/constants';
 import type { AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
 import type {
   AsrRealtimeSessionRequest,
@@ -6,6 +15,7 @@ import type {
 } from '../../shared/asr/constants';
 import type {
   AuthLifecycleEvent,
+  AuthLoginResult,
   AuthRefreshOutcome,
   AuthSessionChangedEvent,
   AuthSessionStatus,
@@ -1737,8 +1747,19 @@ interface IElectronAPI {
       error?: string;
     }>;
   };
+  activity: {
+    getSlot: (
+      input: ActivityHostGetSlotInput,
+    ) => Promise<ActivityResult<ActivitySlotResponse>>;
+    getContext: (
+      input: ActivityHostGetContextInput,
+    ) => Promise<ActivityResult<ActivityContextResponse>>;
+    executeAction: (
+      input: ActivityHostExecuteActionInput,
+    ) => Promise<ActivityResult<ActivityActionResponse>>;
+  };
   auth: {
-    login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;
+    login: (loginUrl?: string) => Promise<AuthLoginResult>;
     exchange: (
       code: string,
     ) => Promise<{ success: boolean; user?: any; quota?: any; error?: string }>;
@@ -1821,7 +1842,7 @@ interface IElectronAPI {
     send: (status: 'online' | 'offline') => void;
   };
   auth: {
-    login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;
+    login: (loginUrl?: string) => Promise<AuthLoginResult>;
     exchange: (code: string) => Promise<{
       success: boolean;
       user?: import('../store/slices/authSlice').UserProfile;
