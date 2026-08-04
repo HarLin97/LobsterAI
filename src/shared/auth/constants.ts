@@ -1,5 +1,6 @@
 export const AuthIpcChannel = {
   Callback: 'auth:callback',
+  ClaimCreditsFinalReward: 'auth:claimCreditsFinalReward',
   Exchange: 'auth:exchange',
   GetAccessToken: 'auth:getAccessToken',
   GetActiveClientBanner: 'auth:getActiveClientBanner',
