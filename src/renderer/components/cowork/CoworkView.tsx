@@ -39,6 +39,7 @@ import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import CreditsResetCampaignFloat from '../CreditsResetCampaignFloat';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import { ModelAccessPromptKind, ModelAccessPromptModal } from '../ModelSelector';
 import { PromptPanel, QuickActionBar } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
 import HomeSkinEmblem from '../skin/HomeSkinEmblem';
@@ -101,6 +102,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const [isInitialized, setIsInitialized] = useState(false);
   const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(null);
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
+  // Shown when a session start is blocked because no usable model config exists;
+  // guides the user to plan models instead of pushing them into custom-model settings.
+  const [modelAccessPrompt, setModelAccessPrompt] = useState<ModelAccessPromptKind | null>(null);
   // Track if we're starting/continuing a session to prevent duplicate submissions
   const isStartingRef = useRef(false);
   const isContinuingRef = useRef(false);
@@ -117,6 +121,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const currentSession = useSelector(selectCurrentSession);
   const sessionNavigationTargetId = useSelector(selectSessionNavigationTargetId);
   const isStreaming = useSelector(selectIsStreaming);
+  const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
   const currentSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -155,21 +160,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       marketplaceKits,
     );
   }, [installedKits, marketplaceKits, skills]);
-
-  const buildApiConfigNotice = (error?: string): { noticeI18nKey: string; noticeExtra?: string } => {
-    const key = 'coworkModelSettingsRequired';
-    if (!error) {
-      return { noticeI18nKey: key };
-    }
-    const normalizedError = error.trim();
-    if (
-      normalizedError.startsWith('No enabled provider found for model:')
-      || normalizedError === 'No available model configured in enabled providers.'
-    ) {
-      return { noticeI18nKey: key };
-    }
-    return { noticeI18nKey: key, noticeExtra: error };
-  };
 
   const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
     switch (status.phase) {
@@ -221,17 +211,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       } catch (error) {
         console.error('Failed to load quick actions:', error);
       }
-      try {
-        const apiConfig = await coworkService.checkApiConfig();
-        if (apiConfig && !apiConfig.hasConfig) {
-          onRequestAppSettings?.({
-            initialTab: 'model',
-            ...buildApiConfigNotice(apiConfig.error),
-          });
-        }
-      } catch (error) {
-        console.error('Failed to check cowork API config:', error);
-      }
+      // Intentionally no API-config check here: mounting this view (e.g. when
+      // switching sidebar tabs) must never pop up the custom-model settings
+      // page. Missing config is surfaced at send time instead.
       setIsInitialized(true);
     };
     init();
@@ -254,7 +236,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       unsubscribe();
       unsubscribeOpenClawStatus();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
 
   const handleStartSession = async (
@@ -296,10 +277,11 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       try {
         const apiConfig = await coworkService.checkApiConfig();
         if (apiConfig && !apiConfig.hasConfig) {
-          onRequestAppSettings?.({
-            initialTab: 'model',
-            ...buildApiConfigNotice(apiConfig.error),
-          });
+          // No usable model config: steer toward plan models (login/subscribe)
+          // rather than opening the custom-model settings page uninvited.
+          setModelAccessPrompt(
+            isLoggedIn ? ModelAccessPromptKind.Subscribe : ModelAccessPromptKind.Login,
+          );
           isStartingRef.current = false;
           return false;
         }
@@ -928,6 +910,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({
             </div>
           </div>
         </>
+      )}
+      {modelAccessPrompt && (
+        <ModelAccessPromptModal
+          promptKind={modelAccessPrompt}
+          onClose={() => setModelAccessPrompt(null)}
+        />
       )}
     </div>
   );
