@@ -18,6 +18,7 @@ export interface PresentedSkin {
   name?: string;
   workflowKind: SkinWorkflowKind;
   baseThemeId?: string;
+  boundThemeId?: string;
   presentation?: SkinPresentation;
   status: SkinRecordStatus;
   assets: Partial<Record<SkinAssetSlot, PresentedSkinAsset>>;
@@ -36,6 +37,10 @@ export type SkinListResponse =
 
 export type SkinApplyResponse =
   | { success: true; activeSkin: PresentedSkin }
+  | { success: false; error: string };
+
+export type SkinBindThemeResponse =
+  | { success: true; skin: PresentedSkin }
   | { success: false; error: string };
 
 export type SkinDeactivateResponse =

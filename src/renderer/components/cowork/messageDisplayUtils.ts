@@ -415,6 +415,7 @@ const getGenericRunningStatusText = (): string => {
 export const getStreamingActivityStatusText = (
   messages: CoworkMessage[],
   isContextMaintenance = false,
+  isLongWaiting = false,
 ): string => {
   if (isContextMaintenance) {
     return i18nService.t('coworkContextMaintenanceRunning');
@@ -443,7 +444,9 @@ export const getStreamingActivityStatusText = (
       : getGenericRunningStatusText();
   }
 
-  return getGenericRunningStatusText();
+  return isLongWaiting
+    ? i18nService.t('coworkModelResponseWaitingLong')
+    : getGenericRunningStatusText();
 };
 
 export const getToolResultCollapsedDisplay = (message: CoworkMessage): ToolResultCollapsedDisplay => {

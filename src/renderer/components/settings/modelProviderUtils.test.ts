@@ -2,10 +2,13 @@ import { expect, test } from 'vitest';
 
 import { OpenClawProviderId, ProviderAuthType, ProviderName } from '../../../shared/providers';
 import {
+  buildOpenAIConnectionTestRequestBody,
   getOpenClawProviderIdForConfig,
+  hasEquivalentProviderModelId,
   hasProviderAuthConfigured,
   type ProviderConfig,
   providerRequiresApiKey,
+  shouldShowApiFormatSelector,
 } from './modelProviderUtils';
 
 const providerConfig = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({
@@ -49,4 +52,78 @@ test('OpenAI OAuth models use the canonical OpenClaw OpenAI provider id', () => 
     ProviderName.OpenAI,
     providerConfig({ authType: ProviderAuthType.OAuth }),
   )).toBe(OpenClawProviderId.OpenAI);
+});
+
+test('provider model identity comparison ignores K3 punctuation and casing', () => {
+  expect(hasEquivalentProviderModelId(
+    [{ id: 'kimi-k3' }],
+    ' Kimi_K3 ',
+  )).toBe(true);
+});
+
+test('provider model identity comparison excludes the model currently being edited', () => {
+  expect(hasEquivalentProviderModelId(
+    [{ id: 'Kimi_K3' }],
+    'kimi.k3',
+    'Kimi_K3',
+  )).toBe(false);
+
+  expect(hasEquivalentProviderModelId(
+    [{ id: 'Kimi_K3' }, { id: 'kimi.k3' }],
+    'kimi-k3',
+    'Kimi_K3',
+  )).toBe(true);
+});
+
+test('provider model identity comparison preserves distinct non-K3 punctuation', () => {
+  expect(hasEquivalentProviderModelId(
+    [{ id: 'foo/bar' }, { id: 'model.v1' }],
+    'foo-bar',
+  )).toBe(false);
+  expect(hasEquivalentProviderModelId(
+    [{ id: 'foo/bar' }, { id: 'model.v1' }],
+    'model-v1',
+  )).toBe(false);
+});
+
+test('legacy Moonshot Anthropic configs stay visible and use their real transport', () => {
+  expect(shouldShowApiFormatSelector(ProviderName.Moonshot, 'anthropic')).toBe(true);
+  expect(shouldShowApiFormatSelector(ProviderName.Moonshot, 'openai')).toBe(false);
+});
+
+test('official Moonshot K3 connection test uses the K3 request contract', () => {
+  expect(buildOpenAIConnectionTestRequestBody({
+    provider: ProviderName.Moonshot,
+    model: { id: 'kimi-k3' },
+    useResponsesApi: false,
+  })).toEqual({
+    model: 'kimi-k3',
+    messages: [{ role: 'user', content: 'Hi' }],
+    max_tokens: 64,
+    reasoning_effort: 'max',
+  });
+});
+
+test('exact custom K3 model ID uses the K3 request contract', () => {
+  expect(buildOpenAIConnectionTestRequestBody({
+    provider: 'custom_0',
+    model: { id: 'kimi-k3' },
+    useResponsesApi: false,
+  })).toMatchObject({
+    model: 'kimi-k3',
+    max_tokens: 64,
+    reasoning_effort: 'max',
+  });
+});
+
+test('ordinary OpenAI-compatible connection tests retain their existing token field', () => {
+  expect(buildOpenAIConnectionTestRequestBody({
+    provider: 'custom_0',
+    model: { id: 'ordinary-model' },
+    useResponsesApi: false,
+  })).toEqual({
+    model: 'ordinary-model',
+    messages: [{ role: 'user', content: 'Hi' }],
+    max_tokens: 64,
+  });
 });

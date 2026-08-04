@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { CoworkMessage } from '../../types/cowork';
 import {
+  CONVERSATION_SEARCH_MATCH_LIMIT,
   ConversationSearchDirection,
   type ConversationSearchDirection as ConversationSearchDirectionValue,
   ConversationSearchStatus,
@@ -15,32 +16,47 @@ import {
 } from './conversationSearchLogger';
 import { mergeCoworkTextExportMessages } from './sessionExport';
 
-const STREAM_MESSAGE_MERGE_THROTTLE_MS = 250;
+// Streaming deltas can arrive many times per second. Re-scanning a complete
+// conversation more frequently than this creates avoidable CPU and allocation
+// pressure without making the result counter meaningfully more useful.
+const STREAM_MESSAGE_MERGE_THROTTLE_MS = 1_000;
 const SEARCH_MESSAGE_BATCH_SIZE = 200;
+
+interface ConversationSearchBatchResult {
+  matches: CoworkConversationSearchMatch[];
+  isResultLimitReached: boolean;
+}
 
 const findConversationSearchMatchesInBatches = async (
   messages: CoworkMessage[],
   query: string,
   isRequestCurrent: () => boolean,
-): Promise<CoworkConversationSearchMatch[] | null> => {
+): Promise<ConversationSearchBatchResult | null> => {
   const matches: CoworkConversationSearchMatch[] = [];
 
   for (let startIndex = 0; startIndex < messages.length; startIndex += SEARCH_MESSAGE_BATCH_SIZE) {
     if (!isRequestCurrent()) return null;
 
     const endIndex = Math.min(startIndex + SEARCH_MESSAGE_BATCH_SIZE, messages.length);
-    matches.push(...findConversationSearchMatches(
+    const remainingMatchCapacity = CONVERSATION_SEARCH_MATCH_LIMIT - matches.length;
+    const batchMatches = findConversationSearchMatches(
       messages.slice(startIndex, endIndex),
       query,
       startIndex,
-    ));
+      remainingMatchCapacity + 1,
+    );
+    if (batchMatches.length > remainingMatchCapacity) {
+      matches.push(...batchMatches.slice(0, remainingMatchCapacity));
+      return { matches, isResultLimitReached: true };
+    }
+    matches.push(...batchMatches);
 
     if (endIndex < messages.length) {
       await new Promise<void>(resolve => window.setTimeout(resolve, 0));
     }
   }
 
-  return isRequestCurrent() ? matches : null;
+  return isRequestCurrent() ? { matches, isResultLimitReached: false } : null;
 };
 
 interface UseCoworkConversationSearchOptions {
@@ -55,6 +71,7 @@ export interface CoworkConversationSearchController {
   query: string;
   status: ConversationSearchStatusValue;
   matches: CoworkConversationSearchMatch[];
+  isResultLimitReached: boolean;
   activeMatch: CoworkConversationSearchMatch | null;
   activeMatchIndex: number;
   focusRequestKey: number;
@@ -75,6 +92,7 @@ export function useCoworkConversationSearch({
   const [status, setStatus] = useState<ConversationSearchStatusValue>(ConversationSearchStatus.Idle);
   const [fullMessages, setFullMessages] = useState<CoworkMessage[]>([]);
   const [matches, setMatches] = useState<CoworkConversationSearchMatch[]>([]);
+  const [isResultLimitReached, setIsResultLimitReached] = useState(false);
   const [activeMatchKey, setActiveMatchKey] = useState<string | null>(null);
   const [focusRequestKey, setFocusRequestKey] = useState(0);
   const loadRequestRef = useRef(0);
@@ -86,6 +104,7 @@ export function useCoworkConversationSearch({
   const fullMessagesRef = useRef<CoworkMessage[]>([]);
   const loadFullMessagesRef = useRef(loadFullMessages);
   const previousSessionIdRef = useRef(sessionId);
+  const hasLoggedResultLimitRef = useRef(false);
 
   latestCurrentMessagesRef.current = currentMessages;
   isOpenRef.current = isOpen;
@@ -111,7 +130,9 @@ export function useCoworkConversationSearch({
     setStatus(ConversationSearchStatus.Idle);
     setFullMessages([]);
     setMatches([]);
+    setIsResultLimitReached(false);
     setActiveMatchKey(null);
+    hasLoggedResultLimitRef.current = false;
   }, []);
 
   useEffect(() => () => {
@@ -203,6 +224,7 @@ export function useCoworkConversationSearch({
     searchRequestRef.current += 1;
     setQueryState(nextQuery);
     setMatches([]);
+    setIsResultLimitReached(false);
     setActiveMatchKey(null);
   }, []);
 
@@ -213,6 +235,7 @@ export function useCoworkConversationSearch({
     if (!trimmedQuery) {
       searchRequestRef.current += 1;
       setMatches([]);
+      setIsResultLimitReached(false);
       setActiveMatchKey(null);
       if (status !== ConversationSearchStatus.Loading && status !== ConversationSearchStatus.Error) {
         setStatus(ConversationSearchStatus.Ready);
@@ -230,10 +253,19 @@ export function useCoworkConversationSearch({
         fullMessages,
         trimmedQuery,
         () => requestId === searchRequestRef.current,
-      ).then(nextMatches => {
-        if (!nextMatches || requestId !== searchRequestRef.current) return;
+      ).then(result => {
+        if (!result || requestId !== searchRequestRef.current) return;
+
+        const { matches: nextMatches, isResultLimitReached: nextLimitReached } = result;
+        if (nextLimitReached && !hasLoggedResultLimitRef.current) {
+          hasLoggedResultLimitRef.current = true;
+          logConversationSearchWarning(
+            `Search result limit reached; retained=${CONVERSATION_SEARCH_MATCH_LIMIT}.`,
+          );
+        }
 
         setMatches(nextMatches);
+        setIsResultLimitReached(nextLimitReached);
         setActiveMatchKey(previousKey => {
           if (previousKey && nextMatches.some(match => match.key === previousKey)) {
             return previousKey;
@@ -281,6 +313,7 @@ export function useCoworkConversationSearch({
     query: isSessionStateCurrent ? query : '',
     status: isSessionStateCurrent ? status : ConversationSearchStatus.Idle,
     matches: isSessionStateCurrent ? matches : [],
+    isResultLimitReached: isSessionStateCurrent ? isResultLimitReached : false,
     activeMatch: isSessionStateCurrent ? activeMatch : null,
     activeMatchIndex: isSessionStateCurrent ? activeMatchIndex : -1,
     focusRequestKey,

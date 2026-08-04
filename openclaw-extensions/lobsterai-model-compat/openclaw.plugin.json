@@ -1,0 +1,24 @@
+{
+  "id": "lobsterai-model-compat",
+  "name": "LobsterAI Model Compatibility",
+  "description": "Applies explicit LobsterAI-managed model runtime profiles.",
+  "providers": ["lobsterai-model-compat"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "modelProfiles": {
+        "type": "object",
+        "minProperties": 1,
+        "propertyNames": {
+          "pattern": "^[^/\\s]+/[^\\s]+$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "enum": ["moonshot-kimi-k3"]
+        }
+      }
+    },
+    "required": ["modelProfiles"]
+  }
+}

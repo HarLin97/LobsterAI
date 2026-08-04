@@ -27,9 +27,11 @@ import PrivacyDialog from './components/PrivacyDialog';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
+import { SitesView } from './components/sites';
 import { SkillsView } from './components/skills';
 import SkinBackdrop, { SkinBackdropVariant } from './components/skin/SkinBackdrop';
 import SkinPresentationScope from './components/skin/SkinPresentationScope';
+import StartupCreditCampaign from './components/StartupCreditCampaign';
 import Toast from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateBlockingPanel from './components/update/AppUpdateBlockingPanel';
@@ -50,6 +52,7 @@ import { apiService } from './services/api';
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
+import { isTestModeEnabled } from './services/endpoints';
 import { i18nService } from './services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
 import { scheduledTaskService } from './services/scheduledTask';
@@ -127,7 +130,7 @@ const logAppUpdateRendererLifecycle = (
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions & { requestId: number }>({ requestId: 0 });
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'sites'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -407,6 +410,10 @@ const App: React.FC = () => {
     setMainView('mcp');
   }, []);
 
+  const handleShowSites = useCallback(() => {
+    setMainView('sites');
+  }, []);
+
   const handleShowKits = useCallback(() => {
     setMainView('kits');
   }, []);
@@ -487,6 +494,26 @@ const App: React.FC = () => {
       mode: CoworkCollaborationMode.Default,
     }));
     setMainView('cowork');
+  }, [dispatch]);
+
+  const handleCreateSiteByChat = useCallback((prompt: string) => {
+    coworkService.clearSession({ restoreAgentSkills: true });
+    dispatch(clearSelection());
+    dispatch(clearDraftAttachments('__home__'));
+    dispatch(clearDraftSelectedTextSnippets('__home__'));
+    dispatch(setActiveKitIds([]));
+    dispatch(setDraftKitIds({ draftKey: '__home__', kitIds: [] }));
+    dispatch(setDraftCollaborationMode({
+      draftKey: '__home__',
+      mode: CoworkCollaborationMode.Default,
+    }));
+    dispatch(setDraftPrompt({ sessionId: '__home__', draft: prompt }));
+    setMainView('cowork');
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
+        detail: { clear: false, resetCollaborationMode: true, text: prompt },
+      }));
+    }, 0);
   }, [dispatch]);
 
   const showToast = useCallback((message: string) => {
@@ -1321,6 +1348,9 @@ const App: React.FC = () => {
           onClose={() => setToastMessage(null)}
         />
       )}
+      <StartupCreditCampaign
+        enabled={privacyAgreed === true && !showWelcome}
+      />
       {windowsStandaloneTitleBar}
       <div
         className="relative flex flex-1 min-h-0 overflow-hidden"
@@ -1335,6 +1365,7 @@ const App: React.FC = () => {
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowKits={handleShowKits}
           onShowMcp={handleShowMcp}
+          onShowSites={handleShowSites}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
@@ -1342,6 +1373,7 @@ const App: React.FC = () => {
           updateNotice={!isSidebarCollapsed && !isUpdateInteractionBlocked ? updateCard : null}
           hideAdBanner={isUpdateCardExpanded}
           hideLogin={enterpriseConfig?.ui?.login === 'hide'}
+          hideSites={!isTestModeEnabled() || enterpriseConfig?.ui?.sites === 'hide'}
         />
         <div className={`flex-1 min-w-0 transition-[padding] duration-200 ease-out ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
           <div
@@ -1384,6 +1416,15 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 updateBadge={collapsedHeaderUpdateBadge}
+              />
+            ) : mainView === 'sites' ? (
+              <SitesView
+                isAuthenticated={Boolean(authUser)}
+                onCreateSiteByChat={handleCreateSiteByChat}
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                updateBadge={collapsedHeaderUpdateBadge}
+                readOnly={enterpriseConfig?.ui?.sites === 'readonly'}
               />
             ) : (
               <CoworkView

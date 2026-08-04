@@ -27,7 +27,11 @@ import { i18nService } from '@/services/i18n';
 import type { RootState } from '@/store';
 import type { Artifact } from '@/types/artifact';
 
-import { reportArtifactPreviewAction } from './artifactAnalytics';
+import {
+  type ArtifactPreviewActionSource as ArtifactPreviewActionSourceValue,
+  type ArtifactPublishEntryPoint as ArtifactPublishEntryPointValue,
+  reportArtifactPreviewAction,
+} from './artifactAnalytics';
 import { buildArtifactFileShareCopyText } from './artifactFileShareCopy';
 import {
   ArtifactFileShareCopyStatus,
@@ -94,7 +98,15 @@ interface PreparedArtifactFileShare {
 }
 
 interface ArtifactFileShareControllerValue {
-  openShare: (artifact: Artifact) => Promise<void>;
+  openShare: (
+    artifact: Artifact,
+    context: ArtifactFileShareOpenContext,
+  ) => Promise<void>;
+}
+
+interface ArtifactFileShareOpenContext {
+  source: ArtifactPreviewActionSourceValue;
+  entryPoint: ArtifactPublishEntryPointValue;
 }
 
 interface ArtifactFileShareProviderProps {
@@ -542,13 +554,19 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
   );
 
   const openShare = useCallback(
-    async (artifact: Artifact): Promise<void> => {
+    async (
+      artifact: Artifact,
+      context: ArtifactFileShareOpenContext,
+    ): Promise<void> => {
       const sourceType = getArtifactFileShareSourceType(artifact);
       reportArtifactPreviewAction({
         actionType: 'share_html_click',
-        source: 'conversation_artifact_card',
+        source: context.source,
         artifact,
-        params: { shareSourceType: sourceType ?? undefined },
+        params: {
+          entryPoint: context.entryPoint,
+          shareSourceType: sourceType ?? undefined,
+        },
       });
 
       const request = isArtifactFileShareable(artifact)

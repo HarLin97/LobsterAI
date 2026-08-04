@@ -1,4 +1,9 @@
+import { PassThrough } from 'node:stream';
+
+import http from 'http';
 import { beforeEach, expect, test, vi } from 'vitest';
+
+import { AuthRefreshOutcome } from '../../shared/auth/constants';
 
 vi.mock('electron', () => ({
   net: { fetch: vi.fn() },
@@ -14,6 +19,72 @@ const testUtils = __openClawTokenProxyTestUtils;
 beforeEach(() => {
   consumeRecentOpenClawTokenProxyQuotaError();
 });
+
+test('refreshes LobsterAI credentials for 401 but not 403', () => {
+  expect(testUtils.shouldRefreshLobsterAIToken(401)).toBe(true);
+  expect(testUtils.shouldRefreshLobsterAIToken(403)).toBe(false);
+});
+
+test('turns only transient refresh failures into temporary service errors', () => {
+  expect(testUtils.isTemporaryAuthRefreshFailure({
+    outcome: AuthRefreshOutcome.TransientFailure,
+  })).toBe(true);
+  expect(testUtils.isTemporaryAuthRefreshFailure({
+    outcome: AuthRefreshOutcome.TerminalFailure,
+  })).toBe(false);
+});
+
+type MockProxyResponse = {
+  write: ReturnType<typeof vi.fn>;
+  end: ReturnType<typeof vi.fn>;
+  destroy: ReturnType<typeof vi.fn>;
+  on: ReturnType<typeof vi.fn>;
+  emitClose: () => void;
+  destroyed: boolean;
+  writableEnded: boolean;
+  writableFinished: boolean;
+};
+
+function createMockProxyResponse(): MockProxyResponse {
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  const res: MockProxyResponse = {
+    write: vi.fn(),
+    end: vi.fn(() => {
+      res.writableEnded = true;
+      res.writableFinished = true;
+    }),
+    destroy: vi.fn(() => {
+      res.destroyed = true;
+      for (const listener of listeners.get('close') ?? []) {
+        listener();
+      }
+    }),
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      const eventListeners = listeners.get(event) ?? [];
+      eventListeners.push(listener);
+      listeners.set(event, eventListeners);
+      return res;
+    }),
+    emitClose: () => {
+      res.destroyed = true;
+      for (const listener of listeners.get('close') ?? []) {
+        listener();
+      }
+    },
+    destroyed: false,
+    writableEnded: false,
+    writableFinished: false,
+  };
+  return res;
+}
+
+function asServerResponse(res: MockProxyResponse): http.ServerResponse {
+  return res as unknown as http.ServerResponse;
+}
+
+function flushStreamEvents(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 test('extracts LobsterAI monthly quota error from proxy SSE packet', () => {
   const packet = [
@@ -192,4 +263,262 @@ test('leaves non-Gemini package model request bodies unchanged', () => {
   }));
 
   expect(testUtils.hydrateGeminiChatCompletionsBody(requestBody)).toBe(requestBody);
+});
+
+test('keeps Kimi K3 package payloads byte-for-byte transparent', () => {
+  const requestBody = Buffer.from(JSON.stringify({
+    model: 'kimi-k3-YoudaoInner',
+    reasoning_effort: 'max',
+    messages: [
+      {
+        role: 'assistant',
+        reasoning_content: 'private reasoning replay',
+        tool_calls: [{
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'read', arguments: '{"path":"README.md"}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: 'result',
+      },
+    ],
+  }));
+
+  expect(testUtils.hydrateGeminiChatCompletionsBody(requestBody)).toBe(requestBody);
+});
+
+test('adds fixed capability and client version headers without trusting incoming values', () => {
+  expect(testUtils.buildUpstreamRequestHeaders(
+    'access-token',
+    {
+      accept: 'text/event-stream',
+      'content-type': 'application/json',
+      'x-lobsterai-client-capabilities': 'attacker-controlled',
+      'x-lobsterai-client-version': '0.0.0',
+    },
+    '2026.7.23',
+  )).toEqual({
+    Authorization: 'Bearer access-token',
+    Accept: 'text/event-stream',
+    'Content-Type': 'application/json',
+    'X-LobsterAI-Client-Capabilities': 'kimi-k3-agentic-v1',
+    'X-LobsterAI-Client-Version': '2026.7.23',
+  });
+});
+
+test('classifies SSE packets as terminal only on [DONE], finish_reason, or error payloads', () => {
+  const terminalPackets = [
+    'data: [DONE]',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+    'event: error\ndata: {"message":"quota exhausted"}',
+    'data: {"type":"error","error":{"message":"boom"}}',
+    'event: message_stop\ndata: {"type":"message_stop"}',
+  ];
+  for (const packet of terminalPackets) {
+    expect(testUtils.isTerminalProxySSEPacket(testUtils.parseProxySSEPacket(packet))).toBe(true);
+  }
+
+  const nonTerminalPackets = [
+    'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":null}]}',
+    'data: {"choices":[{"delta":{"content":"hi"}}]}',
+    ': keep-alive comment',
+    'data: not-json',
+    '',
+  ];
+  for (const packet of nonTerminalPackets) {
+    expect(testUtils.isTerminalProxySSEPacket(testUtils.parseProxySSEPacket(packet))).toBe(false);
+  }
+});
+
+test('classifies the specific SSE terminal packet kind', () => {
+  const cases = [
+    ['data: [DONE]', testUtils.ProxySSETerminalKind.Done],
+    [
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+      testUtils.ProxySSETerminalKind.FinishReason,
+    ],
+    [
+      'event: message_stop\ndata: {"type":"message_stop"}',
+      testUtils.ProxySSETerminalKind.MessageStop,
+    ],
+    [
+      'event: error\ndata: {"type":"error","error":{"message":"boom"}}',
+      testUtils.ProxySSETerminalKind.Error,
+    ],
+  ] as const;
+
+  for (const [packet, expectedKind] of cases) {
+    expect(testUtils.classifyTerminalProxySSEPacket(testUtils.parseProxySSEPacket(packet)))
+      .toBe(expectedKind);
+  }
+});
+
+test('scan state observes a terminal packet split across chunk boundaries', () => {
+  const scanState = testUtils.createProxySSEStreamScanState();
+
+  let buffer = testUtils.scanProxySSEBufferForQuotaError(
+    'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":null}]}\n\ndata: [DO',
+    1_000,
+    scanState,
+  );
+  expect(scanState.sawTerminalPacket).toBe(false);
+
+  buffer = testUtils.scanProxySSEBufferForQuotaError(`${buffer}NE]\n\n`, 1_001, scanState);
+  expect(buffer).toBe('');
+  expect(scanState.sawTerminalPacket).toBe(true);
+  expect(scanState.terminalKind).toBe(testUtils.ProxySSETerminalKind.Done);
+  expect(scanState.eventCount).toBe(2);
+});
+
+test('flush detects a terminal packet in a trailing partial SSE frame', () => {
+  const scanState = testUtils.createProxySSEStreamScanState();
+  testUtils.flushProxySSEBufferForQuotaError('data: [DONE]', 1_000, scanState);
+  expect(scanState.sawTerminalPacket).toBe(true);
+  expect(scanState.terminalKind).toBe(testUtils.ProxySSETerminalKind.Done);
+});
+
+test('node stream: complete SSE response ends the proxied response cleanly', async () => {
+  const upstream = new PassThrough();
+  const res = createMockProxyResponse();
+
+  testUtils.pipeStreamingResponseWithQuotaScan(upstream, asServerResponse(res));
+  upstream.write('data: {"choices":[{"delta":{"content":"hi"},"finish_reason":null}]}\n\n');
+  upstream.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+  upstream.write('data: [DONE]\n\n');
+  upstream.end();
+  await flushStreamEvents();
+
+  expect(res.end).toHaveBeenCalledTimes(1);
+  expect(res.destroy).not.toHaveBeenCalled();
+});
+
+test('node stream: SSE response truncated by a clean upstream end is aborted', async () => {
+  const upstream = new PassThrough();
+  const res = createMockProxyResponse();
+
+  testUtils.pipeStreamingResponseWithQuotaScan(upstream, asServerResponse(res));
+  upstream.write('data: {"choices":[{"delta":{"content":"partial plan **"},"finish_reason":null}]}\n\n');
+  upstream.end();
+  await flushStreamEvents();
+
+  expect(res.destroy).toHaveBeenCalledTimes(1);
+  expect(res.end).not.toHaveBeenCalled();
+});
+
+test('node stream: upstream read error aborts the proxied response instead of ending it', async () => {
+  const upstream = new PassThrough();
+  const res = createMockProxyResponse();
+
+  testUtils.pipeStreamingResponseWithQuotaScan(upstream, asServerResponse(res));
+  upstream.write('data: {"choices":[{"delta":{"content":"hi"},"finish_reason":null}]}\n\n');
+  await flushStreamEvents();
+  upstream.destroy(new Error('net::ERR_CONNECTION_RESET'));
+  await flushStreamEvents();
+
+  expect(res.destroy).toHaveBeenCalledTimes(1);
+  expect(res.end).not.toHaveBeenCalled();
+});
+
+test('node stream: upstream SSE error payload still passes through and ends cleanly', async () => {
+  const upstream = new PassThrough();
+  const res = createMockProxyResponse();
+
+  testUtils.pipeStreamingResponseWithQuotaScan(upstream, asServerResponse(res));
+  upstream.write('event: error\ndata: {"type":"error","error":{"type":"proxy_error","message":"本月积分已用完","code":40202}}\n\n');
+  upstream.end();
+  await flushStreamEvents();
+
+  expect(res.end).toHaveBeenCalledTimes(1);
+  expect(res.destroy).not.toHaveBeenCalled();
+  expect(consumeRecentOpenClawTokenProxyQuotaError()).toMatchObject({
+    message: '本月积分已用完',
+    code: 40202,
+  });
+});
+
+test('node stream: classifies completion that arrives after the downstream closes', async () => {
+  const upstream = new PassThrough();
+  const res = createMockProxyResponse();
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  try {
+    testUtils.pipeStreamingResponseWithQuotaScan(upstream, asServerResponse(res));
+    upstream.write('data: {"choices":[{"delta":{"content":"working"},"finish_reason":null}]}\n\n');
+    res.emitClose();
+    upstream.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+    upstream.write('data: [DONE]\n\n');
+    upstream.end();
+    await flushStreamEvents();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('outcome=late_completion_after_downstream_close'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('terminal=done'));
+    expect(res.end).not.toHaveBeenCalled();
+    expect(res.destroy).not.toHaveBeenCalled();
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test('web stream: truncated SSE response is aborted on clean close', async () => {
+  const res = createMockProxyResponse();
+  const webStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(
+        'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":null}]}\n\n',
+      ));
+      controller.close();
+    },
+  });
+
+  testUtils.pipeWebReadableResponseWithQuotaScan(
+    webStream,
+    asServerResponse(res),
+    testUtils.createProxySSEStreamScanState(),
+  );
+  await vi.waitFor(() => {
+    expect(res.destroy).toHaveBeenCalledTimes(1);
+  });
+  expect(res.end).not.toHaveBeenCalled();
+});
+
+test('web stream: read failure aborts the proxied response', async () => {
+  const res = createMockProxyResponse();
+  const webStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'));
+      controller.error(new Error('net::ERR_CONNECTION_RESET'));
+    },
+  });
+
+  testUtils.pipeWebReadableResponseWithQuotaScan(
+    webStream,
+    asServerResponse(res),
+    testUtils.createProxySSEStreamScanState(),
+  );
+  await vi.waitFor(() => {
+    expect(res.destroy).toHaveBeenCalledTimes(1);
+  });
+  expect(res.end).not.toHaveBeenCalled();
+});
+
+test('web stream: completion check is skipped when no scan state is provided', async () => {
+  const res = createMockProxyResponse();
+  const webStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"object":"chat.completion","choices":[]}'));
+      controller.close();
+    },
+  });
+
+  testUtils.pipeWebReadableResponseWithQuotaScan(webStream, asServerResponse(res));
+  await vi.waitFor(() => {
+    expect(res.end).toHaveBeenCalledTimes(1);
+  });
+  expect(res.destroy).not.toHaveBeenCalled();
 });

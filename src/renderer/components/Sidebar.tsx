@@ -29,21 +29,23 @@ import SidebarAutomationIcon from './icons/SidebarAutomationIcon';
 import SidebarKitsIcon from './icons/SidebarKitsIcon';
 import SidebarMcpIcon from './icons/SidebarMcpIcon';
 import SidebarSearchIcon from './icons/SidebarSearchIcon';
+import SidebarSitesIcon from './icons/SidebarSitesIcon';
 import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import SkillIcon from './icons/SkillIcon';
 import TrashIcon from './icons/TrashIcon';
 import LoginButton from './LoginButton';
-import SidebarAdBanner from './SidebarAdBanner';
+import SidebarExperienceSlot from './SidebarExperienceSlot';
 
 interface SidebarProps {
   onShowSettings: () => void;
   onShowLogin?: () => void;
-  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp';
+  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'sites';
   onShowSkills: () => void;
   onShowCowork: () => void;
   onShowScheduledTasks: () => void;
   onShowKits: () => void;
   onShowMcp: () => void;
+  onShowSites: () => void;
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -53,6 +55,7 @@ interface SidebarProps {
    * promo banner while preserving it for a smooth return after collapse. */
   hideAdBanner?: boolean;
   hideLogin?: boolean;
+  hideSites?: boolean;
 }
 
 const DEFAULT_SIDEBAR_WIDTH = 244;
@@ -135,6 +138,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowScheduledTasks,
   onShowKits,
   onShowMcp,
+  onShowSites,
   onNewChat,
   isCollapsed,
   onToggleCollapse,
@@ -142,6 +146,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   updateNotice,
   hideAdBanner,
   hideLogin,
+  hideSites,
 }) => {
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const agents = useSelector((state: RootState) => state.agent.agents);
@@ -619,13 +624,28 @@ const Sidebar: React.FC<SidebarProps> = ({
             <SidebarMcpIcon className="h-4 w-4 shrink-0" />
             {i18nService.t('mcpServers')}
           </button>
+          {!hideSites && (
+            <button
+              type="button"
+              onClick={() => {
+                reportSidebarAction('open_sites', { activeView, isCollapsed });
+                setIsSearchOpen(false);
+                onShowSites();
+              }}
+              className={activeView === 'sites' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
+              aria-current={activeView === 'sites' ? 'page' : undefined}
+            >
+              <SidebarSitesIcon className="h-4 w-4 shrink-0" />
+              {i18nService.t('sitesTitle')}
+            </button>
+          )}
         </div>
       </div>
       <div className="relative min-h-0 flex-1">
         <div
           ref={agentScrollContainerRef}
           className={`scrollbar-hidden h-full overflow-y-auto px-2.5 ${
-            isSidebarBannerVisible && !isBatchMode ? 'pb-[104px]' : 'pb-10'
+            isSidebarBannerVisible && !isBatchMode ? 'pb-[128px]' : 'pb-10'
           }`}
           onScroll={handleAgentScroll}
         >
@@ -657,7 +677,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           />
         </div>
         {!isBatchMode && (
-          <SidebarAdBanner
+          <SidebarExperienceSlot
             hidden={hideAdBanner}
             onVisibleChange={setIsSidebarBannerVisible}
           />
@@ -737,7 +757,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <div className="flex items-center gap-1 pl-3 pr-2 pt-1">
             {!hideLogin && (
               <div className="flex-1 min-w-0">
-                <LoginButton contentLeftOffset={isCollapsed ? 0 : sidebarWidth} />
+                <LoginButton />
               </div>
             )}
             <button

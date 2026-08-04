@@ -212,6 +212,7 @@ export interface ShareDeploymentCreateNodeInput {
   persistence?: ShareDeploymentPersistence;
   persistenceUpdateMode?: ShareDeploymentPersistenceUpdateMode;
   targetShareStatus?: HtmlShareConfigurableStatus;
+  quotaReservationId?: string;
 }
 
 export interface ShareDeploymentGetByLocalServiceInput {

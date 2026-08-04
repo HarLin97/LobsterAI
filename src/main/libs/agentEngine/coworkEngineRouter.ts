@@ -1,6 +1,10 @@
 import { EventEmitter } from 'events';
 
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import type {
+  CoworkBtwAbortResponse,
+  CoworkBtwSubmitResponse,
+} from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type {
@@ -83,6 +87,24 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       throw new Error(`Steer is not supported by engine: ${engine}`);
     }
     return this.runtime.submitSteer(sessionId, text, clientSteerId);
+  }
+
+  async submitBtw(sessionId: string, question: string, runId: string): Promise<CoworkBtwSubmitResponse> {
+    const engine = this.safeResolveEngine();
+    this.sessionEngine.set(sessionId, engine);
+    if (!this.runtime.submitBtw) {
+      throw new Error(`BTW side questions are not supported by engine: ${engine}`);
+    }
+    return this.runtime.submitBtw(sessionId, question, runId);
+  }
+
+  async abortBtw(sessionId: string, runId: string): Promise<CoworkBtwAbortResponse> {
+    const engine = this.safeResolveEngine();
+    this.sessionEngine.set(sessionId, engine);
+    if (!this.runtime.abortBtw) {
+      throw new Error(`Stopping BTW side questions is not supported by engine: ${engine}`);
+    }
+    return this.runtime.abortBtw(sessionId, runId);
   }
 
   async runGoalCommand(sessionId: string, command: string): Promise<CoworkGoal | null> {
@@ -210,6 +232,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
         this.sessionEngine.set(sessionId, engine);
       }
       this.emit('sessionStatus', sessionId, status);
+    });
+
+    runtime.on('btwResult', (sessionId, result) => {
+      this.sessionEngine.set(sessionId, engine);
+      this.emit('btwResult', sessionId, result);
     });
 
     runtime.on('contextUsageUpdate', (sessionId, usage) => {

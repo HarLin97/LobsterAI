@@ -1,5 +1,6 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { ProviderName } from '@shared/providers/constants';
+import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles';
 
 import { defaultConfig, getProviderDisplayName } from '../../config';
 import { resolveOpenClawModelRef } from '../../utils/openclawModelRef';
@@ -10,9 +11,14 @@ export interface Model {
   provider?: string; // 模型所属的提供商
   providerKey?: string; // 模型所属的提供商 key（用于唯一标识）
   openClawProviderId?: string; // OpenClaw runtime provider id
+  runtimeProfile?: ModelRuntimeProfile; // 受控的运行时兼容档案
   supportsImage?: boolean;
+  supportsVideo?: boolean;
   supportsThinking?: boolean;
+  supportsToolCalling?: boolean;
+  agenticReady?: boolean;
   contextWindow?: number;
+  maxTokens?: number;
   isServerModel?: boolean; // 是否为服务端套餐模型
   serverApiFormat?: string; // 服务端模型的 API 格式 ("openai" | "anthropic")
   explicitContextCache?: boolean; // 是否支持服务端显式上下文缓存

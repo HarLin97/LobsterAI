@@ -10,8 +10,9 @@
  * Usage:
  *   node scripts/apply-openclaw-patches.cjs [openclaw-src-dir]
  *
- * If openclaw-src-dir is not specified, defaults to ../openclaw relative to
- * the LobsterAI project root.
+ * If openclaw-src-dir is not specified, OPENCLAW_SRC is used when present,
+ * otherwise the source defaults to ../openclaw relative to the LobsterAI
+ * project root.
  *
  * Safe to run multiple times — already-applied patches are skipped.
  */
@@ -24,7 +25,9 @@ const path = require('path');
 const rootDir = path.resolve(__dirname, '..');
 const openclawSrc = process.argv[2]
   ? path.resolve(process.argv[2])
-  : path.resolve(rootDir, '..', 'openclaw');
+  : process.env.OPENCLAW_SRC
+    ? path.resolve(process.env.OPENCLAW_SRC)
+    : path.resolve(rootDir, '..', 'openclaw');
 
 // Read pinned openclaw version from package.json.
 const pkg = require(path.join(rootDir, 'package.json'));
@@ -122,6 +125,124 @@ const strongPatchValidators = {
       ],
     },
   ],
+  'openclaw-kimi-k3-support.patch': [
+    {
+      file: 'src/llm/providers/stream-wrappers/moonshot-thinking.ts',
+      snippets: [
+        'ensureMoonshotToolCallReasoningContent',
+        'export function createMoonshotKimiK3Wrapper',
+        'payload.reasoning_effort = "max"',
+      ],
+    },
+    {
+      file: 'src/config/zod-schema.core.ts',
+      snippets: [
+        'thinkingLevelMap: ThinkingLevelMapSchema',
+      ],
+    },
+    {
+      file: 'src/agents/sessions/model-registry.ts',
+      snippets: [
+        'Type.Literal("video")',
+        'Type.Literal("audio")',
+      ],
+    },
+    {
+      file: 'src/config/zod-schema.models.test.ts',
+      snippets: [
+        'rejects an invalid thinking-level map: $label',
+      ],
+    },
+    {
+      file: 'src/plugin-sdk/provider-stream.test.ts',
+      snippets: [
+        'reapplies the K3 payload contract after an async caller replacement',
+        'expect(callerSawReasoningContent).toBe("")',
+      ],
+    },
+  ],
+  'openclaw-lobsterai-model-compat-api.patch': [
+    {
+      file: 'src/config/types.models.ts',
+      snippets: [
+        'LOBSTERAI_MODEL_COMPAT_API = "lobsterai-model-compat"',
+        'export const MODEL_TRANSPORT_APIS',
+        'api?: ModelTransportApi',
+      ],
+    },
+    {
+      file: 'src/config/zod-schema.core.ts',
+      snippets: [
+        'const ModelTransportApiSchema = z.enum(MODEL_TRANSPORT_APIS)',
+        'api: ModelTransportApiSchema.optional()',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/model.inline-provider.test.ts',
+      snippets: [
+        'keeps a provider API owner out of model transport resolution',
+        'api: "lobsterai-model-compat"',
+      ],
+    },
+    {
+      file: 'src/config/zod-schema.model-api-owner.test.ts',
+      snippets: [
+        'rejects arbitrary provider API owner strings',
+        'rejects recursive model-level compatibility ownership',
+      ],
+    },
+  ],
+  'openclaw-openai-compatible-replay-errors.patch': [
+    {
+      file: 'src/llm/utils/provider-error.ts',
+      snippets: [
+        'export function formatProviderError',
+        'const MAX_ERROR_BODY_LENGTH = 4000',
+      ],
+    },
+    {
+      file: 'src/llm/providers/transform-messages.null-content.test.ts',
+      snippets: [
+        'normalizes null or missing content before provider transforms',
+      ],
+    },
+    {
+      file: 'src/llm/providers/openai-completions.test.ts',
+      snippets: [
+        'surfaces HTTP response body text from OpenAI-compatible errors',
+      ],
+    },
+  ],
+  'openclaw-repeated-tool-call-id.patch': [
+    {
+      file: 'src/agents/session-transcript-repair.ts',
+      snippets: [
+        'type ToolCallOccurrence = {',
+        'function buildToolUseFrames',
+        'Provider ids are opaque and can legitimately repeat',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/replay-history.ts',
+      snippets: [
+        'sanitizeToolCallIds: false',
+        'const pairedToolCalls =',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.test.ts',
+      snippets: [
+        'pairs repeated raw ids before assigning provider-safe occurrence ids',
+        'keeps same-turn repeated calls and results aligned after id rewriting',
+      ],
+    },
+    {
+      file: 'src/agents/transport-message-transform.test.ts',
+      snippets: [
+        "does not reassign a dropped errored turn's repeated-id result to an older turn",
+      ],
+    },
+  ],
   'openclaw-dashscope-context-cache.patch': [
     {
       file: 'src/agents/embedded-agent-runner/prompt-cache-retention.ts',
@@ -199,6 +320,10 @@ const strongPatchValidators = {
       snippets: [
         'truncateOversizedToolResultsInMessages(\n            activeSession.messages,',
         'promptToolResultMaxChars,\n            null,',
+        'truncateOversizedToolResultsInMessages(\n                    messages,\n                    contextTokenBudget,\n                    promptToolResultMaxChars,\n                    null,',
+      ],
+      forbiddenSnippets: [
+        'promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER',
       ],
     },
     {
@@ -212,17 +337,6 @@ const strongPatchValidators = {
     {
       file: 'src/agents/embedded-agent-runner/tool-result-truncation.test.ts',
       snippets: ['keeps prompt projections byte-stable as history grows'],
-    },
-  ],
-  'zz-openclaw-deepseek-cache-probe.patch': [
-    {
-      file: 'src/agents/openai-transport-stream.ts',
-      snippets: [
-        'DEEPSEEK_CACHE_PROBE_LOG_PREFIX = "[DeepSeekCacheProbe]"',
-        'logDeepSeekCacheRequestProbe',
-        'logDeepSeekCacheProbeResult',
-        'cacheRead / promptTokens',
-      ],
     },
   ],
   'zz-openclaw-task-cwd-system-prompt.patch': [
@@ -283,6 +397,20 @@ function collectMissingStrongPatchSnippets(patchFile) {
       if (!source.includes(snippet)) {
         missing.push(`${validator.file}: missing ${JSON.stringify(snippet)}`);
       }
+    }
+    for (const snippet of validator.forbiddenSnippets ?? []) {
+      if (source.includes(snippet)) {
+        missing.push(`${validator.file}: contains forbidden ${JSON.stringify(snippet)}`);
+      }
+    }
+    let orderedSearchOffset = 0;
+    for (const snippet of validator.orderedSnippets ?? []) {
+      const index = source.indexOf(snippet, orderedSearchOffset);
+      if (index < 0) {
+        missing.push(`${validator.file}: missing ordered ${JSON.stringify(snippet)}`);
+        break;
+      }
+      orderedSearchOffset = index + snippet.length;
     }
   }
   return missing;

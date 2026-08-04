@@ -9,12 +9,40 @@ import {
   APP_UPDATE_ELEVATION_DECLINED_ERROR,
   type AppUpdateSource,
 } from '../../shared/appUpdate/constants';
+import {
+  AppUpdateUrlUntrustedError,
+  assertTrustedWindowsInstallerUrl,
+  WINDOWS_INSTALLER_URL_POLICY_VERSION,
+  type WindowsInstallerUrlPolicyReceipt,
+} from './appUpdateUrlPolicy';
 
 export interface AppUpdateDownloadProgress {
   received: number;
   total: number | undefined;
   percent: number | undefined;
   speed: number | undefined;
+}
+
+export interface AppUpdateDownloadResult {
+  filePath: string;
+  windowsInstallerUrlPolicyReceipt?: WindowsInstallerUrlPolicyReceipt;
+}
+
+export const WindowsInstallerLauncherFallback = {
+  None: 'none',
+  WizardNoArgs: 'wizard-no-args',
+} as const;
+
+function formatDownloadUrlForLog(rawUrl: string): string {
+  if (process.platform !== 'win32') {
+    return rawUrl;
+  }
+  try {
+    const url = new URL(rawUrl);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return '[invalid-url]';
+  }
 }
 
 let activeDownloadController: AbortController | null = null;
@@ -56,12 +84,25 @@ export async function downloadUpdate(
   url: string,
   source: AppUpdateSource,
   onProgress: (progress: AppUpdateDownloadProgress) => void,
-): Promise<string> {
+): Promise<AppUpdateDownloadResult> {
   if (activeDownloadController) {
     throw new Error('A download is already in progress');
   }
 
-  console.log(`[AppUpdate] Starting download: ${url}`);
+  let validatedWindowsInputUrl: URL | null = null;
+  if (process.platform === 'win32') {
+    try {
+      validatedWindowsInputUrl = assertTrustedWindowsInstallerUrl(url);
+    } catch (error) {
+      const reason = error instanceof AppUpdateUrlUntrustedError
+        ? error.reason
+        : 'unknown';
+      console.error(`[AppUpdate] Rejected unsafe Windows installer URL, reason=${reason}`);
+      throw error;
+    }
+  }
+
+  console.log(`[AppUpdate] Starting download: ${formatDownloadUrlForLog(url)}`);
 
   // Validate URL
   let parsedUrl: URL;
@@ -104,6 +145,10 @@ export async function downloadUpdate(
   try {
     const response = await session.defaultSession.fetch(url, {
       signal: controller.signal,
+      // Electron documents Response.url as unreliable for session.fetch().
+      // Reject Windows redirects so the validated input remains the download
+      // source without relying on that field for final-URL provenance.
+      ...(process.platform === 'win32' ? { redirect: 'error' as const } : {}),
     });
 
     console.log(`[AppUpdate] HTTP response: ${response.status} ${response.statusText}`);
@@ -195,7 +240,18 @@ export async function downloadUpdate(
       speed: currentSpeed,
     });
 
-    return finalPath;
+    return {
+      filePath: finalPath,
+      ...(validatedWindowsInputUrl
+        ? {
+            windowsInstallerUrlPolicyReceipt: {
+              policyVersion: WINDOWS_INSTALLER_URL_POLICY_VERSION,
+              inputOrigin: validatedWindowsInputUrl.origin,
+              finalOrigin: validatedWindowsInputUrl.origin,
+            },
+          }
+        : {}),
+    };
   } catch (error) {
     clearInactivityTimer();
     console.error('[AppUpdate] Download error:', error);
@@ -222,7 +278,15 @@ export async function downloadUpdate(
   }
 }
 
-export async function installUpdate(filePath: string): Promise<void> {
+export interface InstallUpdateOptions {
+  /** Windows only: forward /NoDefenderExclusion to the installer (enterprise opt-out). */
+  noDefenderExclusion?: boolean;
+}
+
+export async function installUpdate(
+  filePath: string,
+  options?: InstallUpdateOptions,
+): Promise<void> {
   console.log(`[AppUpdate] Installing update from: ${filePath}`);
   console.log(`[AppUpdate] Platform: ${process.platform}, Arch: ${process.arch}`);
 
@@ -244,7 +308,7 @@ export async function installUpdate(filePath: string): Promise<void> {
     return installMacDmg(filePath);
   }
   if (process.platform === 'win32') {
-    return installWindowsNsis(filePath);
+    return installWindowsNsis(filePath, options);
   }
   throw new Error('Unsupported platform');
 }
@@ -838,14 +902,20 @@ async function installMacDmg(dmgPath: string): Promise<void> {
 }
 
 /**
- * NSIS silent-upgrade arguments understood by the electron-builder assisted
- * installer: `/S` suppresses the whole wizard and reuses the install directory
- * recorded in the registry, `--force-run` relaunches the app after the files
- * are in place (via ExecShellAsUser, so the new instance is not elevated), and
- * `--updated` marks the run as an upgrade for the template's shortcut/page
- * logic and is forwarded to the relaunched app as an argv flag.
+ * NSIS upgrade arguments understood by the (patched) electron-builder
+ * assisted installer. `--updated` puts it in update mode: every interactive
+ * page (install mode, directory, finish) is skipped, the previous install
+ * directory is reused from the registry, and the Cancel button is disabled —
+ * the only visible UI is the install-files page with its real progress bar.
+ * `--force-run` relaunches the app once files are in place (via
+ * ExecShellAsUser, so the new instance is not elevated); the relaunched app
+ * receives `--updated` as an argv flag. Deliberately NOT `/S`: silent mode
+ * would hide the progress bar for the minutes-long extraction.
  */
-export const WINDOWS_SILENT_INSTALL_ARGS = ['/S', '--force-run', '--updated'] as const;
+export const WINDOWS_UPDATE_INSTALL_ARGS = ['--force-run', '--updated'] as const;
+
+/** Installer switch that forbids adding Windows Defender exclusions. */
+export const WINDOWS_NO_DEFENDER_EXCLUSION_ARG = '/NoDefenderExclusion';
 
 /** Win32 ERROR_CANCELLED: the user declined the UAC elevation prompt. */
 export const WINDOWS_UAC_DECLINED_EXIT_CODE = 1223;
@@ -856,23 +926,117 @@ export const WINDOWS_UAC_DECLINED_EXIT_CODE = 1223;
  * so a slow decision is never mistaken for a hang.
  */
 const WINDOWS_INSTALLER_LAUNCH_TIMEOUT_MS = 300_000;
+const WINDOWS_INSTALLER_PATH_ENV = 'LOBSTERAI_UPDATE_INSTALLER_PATH';
+
+export interface WindowsPowerShellCandidateOptions {
+  systemRoot: string;
+  processArch: typeof process.arch;
+  env: NodeJS.ProcessEnv;
+}
+
+/**
+ * Build trusted PowerShell candidates without consulting PATH. Sysnative is
+ * the only way for a 32-bit process on 64-bit Windows to bypass WOW64
+ * redirection and reach the native System32 directory.
+ */
+export function buildWindowsPowerShellCandidatePaths(
+  options: WindowsPowerShellCandidateOptions,
+): string[] {
+  const normalizedRoot = path.win32.normalize(options.systemRoot.trim())
+    .replace(/[\\/]+$/, '');
+  if (!/^[a-zA-Z]:\\Windows$/i.test(normalizedRoot)) {
+    return [];
+  }
+
+  const nativeArchitecture =
+    options.env.PROCESSOR_ARCHITEW6432
+    ?? options.env.processor_architew6432
+    ?? '';
+  const isWow64 =
+    options.processArch === 'ia32'
+    && /^(amd64|arm64|ia64)$/i.test(nativeArchitecture);
+  const relativePowerShellPath = path.win32.join(
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+  const candidates: string[] = [];
+
+  if (isWow64) {
+    candidates.push(path.win32.join(
+      normalizedRoot,
+      'Sysnative',
+      relativePowerShellPath,
+    ));
+  }
+  candidates.push(path.win32.join(
+    normalizedRoot,
+    'System32',
+    relativePowerShellPath,
+  ));
+
+  return candidates;
+}
+
+export interface ResolveWindowsPowerShellPathOptions {
+  systemRoot?: string;
+  processArch?: typeof process.arch;
+  env?: NodeJS.ProcessEnv;
+  isTrustedFile?: (candidatePath: string) => boolean;
+}
+
+function isTrustedWindowsSystemFile(candidatePath: string): boolean {
+  try {
+    const stat = fs.lstatSync(candidatePath);
+    return stat.isFile() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve an existing system PowerShell executable without PATH lookup. */
+export function resolveWindowsPowerShellPath(
+  options: ResolveWindowsPowerShellPathOptions = {},
+): string | null {
+  const env = options.env ?? process.env;
+  const systemRoot =
+    options.systemRoot
+    ?? env.SystemRoot
+    ?? env.SYSTEMROOT
+    ?? env.windir
+    ?? env.WINDIR
+    ?? 'C:\\Windows';
+  const candidates = buildWindowsPowerShellCandidatePaths({
+    systemRoot,
+    processArch: options.processArch ?? process.arch,
+    env,
+  });
+  const isTrustedFile = options.isTrustedFile ?? isTrustedWindowsSystemFile;
+  return candidates.find(candidate => isTrustedFile(candidate)) ?? null;
+}
 
 /**
  * The installer's manifest requests administrator (customHeader in
  * scripts/nsis-installer.nsh), so CreateProcess-based spawns fail with
  * ERROR_ELEVATION_REQUIRED instead of showing the UAC prompt; only
  * ShellExecute semantics can elevate, and shell.openPath cannot pass the
- * silent-install arguments. PowerShell's Start-Process goes through
+ * update-mode arguments. PowerShell's Start-Process goes through
  * ShellExecute and reports a declined prompt as Win32Exception 1223, which
  * this script turns into a distinct exit code — the exception *message* is
  * localized by the OS, so the native error code is the only stable signal.
  */
-export function buildWindowsSilentInstallScript(exePath: string): string {
-  const escapedPath = exePath.replace(/'/g, "''");
-  const argumentList = WINDOWS_SILENT_INSTALL_ARGS.map(arg => `'${arg}'`).join(',');
+export function buildWindowsInstallerLaunchScript(
+  extraArgs: readonly string[] = [],
+): string {
+  const argumentList = [...WINDOWS_UPDATE_INSTALL_ARGS, ...extraArgs]
+    .map(arg => `'${arg}'`)
+    .join(',');
   return (
     `$ErrorActionPreference = 'Stop'; ` +
-    `try { Start-Process -FilePath '${escapedPath}' -ArgumentList ${argumentList} } ` +
+    `$installer = $env:${WINDOWS_INSTALLER_PATH_ENV}; ` +
+    `if ([string]::IsNullOrWhiteSpace($installer)) { ` +
+    `[Console]::Error.WriteLine('Installer path is missing'); exit 1 }; ` +
+    `try { Start-Process -FilePath $installer -ArgumentList ${argumentList} } ` +
     `catch { ` +
     `$native = $_.Exception.NativeErrorCode; ` +
     `if ($null -eq $native -and $_.Exception.InnerException) { $native = $_.Exception.InnerException.NativeErrorCode }; ` +
@@ -886,12 +1050,18 @@ function execFileWithExitCode(
   file: string,
   args: string[],
   timeoutMs: number,
+  env?: NodeJS.ProcessEnv,
 ): Promise<{ code: number; stderr: string }> {
   return new Promise(resolve => {
     execFile(
       file,
       args,
-      { maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs, windowsHide: true },
+      {
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: timeoutMs,
+        windowsHide: true,
+        env,
+      },
       (error, _stdout, stderr) => {
         if (!error) {
           resolve({ code: 0, stderr });
@@ -909,12 +1079,15 @@ function execFileWithExitCode(
   });
 }
 
-async function installWindowsNsis(exePath: string): Promise<void> {
+async function installWindowsNsis(
+  exePath: string,
+  options?: InstallUpdateOptions,
+): Promise<void> {
   // Launch the installer while the app still owns the foreground so the UAC
   // elevation prompt (the installer requests admin) appears in front of the
-  // user. The install itself is silent: no wizard, existing install directory,
-  // automatic relaunch. The whole update needs no interaction beyond the
-  // elevation consent.
+  // user. The install runs in update mode: no questions asked, existing
+  // install directory, a progress-bar-only window for the minutes-long
+  // extraction, then an automatic relaunch.
   //
   // The app quits only after the elevated process actually started: a declined
   // prompt keeps this instance running so the coordinator returns to Ready and
@@ -925,30 +1098,61 @@ async function installWindowsNsis(exePath: string): Promise<void> {
   // name and polls until they are gone before replacing files. The installer
   // process itself is named lobsterai-update-*, so it is not affected by that
   // kill.
-  console.log(`[AppUpdate] Launching Windows installer silently: ${exePath}`);
-  const launch = await execFileWithExitCode(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', buildWindowsSilentInstallScript(exePath)],
-    WINDOWS_INSTALLER_LAUNCH_TIMEOUT_MS,
-  );
+  console.log(`[AppUpdate] Launching Windows installer in update mode: ${exePath}`);
+  const extraArgs = options?.noDefenderExclusion === true
+    ? [WINDOWS_NO_DEFENDER_EXCLUSION_ARG]
+    : [];
+  const powerShellPath = resolveWindowsPowerShellPath();
+  if (powerShellPath) {
+    console.log(`[AppUpdate] Using trusted Windows PowerShell: ${powerShellPath}`);
+  } else {
+    console.warn('[AppUpdate] Trusted Windows PowerShell unavailable; using wizard fallback');
+  }
+  const launch = powerShellPath
+    ? await execFileWithExitCode(
+        powerShellPath,
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          buildWindowsInstallerLaunchScript(extraArgs),
+        ],
+        WINDOWS_INSTALLER_LAUNCH_TIMEOUT_MS,
+        {
+          ...process.env,
+          [WINDOWS_INSTALLER_PATH_ENV]: exePath,
+        },
+      )
+    : {
+        code: 1,
+        stderr: 'Trusted Windows PowerShell executable was not found',
+      };
 
   if (launch.code === 0) {
-    console.log('[AppUpdate] Silent installer launched, quitting app');
+    console.log(
+      `[AppUpdate] Installer launched, invocation_source=app-update launcher_fallback=${WindowsInstallerLauncherFallback.None} updated_flag=true ui_mode=interactive`,
+    );
     app.quit();
     return;
   }
 
   if (launch.code === WINDOWS_UAC_DECLINED_EXIT_CODE) {
-    // The user said no. Do not fall back to the interactive installer here —
+    // The user said no. Do not relaunch the installer through the fallback —
     // it would immediately raise a second elevation prompt.
-    console.warn('[AppUpdate] silent install declined at the UAC prompt');
+    console.warn('[AppUpdate] update install declined at the UAC prompt');
     throw new Error(APP_UPDATE_ELEVATION_DECLINED_ERROR);
   }
 
   // PowerShell unavailable or blocked (policy, security software): fall back
-  // to the interactive wizard so the user still has an update path.
+  // to the plain full wizard so the user still has an update path. Known
+  // trade-off: shell.openPath cannot carry arguments, so this path ignores
+  // noDefenderExclusion — acceptable for the rare triple overlap of
+  // enterprise opt-out + broken PowerShell + wizard fallback.
   console.error(
-    `[AppUpdate] silent installer launch failed (code=${launch.code}): ${launch.stderr.trim()}`,
+    `[AppUpdate] update-mode installer launch failed (code=${launch.code}): ${launch.stderr.trim()}`,
+  );
+  console.warn(
+    `[AppUpdate] Installer launcher fallback, invocation_source=app-update launcher_fallback=${WindowsInstallerLauncherFallback.WizardNoArgs} updated_flag=false ui_mode=interactive`,
   );
   const launchError = await shell.openPath(exePath);
   if (launchError) {

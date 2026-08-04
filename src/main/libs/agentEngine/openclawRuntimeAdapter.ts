@@ -20,6 +20,15 @@ import {
   type CoworkBrowserAnnotationMessageBatch,
 } from '../../../shared/cowork/browserAnnotations';
 import {
+  COWORK_BTW_IDENTIFIER_MAX_CHARS,
+  COWORK_BTW_RESULT_MAX_CHARS,
+  type CoworkBtwAbortResponse,
+  type CoworkBtwEntry,
+  CoworkBtwStatus,
+  type CoworkBtwSubmitResponse,
+  normalizeCoworkBtwQuestion,
+} from '../../../shared/cowork/btw';
+import {
   CoworkIpcChannel,
   type CoworkSessionsChangedPayload,
 } from '../../../shared/cowork/constants';
@@ -55,6 +64,9 @@ import type {
   KitReference,
   ResolvedKitCapabilities,
 } from '../../../shared/kit/constants';
+import { OpenClawGatewayFailureKind } from '../../../shared/openclawEngine/constants';
+import { OpenClawTranscriptSafetyStatus } from '../../../shared/openclawTranscript/constants';
+import { ProviderName } from '../../../shared/providers';
 import type { Agent, CoworkExecutionMode, CoworkMessage, CoworkMessageMetadata, CoworkSession, CoworkSessionStatus, CoworkStore } from '../../coworkStore';
 import { t } from '../../i18n';
 import { MediaGenerationTool } from '../../mediaGenerationPolicy';
@@ -130,6 +142,10 @@ import {
   hasCronRunHistoryForSession,
   shouldReplaceLocalConversationWithCronHistory,
 } from './openclawCronRunHistorySync';
+import {
+  buildOpenClawTranscriptOversizedError,
+  inspectOpenClawTranscriptSafety,
+} from './openclawTranscriptSafety';
 import { OpenClawTurnHistorySync } from './openclawTurnHistorySync';
 import {
   buildSubagentChildHistorySyncPlan,
@@ -175,10 +191,14 @@ import type {
 } from './types';
 
 const OPENCLAW_GATEWAY_TOOL_EVENTS_CAP = 'tool-events';
+const OPENCLAW_BTW_SESSION_KEY_MAX_CHARS = 4_096;
 const OpenClawGatewayEvent = {
+  ChatSideResult: 'chat.side_result',
   SessionsChanged: 'sessions.changed',
 } as const;
 const OpenClawGatewayMethod = {
+  ChatAbort: 'chat.abort',
+  ChatSend: 'chat.send',
   SessionsSubscribe: 'sessions.subscribe',
 } as const;
 const BRIDGE_MAX_MESSAGES = 20;
@@ -476,6 +496,30 @@ type OpenClawQueueSteerResult = {
   errorMessage?: string;
 };
 
+type PendingBtwRun = {
+  clientRunId: string;
+  gatewayRunIds: Set<string>;
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  question: string;
+  createdAt: number;
+  timeoutTimer: ReturnType<typeof setTimeout>;
+  stopRequested: boolean;
+};
+
+type OpenClawBtwSideResultPayload = {
+  kind: 'btw';
+  runId: string;
+  sessionKey: string;
+  agentId?: string;
+  question: string;
+  text: string;
+  isError?: boolean;
+  ts: number;
+  seq?: number;
+};
+
 type GatewayRpcHealth = {
   degradedUntil: number;
   consecutiveTimeouts: number;
@@ -551,6 +595,7 @@ type TextStreamMode = 'unknown' | 'snapshot' | 'delta';
 
 const GatewayStopReason = {
   Error: 'error',
+  Length: 'length',
   ToolUse: 'toolUse',
   ToolUseSnake: 'tool_use',
 } as const;
@@ -1011,6 +1056,12 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 };
 
+const truncateBtwResultText = (value: string): string => {
+  if (value.length <= COWORK_BTW_RESULT_MAX_CHARS) return value;
+  const suffix = `\n\n${t('coworkBtwResultTruncated')}`;
+  return `${value.slice(0, Math.max(0, COWORK_BTW_RESULT_MAX_CHARS - suffix.length))}${suffix}`;
+};
+
 const MODEL_SNAPSHOT_CUSTOM_TYPE = 'model-snapshot';
 const SESSION_STATUS_TOOL_NAME = 'session_status';
 
@@ -1378,24 +1429,27 @@ const summarizeGatewayMessageShape = (message: unknown): string => {
   const role = typeof message.role === 'string' ? message.role : '?';
   const content = message.content;
   if (typeof content === 'string') {
-    return `role=${role} content=string(${content.length}) text="${truncate(content, 120)}"`;
+    return `role=${role} contentType=string contentLen=${content.length}`;
   }
   if (Array.isArray(content)) {
     const parts = content.map((item) => {
       if (!isRecord(item)) return typeof item;
       const type = typeof item.type === 'string' ? item.type : 'object';
-      const text = typeof item.text === 'string' ? `:${truncate(item.text, 60)}` : '';
-      return `${type}${text}`;
+      const textLength = typeof item.text === 'string' ? ` textLen=${item.text.length}` : '';
+      return `${type}${textLength}`;
     });
-    return `role=${role} content=[${parts.join(', ')}]`;
+    const toolCallCount = content.filter((item) => (
+      isRecord(item) && (item.type === 'toolCall' || item.type === 'tool_call')
+    )).length;
+    return `role=${role} contentType=array blocks=${content.length} blockTypes=[${parts.join(', ')}] toolCalls=${toolCallCount}`;
   }
   if (isRecord(content)) {
-    return `role=${role} contentKeys=${Object.keys(content).join(',')}`;
+    return `role=${role} contentType=object fields=${Object.keys(content).length}`;
   }
   if (typeof message.text === 'string') {
-    return `role=${role} text=${truncate(message.text, 120)}`;
+    return `role=${role} textLen=${message.text.length}`;
   }
-  return `role=${role} keys=${Object.keys(message).join(',')}`;
+  return `role=${role} fields=${Object.keys(message).length}`;
 };
 
 const messageHasToolCallBlock = (message: unknown): boolean => {
@@ -1407,6 +1461,10 @@ const messageHasToolCallBlock = (message: unknown): boolean => {
 
 const isToolUseStopReason = (stopReason: string | undefined): boolean => {
   return stopReason === GatewayStopReason.ToolUse || stopReason === GatewayStopReason.ToolUseSnake;
+};
+
+export const isIncompleteStopReason = (stopReason: string | undefined): boolean => {
+  return stopReason === GatewayStopReason.Length;
 };
 
 export function normalizeOpenClawRuntimeErrorMessage(errorMessage: string): string {
@@ -1444,7 +1502,7 @@ const COWORK_ERROR_KEY_BY_OPENCLAW_FAILOVER_REASON: Record<string, string> = {
   billing: CoworkErrorI18nKey.InsufficientBalance,
   rate_limit: CoworkErrorI18nKey.RateLimit,
   overloaded: CoworkErrorI18nKey.RateLimit,
-  timeout: CoworkErrorI18nKey.NetworkError,
+  timeout: CoworkErrorI18nKey.ModelResponseTimeout,
   server_error: CoworkErrorI18nKey.ServerError,
 };
 
@@ -1459,7 +1517,7 @@ const COWORK_ERROR_KEY_BY_OPENCLAW_RUNTIME_FAILURE_KIND: Record<string, string> 
   auth_invalid_token: CoworkErrorI18nKey.OAuthInvalid,
   rate_limit: CoworkErrorI18nKey.RateLimit,
   dns: CoworkErrorI18nKey.NetworkError,
-  timeout: CoworkErrorI18nKey.NetworkError,
+  timeout: CoworkErrorI18nKey.ModelResponseTimeout,
   upstream_html: CoworkErrorI18nKey.ServerError,
   proxy: CoworkErrorI18nKey.NetworkError,
   empty_response: CoworkErrorI18nKey.ServerError,
@@ -1502,6 +1560,13 @@ function classifyOpenClawSafeRuntimeErrorMetadata(
 ): string | null {
   if (!metadata) return null;
 
+  if (
+    metadata.provider?.trim() === ProviderName.LobsteraiServer
+    && metadata.httpCode?.trim() === '403'
+  ) {
+    return CoworkErrorI18nKey.ModelAccessDenied;
+  }
+
   const failureKind = metadata.providerRuntimeFailureKind?.trim();
   if (failureKind && COWORK_ERROR_KEY_BY_OPENCLAW_RUNTIME_FAILURE_KIND[failureKind]) {
     return COWORK_ERROR_KEY_BY_OPENCLAW_RUNTIME_FAILURE_KIND[failureKind];
@@ -1526,6 +1591,18 @@ function classifyOpenClawSafeRuntimeErrorMetadata(
   return null;
 }
 
+function isLobsterAILoginExpiredMetadata(
+  metadata: OpenClawSafeRuntimeErrorMetadata | undefined,
+): boolean {
+  if (metadata?.provider?.trim() !== ProviderName.LobsteraiServer) return false;
+  if (metadata.httpCode?.trim() === '403') return false;
+  if (metadata.providerRuntimeFailureKind?.trim() === 'auth_scope') return false;
+  return metadata.httpCode?.trim() === '401'
+    || metadata.failoverReason?.trim() === 'auth'
+    || metadata.providerRuntimeFailureKind?.trim() === 'auth_refresh'
+    || metadata.providerRuntimeFailureKind?.trim() === 'auth_invalid_token';
+}
+
 export function resolveOpenClawRuntimeErrorMessage(
   errorMessage: string,
   metadata?: OpenClawSafeRuntimeErrorMetadata,
@@ -1534,6 +1611,15 @@ export function resolveOpenClawRuntimeErrorMessage(
   const classifiedKey = classifyErrorKey(normalized);
 
   if (classifiedKey) {
+    if (
+      isLobsterAILoginExpiredMetadata(metadata)
+      && (
+        classifiedKey === CoworkErrorI18nKey.AuthInvalid
+        || classifiedKey === CoworkErrorI18nKey.OAuthInvalid
+      )
+    ) {
+      return t(CoworkErrorI18nKey.LobsterAILoginExpired);
+    }
     if (classifiedKey === CoworkErrorI18nKey.QuotaExhausted) {
       consumeRecentOpenClawTokenProxyQuotaError();
     }
@@ -1541,6 +1627,10 @@ export function resolveOpenClawRuntimeErrorMessage(
   }
 
   if (isOpenClawGenericLlmRequestFailed(normalized)) {
+    if (isLobsterAILoginExpiredMetadata(metadata)) {
+      consumeRecentOpenClawTokenProxyQuotaError();
+      return t(CoworkErrorI18nKey.LobsterAILoginExpired);
+    }
     const metadataClassifiedKey = classifyOpenClawSafeRuntimeErrorMetadata(metadata);
     if (metadataClassifiedKey) {
       consumeRecentOpenClawTokenProxyQuotaError();
@@ -2174,7 +2264,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * events cannot re-create a ghost turn or attach to the next user turn.
    */
   private readonly recentlyClosedRunIds = new Map<string, RecentlyClosedRunInfo>();
-  private readonly pendingTurns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+  private readonly pendingBtwRuns = new Map<string, PendingBtwRun>();
+  private readonly pendingBtwRunBySessionId = new Map<string, PendingBtwRun>();
+  private readonly terminalBtwRunIds = new Map<string, number>();
+  private readonly pendingTurns = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
   private readonly confirmationModeBySession = new Map<string, 'modal' | 'text'>();
   private readonly bridgedSessions = new Set<string>();
   private readonly continuityFullBridgeCompactedAtBySession = new Map<string, number>();
@@ -2196,6 +2292,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private static readonly STOP_COOLDOWN_MS = 10_000; // 10 seconds
   private static readonly RECENTLY_CLOSED_RUN_ID_TTL_MS = 120_000;
   private static readonly RECENTLY_CLOSED_RUN_ID_LIMIT = 1000;
+  private static readonly TERMINAL_BTW_RUN_ID_TTL_MS = 120_000;
+  private static readonly TERMINAL_BTW_RUN_ID_LIMIT = 1000;
   private static readonly LIFECYCLE_ERROR_FALLBACK_DELAY_MS = 20_000;
   private static readonly CHAT_FINAL_COMPLETION_GRACE_MS = 800;
   private static readonly PLAN_MODE_RECOVERY_FOLLOWUP_GRACE_MS = 15_000;
@@ -2212,6 +2310,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private gatewayClient: GatewayClientLike | null = null;
   private gatewayClientVersion: string | null = null;
   private gatewayClientEntryPath: string | null = null;
+  private gatewayClientGeneration = 0;
   /** Holds the client between start() and onHelloOk so stopGatewayClient can clean it up. */
   private pendingGatewayClient: GatewayClientLike | null = null;
   private gatewayReadyPromise: Promise<void> | null = null;
@@ -4114,6 +4213,291 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     });
   }
 
+  async submitBtw(
+    sessionId: string,
+    question: string,
+    runId: string,
+  ): Promise<CoworkBtwSubmitResponse> {
+    const normalizedSessionId = sessionId.trim();
+    const normalizedRunId = runId.trim();
+    const normalizedQuestion = normalizeCoworkBtwQuestion(question);
+    if (!normalizedSessionId || !normalizedRunId) {
+      return {
+        success: false,
+        runId: normalizedRunId,
+        error: t('coworkBtwRequestRequired'),
+      };
+    }
+    if (
+      normalizedSessionId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+      || normalizedRunId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+    ) {
+      return {
+        success: false,
+        runId: normalizedRunId.slice(0, COWORK_BTW_IDENTIFIER_MAX_CHARS),
+        error: t('coworkBtwInvalidIdentifier'),
+      };
+    }
+    if (!normalizedQuestion) {
+      return {
+        success: false,
+        runId: normalizedRunId,
+        error: t('coworkBtwQuestionRequired'),
+      };
+    }
+    if (/[\r\n]/.test(normalizedQuestion)) {
+      return {
+        success: false,
+        runId: normalizedRunId,
+        error: t('coworkBtwSingleLine'),
+      };
+    }
+    if (this.pendingBtwRunBySessionId.has(normalizedSessionId)) {
+      return {
+        success: false,
+        runId: normalizedRunId,
+        error: t('coworkBtwAlreadyPending'),
+      };
+    }
+    if (
+      this.pendingBtwRuns.has(normalizedRunId)
+      || this.sessionIdByRunId.has(normalizedRunId)
+      || this.isTerminalBtwRunId(normalizedRunId)
+    ) {
+      return {
+        success: false,
+        runId: normalizedRunId,
+        error: t('coworkBtwRunConflict'),
+      };
+    }
+
+    const session = this.store.getSession(normalizedSessionId);
+    if (!session) {
+      return {
+        success: false,
+        runId: normalizedRunId,
+        error: t('coworkBtwSessionNotFound', { sessionId: normalizedSessionId }),
+      };
+    }
+
+    const agentId = session.agentId || 'main';
+    const activeTurnSessionKey = this.activeTurns.get(normalizedSessionId)?.sessionKey?.trim();
+    const rememberedSessionKey = this.getSessionKeysForSession(normalizedSessionId)
+      .find((key) => !isManagedSessionKey(key));
+    const persistedChannelSession = this.channelSessionSync
+      ?.getOpenClawSessionKeyForCoworkSession(normalizedSessionId);
+    const persistedChannelSessionKey = persistedChannelSession?.sessionKey
+      && !isManagedSessionKey(persistedChannelSession.sessionKey)
+      ? persistedChannelSession.sessionKey
+      : '';
+    const sessionKey = activeTurnSessionKey
+      || rememberedSessionKey
+      || persistedChannelSessionKey
+      || this.toSessionKey(normalizedSessionId, agentId);
+
+    try {
+      await this.ensureGatewayClientReady();
+      if (this.pendingBtwRunBySessionId.has(normalizedSessionId)) {
+        return {
+          success: false,
+          runId: normalizedRunId,
+          error: t('coworkBtwAlreadyPending'),
+        };
+      }
+
+      const runCwd = session.cwd?.trim() ? path.resolve(session.cwd.trim()) : undefined;
+      const chatSendParams = {
+        sessionKey,
+        message: `/btw ${normalizedQuestion}`,
+        deliver: false,
+        idempotencyKey: normalizedRunId,
+        ...(runCwd ? { cwd: runCwd } : {}),
+      };
+      assertOpenClawChatSendPayloadWithinLimit(normalizedSessionId, chatSendParams);
+      this.rememberSessionKey(normalizedSessionId, sessionKey);
+      const pending = this.registerPendingBtwRun({
+        clientRunId: normalizedRunId,
+        sessionId: normalizedSessionId,
+        sessionKey,
+        agentId,
+        question: normalizedQuestion,
+      });
+      console.log(
+        '[CoworkBtw] submitting side question.',
+        `Session ${normalizedSessionId}.`,
+        `Run ${normalizedRunId}.`,
+        `OpenClaw key ${sessionKey}.`,
+        `Question chars ${normalizedQuestion.length}.`,
+        `Active main turn ${this.activeTurns.has(normalizedSessionId) ? 'yes' : 'no'}.`,
+      );
+      const sendResult = await this.requireGatewayClient().request<Record<string, unknown>>(
+        OpenClawGatewayMethod.ChatSend,
+        chatSendParams,
+        { timeoutMs: 90_000 },
+      );
+      const returnedRunId = typeof sendResult?.runId === 'string' ? sendResult.runId.trim() : '';
+      if (returnedRunId && !this.addPendingBtwRunAlias(pending, returnedRunId)) {
+        return {
+          success: false,
+          runId: normalizedRunId,
+          error: t('coworkBtwInvalidResult'),
+        };
+      }
+      return {
+        success: true,
+        runId: normalizedRunId,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const pending = this.pendingBtwRunBySessionId.get(normalizedSessionId);
+      if (pending?.clientRunId === normalizedRunId) {
+        this.failPendingBtwRun(pending, message, 'chat.send rejected');
+      } else if (this.isTerminalBtwRunId(normalizedRunId)) {
+        return {
+          success: true,
+          runId: normalizedRunId,
+        };
+      }
+      console.error(
+        '[CoworkBtw] failed to submit side question.',
+        `Session ${normalizedSessionId}.`,
+        `Run ${normalizedRunId}.`,
+        error,
+      );
+      return {
+        success: false,
+        runId: normalizedRunId,
+        error: message,
+      };
+    }
+  }
+
+  async abortBtw(sessionId: string, runId: string): Promise<CoworkBtwAbortResponse> {
+    const normalizedSessionId = sessionId.trim();
+    const normalizedRunId = runId.trim();
+    if (
+      !normalizedSessionId
+      || !normalizedRunId
+      || normalizedSessionId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+      || normalizedRunId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+    ) {
+      return {
+        success: false,
+        aborted: false,
+        runId: normalizedRunId.slice(0, COWORK_BTW_IDENTIFIER_MAX_CHARS),
+        error: t('coworkBtwInvalidIdentifier'),
+      };
+    }
+
+    const pending = this.pendingBtwRunBySessionId.get(normalizedSessionId);
+    if (!pending || pending.clientRunId !== normalizedRunId) {
+      return {
+        success: false,
+        aborted: false,
+        runId: normalizedRunId,
+        error: t('coworkBtwNoPending'),
+      };
+    }
+    if (pending.stopRequested) {
+      // A stop RPC is already in flight. Do not claim that the gateway
+      // confirmed it; the terminal stream event will settle every renderer.
+      return {
+        success: true,
+        aborted: false,
+        runId: normalizedRunId,
+      };
+    }
+
+    const client = this.gatewayClient;
+    if (!client) {
+      return {
+        success: false,
+        aborted: false,
+        runId: normalizedRunId,
+        error: t('coworkBtwStopFailed'),
+      };
+    }
+
+    pending.stopRequested = true;
+    console.log(
+      '[CoworkBtw] stopping side question.',
+      `Session ${normalizedSessionId}.`,
+      `Run ${normalizedRunId}.`,
+    );
+    try {
+      const gatewayRunIds = Array.from(pending.gatewayRunIds).reverse();
+      let aborted = false;
+      for (const gatewayRunId of gatewayRunIds) {
+        const result = await client.request<{
+          aborted?: boolean;
+          runIds?: unknown;
+        }>(
+          OpenClawGatewayMethod.ChatAbort,
+          {
+            sessionKey: pending.sessionKey,
+            runId: gatewayRunId,
+          },
+          { timeoutMs: 10_000 },
+        );
+        const abortedRunIds = Array.isArray(result?.runIds)
+          ? result.runIds.filter((value): value is string => typeof value === 'string')
+          : [];
+        if (
+          result?.aborted === true
+          && abortedRunIds.some(abortedRunId => pending.gatewayRunIds.has(abortedRunId))
+        ) {
+          aborted = true;
+          break;
+        }
+      }
+
+      if (this.pendingBtwRunBySessionId.get(normalizedSessionId) !== pending) {
+        return {
+          success: true,
+          aborted,
+          runId: normalizedRunId,
+        };
+      }
+      if (!aborted) {
+        pending.stopRequested = false;
+        console.warn(
+          '[CoworkBtw] gateway did not confirm side-question stop.',
+          `Session ${normalizedSessionId}.`,
+          `Run ${normalizedRunId}.`,
+        );
+        return {
+          success: false,
+          aborted: false,
+          runId: normalizedRunId,
+          error: t('coworkBtwStopFailed'),
+        };
+      }
+
+      this.stopPendingBtwRun(pending, 'user requested stop');
+      return {
+        success: true,
+        aborted: true,
+        runId: normalizedRunId,
+      };
+    } catch (error) {
+      if (this.pendingBtwRunBySessionId.get(normalizedSessionId) === pending) {
+        pending.stopRequested = false;
+      }
+      console.error(
+        '[CoworkBtw] failed to stop side question.',
+        `Session ${normalizedSessionId}.`,
+        `Run ${normalizedRunId}.`,
+        error,
+      );
+      return {
+        success: false,
+        aborted: false,
+        runId: normalizedRunId,
+        error: t('coworkBtwStopFailed'),
+      };
+    }
+  }
+
   async submitSteer(
     sessionId: string,
     text: string,
@@ -4575,6 +4959,56 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
   }
 
+  private async assertTranscriptSafeForRun(options: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }): Promise<void> {
+    if (typeof this.engineManager.getStateDir !== 'function') {
+      console.debug(
+        '[OpenClawRuntime] skipped transcript safety inspection because the engine state directory is unavailable.',
+        `Session ${options.sessionId}.`,
+      );
+      return;
+    }
+
+    const inspection = await inspectOpenClawTranscriptSafety({
+      stateDir: this.engineManager.getStateDir(),
+      agentId: options.agentId,
+      sessionKey: options.sessionKey,
+    });
+
+    if (inspection.status === OpenClawTranscriptSafetyStatus.Unknown) {
+      console.debug(
+        '[OpenClawRuntime] transcript safety inspection was inconclusive.',
+        `Session ${options.sessionId}.`,
+        `OpenClaw key ${options.sessionKey}.`,
+        `Reason ${inspection.reason ?? 'unknown'}.`,
+      );
+      return;
+    }
+
+    if (inspection.status === OpenClawTranscriptSafetyStatus.CompactionRequired) {
+      console.log(
+        '[OpenClawRuntime] active transcript reached the managed compaction threshold.',
+        `Session ${options.sessionId}.`,
+        `OpenClaw key ${options.sessionKey}.`,
+        `Transcript bytes ${inspection.transcriptBytes ?? 'unknown'}.`,
+      );
+      return;
+    }
+
+    if (inspection.status === OpenClawTranscriptSafetyStatus.Blocked) {
+      console.warn(
+        '[OpenClawRuntime] blocked a run before gateway transcript loading because the active transcript is oversized.',
+        `Session ${options.sessionId}.`,
+        `OpenClaw key ${options.sessionKey}.`,
+        `Transcript bytes ${inspection.transcriptBytes ?? 'unknown'}.`,
+      );
+      throw buildOpenClawTranscriptOversizedError(inspection);
+    }
+  }
+
   private async runTurn(
     sessionId: string,
     prompt: string,
@@ -4682,6 +5116,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       ? parsedGoalBootstrapCommand
       : null;
     let effectivePrompt = prompt;
+
+    try {
+      await this.assertTranscriptSafeForRun({ sessionId, sessionKey, agentId });
+    } catch (error) {
+      this.store.updateSession(sessionId, { status: 'error' });
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit('error', sessionId, message);
+      throw error;
+    }
 
     this.store.updateSession(sessionId, { status: 'running' });
     this.emitSessionStatus(sessionId, 'running');
@@ -4903,7 +5346,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const chatSendStartMs = Date.now();
       firstResponseTiming.chatSendStartedAtMs = chatSendStartMs;
       const sendResult = await client.request<Record<string, unknown>>(
-        'chat.send',
+        OpenClawGatewayMethod.ChatSend,
         chatSendParams,
         { timeoutMs: 90_000 },
       );
@@ -5211,6 +5654,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private async createGatewayClient(connection: OpenClawGatewayConnectionInfo): Promise<void> {
     const GatewayClient = await this.loadGatewayClientCtor(connection.clientEntryPath);
+    const clientGeneration = ++this.gatewayClientGeneration;
 
     let resolveReady: (() => void) | null = null;
     let rejectReady: ((error: Error) => void) | null = null;
@@ -5245,6 +5689,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       role: 'operator',
       scopes: ['operator.admin'],
       onHelloOk: () => {
+        if (clientGeneration !== this.gatewayClientGeneration) {
+          console.debug('[ChannelSync] ignored hello from a stale gateway client generation');
+          return;
+        }
         console.log('[ChannelSync] GatewayClient: onHelloOk — handshake succeeded');
         // Expose the client only after the connect handshake completes.
         // Setting gatewayClient earlier would let concurrent code send
@@ -5252,6 +5700,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.gatewayClient = client;
         this.gatewayClientVersion = connection.version;
         this.gatewayClientEntryPath = connection.clientEntryPath;
+        this.gatewayReconnectSuppressed = false;
+        this.gatewayReconnectAttempt = 0;
         this.resetGatewayRpcHealth();
         this.subscribeToGatewaySessionEvents(client);
         settleResolve();
@@ -5280,6 +5730,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       },
       onClose: (_code: number, reason: string) => {
         console.log('[ChannelSync] GatewayClient: onClose — code:', _code, 'reason:', reason, 'settled:', settled);
+        if (clientGeneration !== this.gatewayClientGeneration) {
+          console.debug('[ChannelSync] ignored close from a stale gateway client generation');
+          return;
+        }
         if (!settled) {
           // v2026.4.5+: The initial handshake may fail due to the gateway
           // being busy with plugin loading (connect.challenge timeout on the
@@ -5299,9 +5753,18 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         }
 
         console.warn('[OpenClawRuntime] gateway WS disconnected — code:', _code, 'reason:', reason);
-        const disconnectedMessage = _code === WebSocketCloseCode.MessageTooBig
-          ? (reason || 'gateway closed (1009):')
-          : (reason || 'OpenClaw gateway client disconnected');
+        const gatewayFailure = typeof this.engineManager.getLastGatewayFailure === 'function'
+          ? this.engineManager.getLastGatewayFailure()
+          : null;
+        const failureMatchesConnectionGeneration = gatewayFailure
+          && (connection.generation === undefined || gatewayFailure.generation === connection.generation);
+        const disconnectedMessage = failureMatchesConnectionGeneration
+          && gatewayFailure.kind === OpenClawGatewayFailureKind.HeapOutOfMemory
+          ? `OpenClaw gateway failed: gatewayFailureKind=${gatewayFailure.kind}; `
+            + `generation=${gatewayFailure.generation}; code=${gatewayFailure.exitCode ?? _code}`
+          : _code === WebSocketCloseCode.MessageTooBig
+            ? (reason || 'gateway closed (1009):')
+            : (reason || 'OpenClaw gateway client disconnected');
         const disconnectedError = new Error(disconnectedMessage);
         const activeSessionIds = Array.from(this.activeTurns.keys());
         activeSessionIds.forEach((sessionId) => {
@@ -5351,6 +5814,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private stopGatewayClient(): void {
     this.gatewayStoppingIntentionally = true;
+    this.failAllPendingBtwRuns(t('coworkBtwDisconnected'), 'gateway stopped');
+    this.gatewayClientGeneration += 1;
     this.stopChannelPolling();
     this.cancelGatewayReconnect();
     this.stopTickWatchdog();
@@ -5385,6 +5850,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.channelLifecycleRunBySessionKey.clear();
     this.stoppedSessions.clear();
     this.recentlyClosedRunIds.clear();
+    this.terminalBtwRunIds.clear();
     this.browserPrewarmAttempted = false;
     this.lastTickTimestamp = 0;
     // Clear messageUpdate throttle state
@@ -5395,6 +5861,202 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.lastMessageUpdateEmitTime.clear();
     this.turnHistorySync.dispose();
     this.gatewayStoppingIntentionally = false;
+  }
+
+  private registerPendingBtwRun(input: {
+    clientRunId: string;
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+    question: string;
+  }): PendingBtwRun {
+    const timeoutSeconds = Number.isFinite(this.agentTimeoutSeconds)
+      ? Math.max(1, this.agentTimeoutSeconds)
+      : OPENCLAW_AGENT_TIMEOUT_SECONDS;
+    const timeoutMs = (timeoutSeconds * 1000)
+      + OpenClawRuntimeAdapter.CLIENT_TIMEOUT_GRACE_MS;
+    let pending!: PendingBtwRun;
+    const timeoutTimer = setTimeout(() => {
+      this.failPendingBtwRun(
+        pending,
+        t('coworkBtwTimeout'),
+        'timeout',
+      );
+    }, timeoutMs);
+    pending = {
+      ...input,
+      gatewayRunIds: new Set([input.clientRunId]),
+      createdAt: Date.now(),
+      timeoutTimer,
+      stopRequested: false,
+    };
+    this.terminalBtwRunIds.delete(input.clientRunId);
+    this.pendingBtwRuns.set(input.clientRunId, pending);
+    this.pendingBtwRunBySessionId.set(input.sessionId, pending);
+    return pending;
+  }
+
+  private addPendingBtwRunAlias(pending: PendingBtwRun, runId: string): boolean {
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) return false;
+    if (this.pendingBtwRunBySessionId.get(pending.sessionId) !== pending) {
+      if (this.isTerminalBtwRunId(pending.clientRunId)) {
+        this.rememberTerminalBtwRunId(normalizedRunId);
+      }
+      return true;
+    }
+    if (this.sessionIdByRunId.has(normalizedRunId)) {
+      this.failPendingBtwRun(
+        pending,
+        t('coworkBtwInvalidResult'),
+        'gateway run id collided with a main run',
+      );
+      return false;
+    }
+    const existing = this.pendingBtwRuns.get(normalizedRunId);
+    if (existing && existing !== pending) {
+      console.warn(
+        '[CoworkBtw] refused duplicate gateway run id alias.',
+        `Run ${normalizedRunId}.`,
+        `Session ${pending.sessionId}.`,
+      );
+      this.failPendingBtwRun(
+        pending,
+        t('coworkBtwInvalidResult'),
+        'duplicate gateway run id alias',
+      );
+      return false;
+    }
+    pending.gatewayRunIds.add(normalizedRunId);
+    this.pendingBtwRuns.set(normalizedRunId, pending);
+    return true;
+  }
+
+  private cleanupPendingBtwRun(pending: PendingBtwRun): void {
+    clearTimeout(pending.timeoutTimer);
+    for (const gatewayRunId of pending.gatewayRunIds) {
+      if (this.pendingBtwRuns.get(gatewayRunId) === pending) {
+        this.pendingBtwRuns.delete(gatewayRunId);
+      }
+      this.rememberTerminalBtwRunId(gatewayRunId);
+    }
+    if (this.pendingBtwRunBySessionId.get(pending.sessionId) === pending) {
+      this.pendingBtwRunBySessionId.delete(pending.sessionId);
+    }
+  }
+
+  private finishPendingBtwRun(
+    pending: PendingBtwRun,
+    result: { answer?: string; error?: string },
+  ): void {
+    if (this.pendingBtwRunBySessionId.get(pending.sessionId) !== pending) return;
+    this.cleanupPendingBtwRun(pending);
+    const completedAt = Date.now();
+    const entry: CoworkBtwEntry = result.error
+      ? {
+          runId: pending.clientRunId,
+          sessionId: pending.sessionId,
+          question: pending.question,
+          status: CoworkBtwStatus.Failed,
+          error: result.error,
+          createdAt: pending.createdAt,
+          completedAt,
+        }
+      : {
+          runId: pending.clientRunId,
+          sessionId: pending.sessionId,
+          question: pending.question,
+          status: CoworkBtwStatus.Answered,
+          answer: result.answer ?? '',
+          createdAt: pending.createdAt,
+          completedAt,
+        };
+    this.emit('btwResult', pending.sessionId, entry);
+  }
+
+  private failPendingBtwRun(
+    pending: PendingBtwRun,
+    error: string,
+    reason: string,
+  ): void {
+    if (this.pendingBtwRunBySessionId.get(pending.sessionId) !== pending) return;
+    const normalizedError = error.trim() || t('coworkBtwFailed');
+    console.warn(
+      '[CoworkBtw] side question failed.',
+      `Session ${pending.sessionId}.`,
+      `Run ${pending.clientRunId}.`,
+      `Reason ${reason}.`,
+    );
+    this.finishPendingBtwRun(pending, { error: normalizedError });
+  }
+
+  private stopPendingBtwRun(pending: PendingBtwRun, reason: string): void {
+    if (this.pendingBtwRunBySessionId.get(pending.sessionId) !== pending) return;
+    this.cleanupPendingBtwRun(pending);
+    console.log(
+      '[CoworkBtw] side question stopped.',
+      `Session ${pending.sessionId}.`,
+      `Run ${pending.clientRunId}.`,
+      `Reason ${reason}.`,
+    );
+    this.emit('btwResult', pending.sessionId, {
+      runId: pending.clientRunId,
+      sessionId: pending.sessionId,
+      question: pending.question,
+      status: CoworkBtwStatus.Stopped,
+      createdAt: pending.createdAt,
+      completedAt: Date.now(),
+    } satisfies CoworkBtwEntry);
+  }
+
+  private failAllPendingBtwRuns(error: string, reason: string): void {
+    const pendingRuns = Array.from(new Set(this.pendingBtwRunBySessionId.values()));
+    for (const pending of pendingRuns) {
+      this.failPendingBtwRun(pending, error, reason);
+    }
+  }
+
+  private discardPendingBtwRunsForSession(sessionId: string): void {
+    const pending = this.pendingBtwRunBySessionId.get(sessionId);
+    if (!pending) return;
+    this.cleanupPendingBtwRun(pending);
+  }
+
+  private pruneTerminalBtwRunIds(now = Date.now()): void {
+    for (const [runId, expiresAt] of this.terminalBtwRunIds.entries()) {
+      if (expiresAt <= now) {
+        this.terminalBtwRunIds.delete(runId);
+      }
+    }
+    while (this.terminalBtwRunIds.size > OpenClawRuntimeAdapter.TERMINAL_BTW_RUN_ID_LIMIT) {
+      const oldestRunId = this.terminalBtwRunIds.keys().next().value as string | undefined;
+      if (!oldestRunId) return;
+      this.terminalBtwRunIds.delete(oldestRunId);
+    }
+  }
+
+  private rememberTerminalBtwRunId(runId: string): void {
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) return;
+    const now = Date.now();
+    this.terminalBtwRunIds.delete(normalizedRunId);
+    this.terminalBtwRunIds.set(
+      normalizedRunId,
+      now + OpenClawRuntimeAdapter.TERMINAL_BTW_RUN_ID_TTL_MS,
+    );
+    this.pruneTerminalBtwRunIds(now);
+  }
+
+  private isTerminalBtwRunId(runId: string): boolean {
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) return false;
+    const expiresAt = this.terminalBtwRunIds.get(normalizedRunId);
+    if (!expiresAt) return false;
+    if (expiresAt <= Date.now()) {
+      this.terminalBtwRunIds.delete(normalizedRunId);
+      return false;
+    }
+    return true;
   }
 
   private pruneRecentlyClosedRunIds(now = Date.now()): void {
@@ -6142,6 +6804,165 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     );
   }
 
+  private normalizeBtwSideResultPayload(payload: unknown): OpenClawBtwSideResultPayload | null {
+    if (!isRecord(payload) || payload.kind !== 'btw') return null;
+    const runId = typeof payload.runId === 'string' ? payload.runId.trim() : '';
+    const sessionKey = typeof payload.sessionKey === 'string' ? payload.sessionKey.trim() : '';
+    const agentId = typeof payload.agentId === 'string' ? payload.agentId.trim() : undefined;
+    const question = typeof payload.question === 'string'
+      ? normalizeCoworkBtwQuestion(payload.question)
+      : '';
+    const text = typeof payload.text === 'string'
+      ? truncateBtwResultText(payload.text)
+      : '';
+    const ts = typeof payload.ts === 'number' && Number.isFinite(payload.ts) ? payload.ts : NaN;
+    if (
+      !runId
+      || !sessionKey
+      || !question
+      || runId.length > COWORK_BTW_IDENTIFIER_MAX_CHARS
+      || sessionKey.length > OPENCLAW_BTW_SESSION_KEY_MAX_CHARS
+      || (agentId?.length ?? 0) > COWORK_BTW_IDENTIFIER_MAX_CHARS
+      || /[\r\n]/.test(question)
+      || !Number.isFinite(ts)
+    ) {
+      return null;
+    }
+    return {
+      kind: 'btw',
+      runId,
+      sessionKey,
+      ...(agentId ? { agentId } : {}),
+      question,
+      text,
+      ...(payload.isError === true ? { isError: true } : {}),
+      ts,
+      ...(typeof payload.seq === 'number' && Number.isFinite(payload.seq)
+        ? { seq: payload.seq }
+        : {}),
+    };
+  }
+
+  private handleBtwSideResult(payload: unknown): void {
+    const result = this.normalizeBtwSideResultPayload(payload);
+    if (!result) {
+      const rawRunId = isRecord(payload) && typeof payload.runId === 'string'
+        ? payload.runId.trim()
+        : '';
+      const malformedRunId = rawRunId.length <= COWORK_BTW_IDENTIFIER_MAX_CHARS
+        ? rawRunId
+        : '';
+      const pending = malformedRunId ? this.pendingBtwRuns.get(malformedRunId) : undefined;
+      if (pending) {
+        this.failPendingBtwRun(
+          pending,
+          t('coworkBtwInvalidResult'),
+          'malformed side result',
+        );
+      }
+      console.warn('[CoworkBtw] dropped malformed chat.side_result payload.');
+      return;
+    }
+
+    const pending = this.pendingBtwRuns.get(result.runId);
+    if (!pending) {
+      if (this.isTerminalBtwRunId(result.runId)) {
+        console.debug(
+          '[CoworkBtw] ignored duplicate terminal side result.',
+          `Run ${result.runId}.`,
+        );
+        return;
+      }
+      console.warn(
+        '[CoworkBtw] dropped side result without a pending request.',
+        `Run ${result.runId}.`,
+        `OpenClaw key ${result.sessionKey}.`,
+      );
+      return;
+    }
+
+    const mappedSessionId = this.resolveSessionIdBySessionKey(result.sessionKey);
+    if (
+      result.sessionKey !== pending.sessionKey
+      || (result.agentId && result.agentId !== pending.agentId)
+      || (mappedSessionId && mappedSessionId !== pending.sessionId)
+    ) {
+      console.warn(
+        '[CoworkBtw] dropped side result because session or agent routing did not match.',
+        `Run ${result.runId}.`,
+        `Expected session ${pending.sessionId}.`,
+        `Mapped session ${mappedSessionId ?? 'none'}.`,
+      );
+      return;
+    }
+    if (result.question !== pending.question) {
+      console.debug(
+        '[CoworkBtw] accepted side result with a runtime-normalized question.',
+        `Run ${result.runId}.`,
+        `Submitted chars ${pending.question.length}.`,
+        `Returned chars ${result.question.length}.`,
+      );
+    }
+
+    if (!this.addPendingBtwRunAlias(pending, result.runId)) {
+      return;
+    }
+    console.log(
+      '[CoworkBtw] received side result.',
+      `Session ${pending.sessionId}.`,
+      `Run ${result.runId}.`,
+      `Answer chars ${result.text.length}.`,
+      `Error ${result.isError ? 'yes' : 'no'}.`,
+    );
+    if (result.isError && pending.stopRequested) {
+      this.stopPendingBtwRun(pending, 'gateway returned an error after stop');
+      return;
+    }
+    if (result.isError) {
+      this.finishPendingBtwRun(pending, {
+        error: result.text.trim() || t('coworkBtwFailed'),
+      });
+      return;
+    }
+    this.finishPendingBtwRun(pending, { answer: result.text });
+  }
+
+  private handleBtwChatEvent(payload: unknown): boolean {
+    if (!isRecord(payload)) return false;
+    const runId = typeof payload.runId === 'string' ? payload.runId.trim() : '';
+    if (!runId) return false;
+    const pending = this.pendingBtwRuns.get(runId);
+    if (!pending && !this.isTerminalBtwRunId(runId)) {
+      return false;
+    }
+
+    const state = typeof payload.state === 'string' ? payload.state : '';
+    if (pending && (state === 'aborted' || state === 'error')) {
+      if (pending.stopRequested) {
+        this.stopPendingBtwRun(pending, `chat ${state}`);
+      } else {
+        const error = typeof payload.errorMessage === 'string' && payload.errorMessage.trim()
+          ? payload.errorMessage.trim()
+          : t('coworkBtwFailed');
+        this.failPendingBtwRun(pending, error, `chat ${state}`);
+      }
+    }
+    console.debug(
+      '[CoworkBtw] suppressed chat event for side-question run.',
+      `Run ${runId}.`,
+      `State ${state || 'unknown'}.`,
+    );
+    return true;
+  }
+
+  private isBtwAgentEvent(payload: unknown): boolean {
+    if (!isRecord(payload)) return false;
+    const runId = typeof payload.runId === 'string' ? payload.runId.trim() : '';
+    return Boolean(
+      runId
+      && (this.pendingBtwRuns.has(runId) || this.isTerminalBtwRunId(runId)),
+    );
+  }
   private handleGatewayEvent(event: GatewayEventFrame): void {
     // Any event from the gateway proves the connection is alive.
     // Previously only 'tick' updated this timestamp, but during heavy exec
@@ -6166,12 +6987,23 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return;
     }
 
+    if (event.event === OpenClawGatewayEvent.ChatSideResult) {
+      this.handleBtwSideResult(event.payload);
+      return;
+    }
+
     if (event.event === 'chat') {
+      if (this.handleBtwChatEvent(event.payload)) {
+        return;
+      }
       this.handleChatEvent(event.payload, event.seq);
       return;
     }
 
     if (event.event === 'agent') {
+      if (this.isBtwAgentEvent(event.payload)) {
+        return;
+      }
       const diagnostic = summarizeAgentEventForThinkingDiagnostics(event.payload, event.seq);
       if (diagnostic) {
         logThinkingDiagnostic(diagnostic);
@@ -8064,9 +8896,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       ? messageRecord.errorMessage
       : undefined;
     const stoppedByToolUse = isToolUseStopReason(stopReason) || messageHasToolCallBlock(messageRecord);
+    const stoppedByIncomplete = isIncompleteStopReason(stopReason);
     const rawVisibleFinalText = stripTrailingSilentReplyToken(rawFinalText);
     const finalTextIsOpenClawFailure = isOpenClawFailureFinalText(rawVisibleFinalText);
-    const finalText = turn.planMode && !stoppedByToolUse && !finalTextIsOpenClawFailure
+    const finalText = turn.planMode && !stoppedByToolUse && !stoppedByIncomplete && !finalTextIsOpenClawFailure
       ? ensurePlanModeProposedPlanBlock(rawVisibleFinalText)
       : rawVisibleFinalText;
     console.debug(
@@ -8075,10 +8908,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       `runId=${payload.runId ?? turn.runId}`,
       `message=${summarizeGatewayMessageShape(payload.message)}`,
       `previousTextLen=${previousText.length}`,
-      `finalTextLen=${finalText.length}`,
-      `finalText="${truncate(finalText, 200)}"`
+      `finalTextLen=${finalText.length}`
     );
-    if (isHeartbeatAckText(finalText)) {
+    if (!stoppedByIncomplete && isHeartbeatAckText(finalText)) {
       turn.currentText = finalText;
       turn.currentAssistantSegmentText = '';
       if (turn.assistantMessageId) {
@@ -8092,7 +8924,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.resolveTurn(sessionId);
       return;
     }
-    if (isSilentReplyText(finalText) || isSilentReplyPrefixText(finalText)) {
+    if (!stoppedByIncomplete && (isSilentReplyText(finalText) || isSilentReplyPrefixText(finalText))) {
       turn.currentText = finalText;
       turn.currentAssistantSegmentText = '';
       if (turn.assistantMessageId) {
@@ -8228,6 +9060,83 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         turn.assistantMessageId = assistantMessage.id;
         this.emit('message', sessionId, assistantMessage);
       }
+    }
+
+    if (stoppedByIncomplete) {
+      // A length stop is still a terminal gateway snapshot. Reconcile the
+      // bounded authoritative tail before finalizing local state so reasoning
+      // and tool work that arrived only in chat.history are not lost. The
+      // helper is best-effort and preserves the already-persisted local
+      // partial when history is unavailable.
+      await this.syncFinalAssistantWithHistory(sessionId, turn, {
+        requireActiveTurn: true,
+        suppressPlanModeWrapping: true,
+      });
+      if (
+        this.activeTurns.get(sessionId) !== turn
+        || turn.stopRequested
+      ) {
+        console.debug(
+          '[OpenClawRuntime] ignored length final after the turn was stopped or superseded.',
+          `sessionId=${sessionId}`,
+        );
+        return;
+      }
+
+      // Flush/finalize thinking before applying truncation metadata. Otherwise a
+      // pending thinking write can overwrite the incomplete marker.
+      this.thinkingController.finalize(sessionId, turn);
+      const truncatedMessageId = this.resolveAssistantMessageIdForUsage(
+        sessionId,
+        turn.assistantMessageId,
+      );
+      if (truncatedMessageId) {
+        const session = this.store.getSession(sessionId);
+        const truncatedMessage = session?.messages.find((message) => message.id === truncatedMessageId);
+        if (truncatedMessage) {
+          const truncatedMetadata = {
+            ...(truncatedMessage.metadata ?? {}),
+            isStreaming: false,
+            isFinal: true,
+            isTruncated: true,
+            stopReason: GatewayStopReason.Length,
+          };
+          this.store.updateMessage(sessionId, truncatedMessageId, {
+            metadata: truncatedMetadata,
+          });
+          this.emit(
+            'messageUpdate',
+            sessionId,
+            truncatedMessageId,
+            truncatedMessage.content,
+            truncatedMetadata,
+          );
+        }
+      }
+
+      const incompleteMessage = t('taskOutputTruncated');
+      this.store.updateSession(sessionId, { status: 'error' });
+      const systemMessage = this.store.addMessage(sessionId, {
+        type: 'system',
+        content: incompleteMessage,
+        metadata: {
+          error: incompleteMessage,
+          isFinal: true,
+          isIncomplete: true,
+          isTruncated: true,
+          stopReason: GatewayStopReason.Length,
+        },
+      });
+      this.emit('message', sessionId, systemMessage);
+      this.emit('error', sessionId, incompleteMessage);
+      console.warn(
+        '[OpenClawRuntime] preserved a partial response after the model reached its output limit.',
+        `sessionId=${sessionId}`,
+        `runId=${payload.runId ?? turn.runId}`,
+      );
+      this.cleanupSessionTurn(sessionId);
+      this.rejectTurn(sessionId, new Error(incompleteMessage));
+      return;
     }
 
     if (!finalText.trim()) {
@@ -9549,7 +10458,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     );
   }
 
-  private async syncFinalAssistantWithHistory(sessionId: string, turn: ActiveTurn): Promise<void> {
+  private async syncFinalAssistantWithHistory(
+    sessionId: string,
+    turn: ActiveTurn,
+    options: {
+      requireActiveTurn?: boolean;
+      suppressPlanModeWrapping?: boolean;
+    } = {},
+  ): Promise<void> {
     console.debug('[OpenClawRuntime] syncFinalAssistant — sessionId:', sessionId);
     const client = this.gatewayClient;
     if (!client) {
@@ -9564,6 +10480,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       let isChannel = false;
 
       for (const delayMs of retryDelaysMs) {
+        if (
+          options.requireActiveTurn
+          && (
+            this.activeTurns.get(sessionId) !== turn
+            || turn.stopRequested
+          )
+        ) {
+          console.debug('[OpenClawRuntime] syncFinalAssistant — inactive turn, skipping');
+          return;
+        }
         if (delayMs > 0) {
           await sleep(delayMs);
         }
@@ -9572,6 +10498,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           sessionKey: turn.sessionKey,
           limit: FINAL_HISTORY_SYNC_LIMIT,
         }, { timeoutMs: 8_000 });
+        if (
+          options.requireActiveTurn
+          && (
+            this.activeTurns.get(sessionId) !== turn
+            || turn.stopRequested
+          )
+        ) {
+          console.debug('[OpenClawRuntime] syncFinalAssistant — turn stopped during history request');
+          return;
+        }
         const msgCount = Array.isArray(history?.messages) ? history.messages.length : 0;
         console.debug('[OpenClawRuntime] syncFinalAssistant — chat.history returned', msgCount, 'messages');
         if (!Array.isArray(history?.messages) || history.messages.length === 0) {
@@ -9654,7 +10590,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         }
       }
 
-      if (turn.planMode) {
+      if (turn.planMode && !options.suppressPlanModeWrapping) {
         canonicalText = ensurePlanModeProposedPlanBlock(canonicalText);
       }
 
@@ -9667,7 +10603,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       let canonicalSegmentText = isManagedSessionKey(turn.sessionKey)
         ? extractLastAssistantSegmentInTurn(historyMessages!)
         : this.resolveAssistantSegmentText(turn, canonicalText);
-      if (turn.planMode) {
+      if (turn.planMode && !options.suppressPlanModeWrapping) {
         canonicalSegmentText = ensurePlanModeProposedPlanBlock(canonicalSegmentText);
       }
       console.debug('[Debug:syncFinal] canonicalSegmentText length:', canonicalSegmentText.length,
@@ -10264,6 +11200,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * with the same sessionKey can create a fresh session.
    */
   onSessionDeleted(sessionId: string): void {
+    this.discardPendingBtwRunsForSession(sessionId);
+
     // Remove sessionIdBySessionKey entries pointing to this session
     const removedKeys: string[] = [];
     for (const [key, id] of this.sessionIdBySessionKey.entries()) {

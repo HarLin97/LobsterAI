@@ -13,7 +13,6 @@ interface ResolveConversationSearchShortcutTargetOptions {
   isTextEditing: boolean;
   isCoworkSearchEligibleEditor: boolean;
 }
-
 export function resolveConversationSearchShortcutTarget({
   isCoworkView,
   hasCurrentSession,
@@ -31,4 +30,3 @@ export function resolveConversationSearchShortcutTarget({
     ? ConversationSearchShortcutTarget.None
     : ConversationSearchShortcutTarget.History;
 }
-

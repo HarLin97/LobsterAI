@@ -2,7 +2,10 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, test } from 'vitest';
 
-import { ConversationSearchStatus } from './conversationSearch';
+import {
+  CONVERSATION_SEARCH_MATCH_LIMIT,
+  ConversationSearchStatus,
+} from './conversationSearch';
 import CoworkConversationSearch from './CoworkConversationSearch';
 
 test('renders the Codex-style two-row search surface and result count', () => {
@@ -11,6 +14,7 @@ test('renders the Codex-style two-row search surface and result count', () => {
     status: ConversationSearchStatus.Ready,
     activeMatchIndex: 1,
     resultCount: 7,
+    isResultLimitReached: false,
     focusRequestKey: 1,
     onQueryChange: () => undefined,
     onNavigate: () => undefined,
@@ -29,6 +33,7 @@ test('disables navigation buttons when the query has no results', () => {
     status: ConversationSearchStatus.Ready,
     activeMatchIndex: -1,
     resultCount: 0,
+    isResultLimitReached: false,
     focusRequestKey: 1,
     onQueryChange: () => undefined,
     onNavigate: () => undefined,
@@ -39,3 +44,20 @@ test('disables navigation buttons when the query has no results', () => {
   expect(html).toMatch(/0 \/ 0 (?:个结果|results)/);
 });
 
+test('marks a capped result count', () => {
+  const html = renderToStaticMarkup(React.createElement(CoworkConversationSearch, {
+    query: 'x',
+    status: ConversationSearchStatus.Ready,
+    activeMatchIndex: 0,
+    resultCount: CONVERSATION_SEARCH_MATCH_LIMIT,
+    isResultLimitReached: true,
+    focusRequestKey: 1,
+    onQueryChange: () => undefined,
+    onNavigate: () => undefined,
+    onClose: () => undefined,
+  }));
+
+  expect(html).toMatch(new RegExp(
+    `1 / ${CONVERSATION_SEARCH_MATCH_LIMIT}\\+ (?:个结果|results)`,
+  ));
+});

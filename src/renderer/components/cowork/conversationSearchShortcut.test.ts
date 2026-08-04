@@ -48,4 +48,3 @@ describe('conversation search shortcut routing', () => {
     })).toBe(ConversationSearchShortcutTarget.History);
   });
 });
-

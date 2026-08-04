@@ -6,6 +6,12 @@ import {
 } from '../../common/coworkSystemMessages';
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import {
+  type CoworkBtwAbortRequest,
+  CoworkBtwStatus,
+  type CoworkBtwSubmitRequest,
+  normalizeCoworkBtwQuestion,
+} from '../../shared/cowork/btw';
+import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SESSION_PAGE_SIZE,
   CoworkContextUsageRefreshMode,
@@ -14,6 +20,7 @@ import {
 } from '../../shared/cowork/constants';
 import { normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
+import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
 import {
   type CoworkSteerRequest,
   CoworkSteerStatus,
@@ -23,6 +30,7 @@ import {
   addMessage,
   addPendingSteer,
   addSession,
+  appendBtwEntry,
   appendSessions,
   clearCurrentSession,
   clearPendingPermissions,
@@ -32,6 +40,7 @@ import {
   enqueuePendingPermission,
   finishSessionNavigation as finishSessionNavigationAction,
   markCompactionNotified,
+  openBtwThread,
   prependMessages,
   setConfig,
   setContextCompacting,
@@ -45,6 +54,7 @@ import {
   setRemoteManaged,
   setSessions,
   setStreaming,
+  settleBtwEntry,
   updateCurrentSessionModelOverride,
   updateMessageContent,
   updateSessionGoal,
@@ -146,6 +156,7 @@ class CoworkService {
   private contextUsageAutoSuppressedUntilBySessionId = new Map<string, number>();
   private contextUsageBackoffUntil = new Map<string, number>();
   private contextCompactionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly btwAbortRunIds = new Set<string>();
   private readonly queuedFollowUpCoordinator = new CoworkQueuedFollowUpCoordinator({
     getState: () => store.getState(),
     dispatch: store.dispatch,
@@ -330,6 +341,33 @@ class CoworkService {
     });
     if (goalCleanup) {
       this.streamListenerCleanups.push(goalCleanup);
+    }
+
+    const btwResultCleanup = cowork.onStreamBtwResult?.(({ sessionId, result }) => {
+      const existing = store.getState().cowork.btwThreadsBySessionId[sessionId]
+        ?.entries.find(entry => entry.runId === result.runId);
+      if (
+        result.sessionId !== sessionId
+        || !existing
+        || existing.runId !== result.runId
+        || existing.status !== CoworkBtwStatus.Pending
+      ) {
+        this.logDiagnostic(
+          'debug',
+          `[CoworkBtw] ignored result ${result.runId} without a matching renderer request `
+          + `for session ${sessionId}; resultSession=${result.sessionId}; `
+          + `current=${existing?.runId ?? 'none'}; status=${existing?.status ?? 'none'}`,
+        );
+        return;
+      }
+      store.dispatch(settleBtwEntry(result));
+      this.logDiagnostic(
+        'debug',
+        `[CoworkBtw] received ${result.status} result for session ${sessionId}; run=${result.runId}`,
+      );
+    });
+    if (btwResultCleanup) {
+      this.streamListenerCleanups.push(btwResultCleanup);
     }
 
     const contextMaintenanceCleanup = cowork.onStreamContextMaintenance?.(({ sessionId, active }) => {
@@ -706,6 +744,7 @@ class CoworkService {
     this.contextUsageInFlightBySessionId.clear();
     this.contextUsageAutoSuppressedUntilBySessionId.clear();
     this.contextUsageBackoffUntil.clear();
+    this.btwAbortRunIds.clear();
   }
 
   async loadSessions(agentId?: string): Promise<void> {
@@ -1011,6 +1050,198 @@ class CoworkService {
         `steer ${options.clientSteerId} failed for session ${options.sessionId}; error=${message}`,
       );
       return false;
+    }
+  }
+
+  async submitBtw(
+    options: CoworkBtwSubmitRequest & {
+      displayQuestion?: string;
+      selectedTextSnippets?: CoworkSelectedTextSnippet[];
+    },
+  ): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.submitBtw || !cowork.onStreamBtwResult) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkBtwUnavailable'),
+      }));
+      this.logDiagnostic(
+        'warn',
+        `[CoworkBtw] API unavailable for session ${options.sessionId}`,
+      );
+      return false;
+    }
+
+    const question = normalizeCoworkBtwQuestion(options.question);
+    const selectedTextSnippets = (options.selectedTextSnippets ?? []).map(
+      snippet => ({ ...snippet }),
+    );
+    const normalizedDisplayQuestion = normalizeCoworkBtwQuestion(
+      options.displayQuestion ?? options.question,
+    );
+    const displayQuestion = normalizedDisplayQuestion
+      || (selectedTextSnippets.length > 0 ? '' : question);
+    if (!question) {
+      return false;
+    }
+    const existing = store.getState().cowork.btwThreadsBySessionId[options.sessionId]
+      ?.entries.find(entry => entry.status === CoworkBtwStatus.Pending);
+    if (existing) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkBtwAlreadyPending'),
+      }));
+      this.logDiagnostic(
+        'debug',
+        `[CoworkBtw] ignored duplicate submission for session ${options.sessionId}; pending=${existing.runId}`,
+      );
+      return false;
+    }
+
+    const createdAt = Date.now();
+    store.dispatch(openBtwThread({ sessionId: options.sessionId }));
+    store.dispatch(appendBtwEntry({
+      runId: options.runId,
+      sessionId: options.sessionId,
+      question: displayQuestion,
+      ...(selectedTextSnippets.length > 0 ? { selectedTextSnippets } : {}),
+      status: CoworkBtwStatus.Pending,
+      createdAt,
+    }));
+    this.logDiagnostic(
+      'debug',
+      `[CoworkBtw] submitting run ${options.runId} for session ${options.sessionId}; chars=${question.length}`,
+    );
+
+    try {
+      const result = await cowork.submitBtw({
+        sessionId: options.sessionId,
+        runId: options.runId,
+        question,
+      });
+      if (result.success) {
+        return true;
+      }
+      const current = store.getState().cowork.btwThreadsBySessionId[options.sessionId]
+        ?.entries.find(entry => entry.runId === options.runId);
+      const error = result.error
+        ? classifyError(result.error)
+        : i18nService.t('coworkBtwFailed');
+      if (current?.runId === options.runId && current.status === CoworkBtwStatus.Pending) {
+        store.dispatch(settleBtwEntry({
+          ...current,
+          status: CoworkBtwStatus.Failed,
+          error,
+          completedAt: Date.now(),
+        }));
+      }
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: error }));
+      this.logDiagnostic(
+        'warn',
+        `[CoworkBtw] rejected run ${options.runId} for session ${options.sessionId}; errorChars=${error.length}`,
+      );
+      return false;
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : i18nService.t('coworkBtwFailed');
+      const current = store.getState().cowork.btwThreadsBySessionId[options.sessionId]
+        ?.entries.find(entry => entry.runId === options.runId);
+      if (current?.runId === options.runId && current.status === CoworkBtwStatus.Pending) {
+        store.dispatch(settleBtwEntry({
+          ...current,
+          status: CoworkBtwStatus.Failed,
+          error: message,
+          completedAt: Date.now(),
+        }));
+      }
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
+      this.logDiagnostic(
+        'error',
+        `[CoworkBtw] transport failed for run ${options.runId} in session ${options.sessionId}; `
+        + `errorType=${error instanceof Error ? error.name : typeof error}; `
+        + `errorChars=${message.length}`,
+      );
+      return false;
+    }
+  }
+
+  async abortBtw(options: CoworkBtwAbortRequest): Promise<boolean> {
+    const abortKey = JSON.stringify([options.sessionId, options.runId]);
+    const current = store.getState().cowork.btwThreadsBySessionId[options.sessionId]
+      ?.entries.find(entry => entry.runId === options.runId);
+    if (!current || current.status !== CoworkBtwStatus.Pending) {
+      this.logDiagnostic(
+        'debug',
+        `[CoworkBtw] ignored stop without a matching pending renderer request; `
+        + `session=${options.sessionId}; run=${options.runId}`,
+      );
+      return false;
+    }
+    if (this.btwAbortRunIds.has(abortKey)) {
+      this.logDiagnostic(
+        'debug',
+        `[CoworkBtw] ignored duplicate stop; session=${options.sessionId}; run=${options.runId}`,
+      );
+      return false;
+    }
+
+    const cowork = window.electron?.cowork;
+    if (!cowork?.abortBtw) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkBtwUnavailable'),
+      }));
+      this.logDiagnostic(
+        'warn',
+        `[CoworkBtw] stop API unavailable for session ${options.sessionId}`,
+      );
+      return false;
+    }
+
+    this.btwAbortRunIds.add(abortKey);
+    this.logDiagnostic(
+      'debug',
+      `[CoworkBtw] stopping run ${options.runId} for session ${options.sessionId}`,
+    );
+    try {
+      const result = await cowork.abortBtw(options);
+      if (!result.success) {
+        const message = result.error
+          ? classifyError(result.error)
+          : i18nService.t('coworkBtwStopFailed');
+        window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
+        this.logDiagnostic(
+          'warn',
+          `[CoworkBtw] stop rejected for run ${options.runId} in session ${options.sessionId}; `
+          + `errorChars=${message.length}`,
+        );
+        return false;
+      }
+
+      const pending = store.getState().cowork.btwThreadsBySessionId[options.sessionId]
+        ?.entries.find(entry => entry.runId === options.runId);
+      if (result.aborted && pending?.status === CoworkBtwStatus.Pending) {
+        store.dispatch(settleBtwEntry({
+          ...pending,
+          status: CoworkBtwStatus.Stopped,
+          completedAt: Date.now(),
+        }));
+      }
+      this.logDiagnostic(
+        'debug',
+        `[CoworkBtw] stop completed for run ${options.runId} in session ${options.sessionId}; `
+        + `aborted=${result.aborted ? 'yes' : 'no'}`,
+      );
+      return true;
+    } catch (error) {
+      const message = i18nService.t('coworkBtwStopFailed');
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
+      this.logDiagnostic(
+        'error',
+        `[CoworkBtw] stop transport failed for run ${options.runId} in session ${options.sessionId}; `
+        + `errorType=${error instanceof Error ? error.name : typeof error}`,
+      );
+      return false;
+    } finally {
+      this.btwAbortRunIds.delete(abortKey);
     }
   }
 

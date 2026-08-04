@@ -15,6 +15,7 @@ import {
   buildOpenClawCompileCacheEnv,
   buildOpenClawGatewayExecArgv,
   isOpenClawConfigStartupFailure,
+  isOpenClawGatewayHeapOutOfMemory,
 } from './openclawEngineManager';
 
 describe('buildOpenClawCompileCacheEnv', () => {
@@ -67,6 +68,26 @@ describe('isOpenClawConfigStartupFailure', () => {
   test('does not match unrelated runtime configuration errors', () => {
     expect(isOpenClawConfigStartupFailure(
       '[stderr] Invalid configuration: region from ARN does not match client region'
+    )).toBe(false);
+  });
+});
+
+describe('isOpenClawGatewayHeapOutOfMemory', () => {
+  test('matches the V8 fatal heap OOM emitted by the gateway', () => {
+    expect(isOpenClawGatewayHeapOutOfMemory(
+      'FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory',
+    )).toBe(true);
+  });
+
+  test('matches the alternate mark-compacts heap limit signature', () => {
+    expect(isOpenClawGatewayHeapOutOfMemory(
+      'FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed',
+    )).toBe(true);
+  });
+
+  test('does not classify ordinary gateway disconnects as heap OOM', () => {
+    expect(isOpenClawGatewayHeapOutOfMemory(
+      'gateway websocket closed with code=1006',
     )).toBe(false);
   });
 });

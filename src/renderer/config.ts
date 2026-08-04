@@ -1,4 +1,4 @@
-import { type ProviderConfig,ProviderRegistry } from '@shared/providers';
+import { type ProviderConfig, ProviderRegistry } from '@shared/providers';
 
 import {
   type BrowserWebAccessConfig,
@@ -95,6 +95,10 @@ export interface AppConfig {
       id: string;
       name: string;
       supportsImage?: boolean;
+      supportsVideo?: boolean;
+      supportsThinking?: boolean;
+      contextWindow?: number;
+      maxTokens?: number;
     }>;
     defaultModel: string;
     defaultModelProvider?: string;
@@ -103,6 +107,8 @@ export interface AppConfig {
   providerModelMigrationVersions?: Record<string, number>;
   // 主题配置
   theme: 'light' | 'dark' | 'system';
+  // Optional for configs created before exact default theme persistence was introduced.
+  themeId?: string;
   // UI 字号配置
   uiFontSize?: number;
   // 代码字体大小配置

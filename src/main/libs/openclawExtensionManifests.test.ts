@@ -43,5 +43,29 @@ describe('OpenClaw extension manifests', () => {
     expect(readPackageOpenClawExtensions('mcp-bridge')).toEqual(['./index.ts']);
     expect(readPackageOpenClawExtensions('ask-user-question')).toEqual(['./index.ts']);
     expect(readPackageOpenClawExtensions('lobster-media-generation')).toEqual(['./index.ts']);
+    expect(readPackageOpenClawExtensions('lobsterai-model-compat')).toEqual(['./index.ts']);
+  });
+
+  test('declares a strict allowlisted model-profile config for LobsterAI compatibility', () => {
+    const manifest = readManifest('lobsterai-model-compat');
+    expect(manifest.providers).toEqual(['lobsterai-model-compat']);
+    expect(manifest.configSchema).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        modelProfiles: {
+          type: 'object',
+          minProperties: 1,
+          propertyNames: {
+            pattern: '^[^/\\s]+/[^\\s]+$',
+          },
+          additionalProperties: {
+            type: 'string',
+            enum: ['moonshot-kimi-k3'],
+          },
+        },
+      },
+      required: ['modelProfiles'],
+    });
   });
 });

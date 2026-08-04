@@ -1,4 +1,14 @@
-import { ApiFormat, type ProviderConfig, ProviderName, ProviderRegistry } from '@shared/providers';
+import {
+  ApiFormat,
+  applyModelRuntimeProfileMetadata,
+  ModelRuntimeProfileSource,
+  normalizeModelIdForComparison as getProviderModelIdentity,
+  OpenClawApi,
+  type ProviderConfig,
+  ProviderName,
+  ProviderRegistry,
+  resolveModelRuntimeProfile,
+} from '@shared/providers';
 
 import { normalizeBrowserWebAccessConfig } from '../../shared/browserWebAccess/constants';
 import { normalizeNotificationSettings } from '../../shared/notifications/constants';
@@ -15,9 +25,6 @@ import {
 import { localStore } from './store';
 
 type ProviderModel = NonNullable<ProviderConfig['models']>[number];
-
-const getProviderModelIdentity = (modelId: string): string =>
-  modelId.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const getCanonicalProviderModelId = (providerKey: string, modelId: string): string => {
   const identity = getProviderModelIdentity(modelId);
@@ -84,7 +91,12 @@ const normalizeProviderApiFormat = (providerKey: string, apiFormat: unknown): 'a
 const normalizeProviderModels = (
   providerKey: string,
   models: ProviderConfig['models'],
+  providerContext: Pick<ProviderConfig, 'apiFormat'>,
 ): ProviderConfig['models'] => models?.map(model => {
+  const {
+    compatibilityMode: _legacyCompatibilityMode,
+    ...modelWithoutCompatibilityMode
+  } = model as typeof model & { compatibilityMode?: unknown };
   const canonicalModelId = getCanonicalProviderModelId(providerKey, model.id);
   const contextWindow = ProviderRegistry.resolveModelContextWindow(
     providerKey,
@@ -96,15 +108,52 @@ const normalizeProviderModels = (
     canonicalModelId,
     model.supportsThinking,
   );
-  return {
-    ...model,
+  const supportsVideo = ProviderRegistry.resolveModelSupportsVideo(
+    providerKey,
+    canonicalModelId,
+    model.supportsVideo,
+  );
+  const maxTokens = ProviderRegistry.resolveModelMaxTokens(
+    providerKey,
+    canonicalModelId,
+    model.maxTokens,
+  );
+  const runtimeProfile = resolveModelRuntimeProfile({
+    source: isCustomProvider(providerKey)
+      ? ModelRuntimeProfileSource.Custom
+      : ModelRuntimeProfileSource.BuiltIn,
+    providerId: providerKey,
+    modelId: canonicalModelId,
+    api: providerContext.apiFormat === ApiFormat.OpenAI
+      ? OpenClawApi.OpenAICompletions
+      : OpenClawApi.AnthropicMessages,
+  });
+  const runtimeMetadata = applyModelRuntimeProfileMetadata({
     supportsImage: ProviderRegistry.resolveModelSupportsImage(
       providerKey,
       canonicalModelId,
       model.supportsImage,
     ),
-    ...(supportsThinking ? { supportsThinking } : {}),
-    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    supportsVideo,
+    supportsThinking,
+    contextWindow,
+    maxTokens,
+  }, runtimeProfile);
+  return {
+    ...modelWithoutCompatibilityMode,
+    supportsImage: runtimeMetadata.supportsImage ?? false,
+    ...(runtimeMetadata.supportsVideo || model.supportsVideo !== undefined
+      ? { supportsVideo: runtimeMetadata.supportsVideo }
+      : {}),
+    ...(runtimeMetadata.supportsThinking
+      ? { supportsThinking: runtimeMetadata.supportsThinking }
+      : {}),
+    ...(runtimeMetadata.contextWindow !== undefined
+      ? { contextWindow: runtimeMetadata.contextWindow }
+      : {}),
+    ...(runtimeMetadata.maxTokens !== undefined
+      ? { maxTokens: runtimeMetadata.maxTokens }
+      : {}),
   };
 });
 
@@ -114,15 +163,21 @@ const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig[
   }
 
   return Object.fromEntries(
-    Object.entries(providers).map(([providerKey, providerConfig]) => [
-      providerKey,
-      {
+    Object.entries(providers).map(([providerKey, providerConfig]) => {
+      const baseUrl = normalizeProviderBaseUrl(providerKey, providerConfig.baseUrl);
+      const apiFormat = normalizeProviderApiFormat(providerKey, providerConfig.apiFormat);
+      return [
+        providerKey,
+        {
         ...providerConfig,
-        baseUrl: normalizeProviderBaseUrl(providerKey, providerConfig.baseUrl),
-        apiFormat: normalizeProviderApiFormat(providerKey, providerConfig.apiFormat),
-        models: normalizeProviderModels(providerKey, providerConfig.models),
-      },
-    ])
+          baseUrl,
+          apiFormat,
+          models: normalizeProviderModels(providerKey, providerConfig.models, {
+            apiFormat,
+          }),
+        },
+      ];
+    })
   ) as AppConfig['providers'];
 };
 
@@ -348,6 +403,21 @@ const RECENT_PROVIDER_MODEL_MIGRATIONS: Record<string, {
   models: ProviderModel[];
   position: 'start' | 'end';
 }> = {
+  [ProviderName.Moonshot]: {
+    version: 2,
+    models: [
+      {
+        id: 'kimi-k3',
+        name: 'Kimi K3',
+        supportsImage: true,
+        supportsVideo: true,
+        supportsThinking: true,
+        contextWindow: 1_048_576,
+        maxTokens: 8_192,
+      },
+    ],
+    position: 'start',
+  },
   [ProviderName.OpenAI]: {
     version: 2,
     models: [
@@ -556,13 +626,18 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
               );
             }
             const migratedProvider = migrateProviderDefaultApiFormat(providerKey, mergedProvider);
+            const baseUrl = normalizeProviderBaseUrl(providerKey, migratedProvider.baseUrl);
+            const apiFormat = normalizeProviderApiFormat(providerKey, migratedProvider.apiFormat);
             return {
               ...migratedProvider,
-              baseUrl: normalizeProviderBaseUrl(providerKey, migratedProvider.baseUrl),
-              apiFormat: normalizeProviderApiFormat(providerKey, migratedProvider.apiFormat),
+              baseUrl,
+              apiFormat,
               models: normalizeProviderModels(
                 providerKey,
                 migratedProvider.models as ProviderConfig['models'],
+                {
+                  apiFormat,
+                },
               ),
             };
           })(),

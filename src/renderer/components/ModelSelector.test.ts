@@ -1,6 +1,10 @@
 import { expect, test } from 'vitest';
 
-import { resolveDropdownListMaxHeight, resolveHoverCardTop } from './ModelSelector';
+import {
+  isModelAgenticBlocked,
+  resolveDropdownListMaxHeight,
+  resolveHoverCardTop,
+} from './ModelSelector';
 
 test('keeps model hover card above the viewport bottom', () => {
   expect(resolveHoverCardTop(790, 260, 900)).toBe(632);
@@ -33,4 +37,30 @@ test('keeps at least three model rows visible when space is extremely tight', ()
 
 test('uses the full available space when tabs and footer are hidden', () => {
   expect(resolveDropdownListMaxHeight(200, false, false)).toBe(198);
+});
+
+test('blocks only explicitly unready server models from agent selection', () => {
+  expect(isModelAgenticBlocked({
+    isServerModel: true,
+    runtimeProfile: 'moonshot-kimi-k3',
+    agenticReady: false,
+  })).toBe(true);
+  expect(isModelAgenticBlocked({
+    isServerModel: true,
+    runtimeProfile: 'moonshot-kimi-k3',
+  })).toBe(true);
+  expect(isModelAgenticBlocked({
+    isServerModel: true,
+    runtimeProfile: 'moonshot-kimi-k3',
+    agenticReady: true,
+  })).toBe(false);
+  expect(isModelAgenticBlocked({
+    isServerModel: true,
+    agenticReady: false,
+  })).toBe(false);
+  expect(isModelAgenticBlocked({
+    isServerModel: false,
+    runtimeProfile: 'moonshot-kimi-k3',
+    agenticReady: false,
+  })).toBe(false);
 });

@@ -18,6 +18,7 @@ interface CoworkConversationSearchProps {
   status: ConversationSearchStatusValue;
   activeMatchIndex: number;
   resultCount: number;
+  isResultLimitReached: boolean;
   focusRequestKey: number;
   onQueryChange: (query: string) => void;
   onNavigate: (direction: typeof ConversationSearchDirection[keyof typeof ConversationSearchDirection]) => void;
@@ -29,6 +30,7 @@ const CoworkConversationSearch: React.FC<CoworkConversationSearchProps> = ({
   status,
   activeMatchIndex,
   resultCount,
+  isResultLimitReached,
   focusRequestKey,
   onQueryChange,
   onNavigate,
@@ -62,7 +64,7 @@ const CoworkConversationSearch: React.FC<CoworkConversationSearchProps> = ({
       : query.trim()
         ? i18nService.t('coworkConversationSearchResults')
           .replace('{current}', String(hasResults ? activeMatchIndex + 1 : 0))
-          .replace('{total}', String(resultCount))
+          .replace('{total}', `${resultCount}${isResultLimitReached ? '+' : ''}`)
         : '';
 
   return (

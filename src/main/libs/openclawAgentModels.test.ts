@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import { DefaultAgentAvatarIcon } from '../../shared/agent/avatar';
 import {
@@ -9,6 +9,10 @@ import {
   parsePrimaryModelRef,
   resolveManagedSessionModelTarget,
   resolveQualifiedAgentModelRef,
+  resolveServerModelRefForRun,
+  ServerModelRefResolutionStatus,
+  shouldSyncServerModelConfig,
+  syncServerModelConfigIfNeeded,
 } from './openclawAgentModels';
 
 describe('buildAgentEntry', () => {
@@ -500,5 +504,120 @@ describe('resolveQualifiedAgentModelRef', () => {
       status: 'qualified',
       primaryModel: 'lobsterai-server/kimi-k2.6',
     });
+  });
+});
+
+describe('resolveServerModelRefForRun', () => {
+  const isKnownPackageKimiK3 = (modelId: string): boolean =>
+    modelId.toLowerCase() === 'kimi-k3-youdaoinner';
+
+  test('keeps an explicitly qualified custom model non-server when the package uses the same id', () => {
+    expect(resolveServerModelRefForRun({
+      modelRef: 'custom_0/kimi-k3-YoudaoInner',
+      availableProviders: {
+        custom_0: { models: [{ id: 'kimi-k3-YoudaoInner' }] },
+        'lobsterai-server': { models: [{ id: 'kimi-k3-YoudaoInner' }] },
+      },
+      isKnownServerModelCandidate: isKnownPackageKimiK3,
+    })).toEqual({
+      status: ServerModelRefResolutionStatus.NonServer,
+      modelId: 'kimi-k3-YoudaoInner',
+      providerIds: ['custom_0'],
+    });
+  });
+
+  test('fails closed for a historical bare id shared by a custom and package provider', () => {
+    expect(resolveServerModelRefForRun({
+      modelRef: 'kimi-k3-YoudaoInner',
+      availableProviders: {
+        custom_0: { models: [{ id: 'kimi-k3-YoudaoInner' }] },
+        'lobsterai-server': { models: [{ id: 'kimi-k3-YoudaoInner' }] },
+      },
+      isKnownServerModelCandidate: isKnownPackageKimiK3,
+    })).toEqual({
+      status: ServerModelRefResolutionStatus.Ambiguous,
+      modelId: 'kimi-k3-YoudaoInner',
+      providerIds: ['custom_0', 'lobsterai-server'],
+    });
+  });
+
+  test('resolves a bare package-only id to lobsterai-server', () => {
+    expect(resolveServerModelRefForRun({
+      modelRef: 'kimi-k3-YoudaoInner',
+      availableProviders: {
+        'lobsterai-server': { models: [{ id: 'kimi-k3-YoudaoInner' }] },
+      },
+      isKnownServerModelCandidate: isKnownPackageKimiK3,
+    })).toEqual({
+      status: ServerModelRefResolutionStatus.Server,
+      modelId: 'kimi-k3-YoudaoInner',
+      primaryModel: 'lobsterai-server/kimi-k3-YoudaoInner',
+    });
+  });
+
+  test('requires a catalog refresh before accepting a known bare package id as custom', () => {
+    expect(resolveServerModelRefForRun({
+      modelRef: 'kimi-k3-YoudaoInner',
+      availableProviders: {
+        custom_0: { models: [{ id: 'kimi-k3-YoudaoInner' }] },
+      },
+      isKnownServerModelCandidate: isKnownPackageKimiK3,
+    })).toEqual({
+      status: ServerModelRefResolutionStatus.RefreshRequired,
+      modelId: 'kimi-k3-YoudaoInner',
+    });
+  });
+
+  test('allows an ordinary bare custom K3 id that is not a package-only id', () => {
+    expect(resolveServerModelRefForRun({
+      modelRef: 'kimi-k3',
+      availableProviders: {
+        custom_0: { models: [{ id: 'kimi-k3' }] },
+      },
+      isKnownServerModelCandidate: isKnownPackageKimiK3,
+    })).toEqual({
+      status: ServerModelRefResolutionStatus.NonServer,
+      modelId: 'kimi-k3',
+      providerIds: ['custom_0'],
+    });
+  });
+
+  test('allows ordinary non-server refs without a server metadata gate', () => {
+    expect(resolveServerModelRefForRun({
+      modelRef: 'moonshot/kimi-k3',
+      availableProviders: {},
+      isKnownServerModelCandidate: isKnownPackageKimiK3,
+    })).toEqual({
+      status: ServerModelRefResolutionStatus.NonServer,
+      modelId: 'kimi-k3',
+      providerIds: ['moonshot'],
+    });
+  });
+});
+
+describe('shouldSyncServerModelConfig', () => {
+  test('forces a second sync attempt after the first failed even when cache and model ids are unchanged', async () => {
+    const sync = vi.fn()
+      .mockResolvedValueOnce({ success: false, error: 'first sync failed' })
+      .mockResolvedValueOnce({ success: false, error: 'second sync failed' });
+    const runPreflightSync = async (): Promise<void> => {
+      await syncServerModelConfigIfNeeded({
+        metadataChanged: false,
+        modelsMissingFromConfig: false,
+        forceConfigSync: true,
+        sync,
+      });
+    };
+
+    await expect(runPreflightSync()).rejects.toThrow('first sync failed');
+    await expect(runPreflightSync()).rejects.toThrow('second sync failed');
+    expect(sync).toHaveBeenCalledTimes(2);
+  });
+
+  test('still skips an ordinary unchanged non-preflight sync', () => {
+    expect(shouldSyncServerModelConfig({
+      metadataChanged: false,
+      modelsMissingFromConfig: false,
+    })).toBe(false);
   });
 });

@@ -53,6 +53,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Thinking-only hint
     taskThinkingOnly:
       '[模型未输出内容] 模型已完成思考但未生成可见回复。你可以继续对话，让模型重新输出结果。',
+    taskOutputTruncated:
+      '[输出未完成] 模型已达到本次输出长度上限。部分结果已保留，但任务未确认完成；你可以继续对话以从中断处继续。',
 
     // Feishu bot install
     feishuVerifyCredentialsFailed: '凭证验证失败，请检查 App ID 和 App Secret 是否正确',
@@ -60,6 +62,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork error messages (shared with renderer via classifyErrorKey)
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请检查配置。',
+    coworkErrorLobsterAILoginExpired: '登录状态已过期，请重新登录后继续使用 LobsterAI 套餐模型。',
     coworkErrorOAuthInvalid: 'OAuth 授权已失效或权限不足，请重新授权后重试。',
     coworkErrorModelAccessDenied: '当前账号无权访问该模型，请切换模型或检查服务商账号权限。',
     coworkErrorQuotaExhausted:
@@ -73,19 +76,42 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorCouldNotProcessPdf: '无法处理 PDF 文件。',
     coworkErrorModelNotFound: '请求的模型不存在或不可用。',
     coworkGatewaySessionSyncTimeout: 'OpenClaw 引擎响应缓慢，消息尚未发送。请等待 1~2 分钟后重新发送；若频繁出现，请检查系统内存与磁盘占用，并将 LobsterAI 加入杀毒软件白名单。',
+    coworkErrorTranscriptOversized: '该任务的历史记录过大。为保护 AI 引擎，本次消息未发送；请新建任务继续，原任务记录仍会保留。',
+    coworkErrorGatewayHeapOutOfMemory: '本地 AI 引擎内存不足并已自动重启。当前任务可能过大，请等待恢复后在新任务中继续。',
     coworkErrorGatewayDisconnected: 'AI 引擎连接中断，请重试。',
     coworkErrorServiceRestart: 'AI 引擎正在重启，请稍后重试。',
     coworkErrorGatewayDraining: 'AI 引擎正在重启中，请稍等片刻后重试。',
+    coworkErrorModelResponseTimeout: '模型响应超时，请稍后重试。',
     coworkErrorNetworkError: '网络连接失败，请检查网络设置。',
     coworkErrorRateLimit: '请求过于频繁，请稍后再试。',
     coworkErrorContentFiltered: '内容未通过安全审核，请修改后重试。',
     coworkErrorServerError: '服务端出现错误，请稍后重试。',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
+    serverModelMetadataUnavailable: '套餐模型信息暂不可用，请刷新后重试。',
+    serverModelRuntimeProfileUnsupported: '该套餐模型的任务兼容配置不受当前版本支持。',
+    serverModelToolCallingUnavailable: '该模型尚未开放任务工具调用。',
+    serverModelAgenticNotReady: '该模型正在进行任务能力验证，请稍后再试。',
     coworkErrorModelStreamEmptySseData:
       '模型流式响应格式异常：模型服务返回了空的 SSE data 帧。请稍后重试，或检查当前模型代理配置。',
     coworkErrorModelStreamOnlyEmptySseData:
       '模型流式响应一直为空：模型服务连续返回空的 SSE data 帧。请稍后重试，或检查当前模型代理配置。',
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
+    coworkBtwDisconnected: 'AI 引擎连接中断，顺便问问未能完成。',
+    coworkBtwTimeout: '顺便问问等待回答超时，请重试。',
+    coworkBtwInvalidResult: 'AI 引擎返回了无效的顺便问问结果。',
+    coworkBtwFailed: '顺便问问回答失败，请重试。',
+    coworkBtwRequestRequired: '会话、运行标识和问题不能为空。',
+    coworkBtwInvalidIdentifier: '顺便问问的会话或运行标识无效。',
+    coworkBtwQuestionRequired: '请输入顺便问问的问题。',
+    coworkBtwSingleLine: '顺便问问暂时只支持单行问题。',
+    coworkBtwResultTruncated: '（回答过长，已截断）',
+    coworkBtwAlreadyPending: '当前对话已有一个正在回答的顺便问问。',
+    coworkBtwRunConflict: '顺便问问的运行标识与现有任务冲突。',
+    coworkBtwSessionNotFound: '找不到会话 {sessionId}。',
+    coworkBtwUnavailable: '当前运行时暂不支持顺便问问。',
+    coworkBtwSubmitFailed: '提交顺便问问失败。',
+    coworkBtwNoPending: '找不到正在回答的顺便问问。',
+    coworkBtwStopFailed: '停止顺便问问失败，请重试。',
     imErrorPrefix: '处理消息时出错',
 
     // Exec approval continuation
@@ -346,6 +372,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Thinking-only hint
     taskThinkingOnly:
       '[No output] The model finished thinking but did not generate a visible reply. You can continue the conversation to ask it to output the result.',
+    taskOutputTruncated:
+      '[Output incomplete] The model reached the output limit for this response. The partial result was preserved, but the task is not confirmed complete. Continue the conversation to resume.',
 
     // Feishu bot install
     feishuVerifyCredentialsFailed:
@@ -354,6 +382,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork error messages
     coworkErrorAuthInvalid: 'Invalid or expired API key. Please check your configuration.',
+    coworkErrorLobsterAILoginExpired:
+      'Your login session has expired. Sign in again to continue using LobsterAI plan models.',
     coworkErrorOAuthInvalid: 'OAuth authorization is invalid or missing required access. Re-authenticate and try again.',
     coworkErrorModelAccessDenied: 'This account is not allowed to access the selected model. Switch models or check provider account permissions.',
     coworkErrorQuotaExhausted:
@@ -367,21 +397,48 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorCouldNotProcessPdf: 'Unable to process the PDF file.',
     coworkErrorModelNotFound: 'The requested model does not exist or is unavailable.',
     coworkGatewaySessionSyncTimeout: 'The OpenClaw engine is responding slowly and your message has not been sent. Please wait a minute or two and resend. If this happens frequently, check system memory and disk usage, and add LobsterAI to your antivirus allowlist.',
+    coworkErrorTranscriptOversized: 'This task history is too large. The message was not sent to protect the AI engine. Continue in a new task; the original task will be preserved.',
+    coworkErrorGatewayHeapOutOfMemory: 'The local AI engine ran out of memory and is restarting automatically. This task may be too large; wait for recovery and continue in a new task.',
     coworkErrorGatewayDisconnected: 'AI engine connection lost. Please retry.',
     coworkErrorServiceRestart: 'AI engine is restarting. Please try again later.',
     coworkErrorGatewayDraining: 'AI engine is restarting. Please wait a moment and try again.',
+    coworkErrorModelResponseTimeout: 'The model response timed out. Please try again.',
     coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
     coworkErrorRateLimit: 'Too many requests. Please try again later.',
     coworkErrorContentFiltered:
       'Content did not pass the safety review. Please modify and try again.',
     coworkErrorServerError: 'Server error occurred. Please try again later.',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
+    serverModelMetadataUnavailable:
+      'Package model information is temporarily unavailable. Refresh and try again.',
+    serverModelRuntimeProfileUnsupported:
+      'This package model task profile is not supported by the current version.',
+    serverModelToolCallingUnavailable:
+      'Agent tool calling is not enabled for this model yet.',
+    serverModelAgenticNotReady:
+      'This model is still undergoing agent capability validation. Please try again later.',
     coworkErrorModelStreamEmptySseData:
       'Model stream format error: the model service returned an empty SSE data frame. Please retry later or check the current model proxy configuration.',
     coworkErrorModelStreamOnlyEmptySseData:
       'Model stream stayed empty: the model service kept returning empty SSE data frames. Please retry later or check the current model proxy configuration.',
     coworkErrorUnknown:
       'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
+    coworkBtwDisconnected: 'The AI engine disconnected before the BTW side question completed.',
+    coworkBtwTimeout: 'The BTW side question timed out. Please try again.',
+    coworkBtwInvalidResult: 'The AI engine returned an invalid BTW side-question result.',
+    coworkBtwFailed: 'The BTW side question failed. Please try again.',
+    coworkBtwRequestRequired: 'Session, run id, and BTW side question are required.',
+    coworkBtwInvalidIdentifier: 'The BTW session or run identifier is invalid.',
+    coworkBtwQuestionRequired: 'Enter a BTW side question.',
+    coworkBtwSingleLine: 'BTW side questions currently support one line only.',
+    coworkBtwResultTruncated: '(Answer truncated because it was too long.)',
+    coworkBtwAlreadyPending: 'This conversation already has a pending BTW side question.',
+    coworkBtwRunConflict: 'The BTW side-question run id conflicts with an existing run.',
+    coworkBtwSessionNotFound: 'Session {sessionId} was not found.',
+    coworkBtwUnavailable: 'BTW side questions are unavailable in the current runtime.',
+    coworkBtwSubmitFailed: 'Failed to submit the BTW side question.',
+    coworkBtwNoPending: 'No pending BTW side question was found.',
+    coworkBtwStopFailed: 'Failed to stop the BTW side question. Please try again.',
     imErrorPrefix: 'Error processing message',
 
     // Exec approval continuation

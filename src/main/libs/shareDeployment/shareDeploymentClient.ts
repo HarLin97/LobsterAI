@@ -362,6 +362,9 @@ export async function uploadNodeDeployment(
   form.set('title', input.title);
   form.set('accessMode', input.accessMode ?? HtmlShareAccessMode.Code);
   form.set('clientSourceKey', input.clientSourceKey);
+  if (input.quotaReservationId) {
+    form.set('quotaReservationId', input.quotaReservationId);
+  }
   form.set('sourceSha256', input.sourceSha256);
   form.set('manifest', JSON.stringify(buildManifest(input)));
   form.set('sourceArchive', archiveBlob, 'deployment.zip');
@@ -403,6 +406,9 @@ export async function uploadStaticDeployment(
   form.set('title', input.title);
   form.set('accessMode', input.accessMode ?? HtmlShareAccessMode.Code);
   form.set('clientSourceKey', input.clientSourceKey);
+  if (input.quotaReservationId) {
+    form.set('quotaReservationId', input.quotaReservationId);
+  }
   form.set('sourceSha256', input.sourceSha256);
   form.set('manifest', JSON.stringify(buildManifest(input)));
   form.set('sourceArchive', archiveBlob, 'deployment.zip');

@@ -160,8 +160,10 @@ interface ProviderDefInput {
     readonly id: string;
     readonly name: string;
     readonly supportsImage: boolean;
+    readonly supportsVideo?: boolean;
     readonly supportsThinking?: boolean;
     readonly contextWindow?: number;
+    readonly maxTokens?: number;
   }[];
   /**
    * Coding Plan dedicated model list (only meaningful when codingPlanSupported=true).
@@ -172,8 +174,10 @@ interface ProviderDefInput {
     readonly id: string;
     readonly name: string;
     readonly supportsImage: boolean;
+    readonly supportsVideo?: boolean;
     readonly supportsThinking?: boolean;
     readonly contextWindow?: number;
+    readonly maxTokens?: number;
   }[];
   /**
    * The OpenClaw gateway provider ID used when building model refs (e.g. "provider/modelId").
@@ -240,6 +244,7 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
+      { id: 'kimi-k3', name: 'Kimi K3', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 1_048_576, maxTokens: 8_192 },
       { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
       { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
     ],
@@ -611,15 +616,19 @@ export interface ProviderDef {
     readonly id: string;
     readonly name: string;
     readonly supportsImage: boolean;
+    readonly supportsVideo?: boolean;
     readonly supportsThinking?: boolean;
     readonly contextWindow?: number;
+    readonly maxTokens?: number;
   }[];
   readonly codingPlanModels?: readonly {
     readonly id: string;
     readonly name: string;
     readonly supportsImage: boolean;
+    readonly supportsVideo?: boolean;
     readonly supportsThinking?: boolean;
     readonly contextWindow?: number;
+    readonly maxTokens?: number;
   }[];
   readonly openClawProviderId: OpenClawProviderId;
 }
@@ -635,29 +644,43 @@ class ProviderRegistryImpl {
   private readonly defs: readonly ProviderDef[];
   private readonly idIndex: ReadonlyMap<string, ProviderDef>;
   private readonly modelCapabilityIndex: ReadonlyMap<string, boolean>;
+  private readonly modelVideoCapabilityIndex: ReadonlyMap<string, boolean>;
   private readonly modelContextWindowIndex: ReadonlyMap<string, number>;
+  private readonly modelMaxTokensIndex: ReadonlyMap<string, number>;
 
   constructor(definitions: readonly ProviderDef[]) {
     this.defs = definitions;
     const idx = new Map<string, ProviderDef>();
     const modelIdx = new Map<string, boolean>();
+    const modelVideoIdx = new Map<string, boolean>();
     const contextWindowIdx = new Map<string, number>();
+    const maxTokensIdx = new Map<string, number>();
     for (const def of definitions) {
       idx.set(def.id, def);
       for (const model of [...def.defaultModels, ...(def.codingPlanModels ?? [])]) {
         const existing = modelIdx.get(model.id);
         modelIdx.set(model.id, existing === true || model.supportsImage);
+        const existingVideo = modelVideoIdx.get(model.id);
+        modelVideoIdx.set(model.id, existingVideo === true || model.supportsVideo === true);
         if (isValidContextWindow(model.contextWindow)) {
           const existingContextWindow = contextWindowIdx.get(model.id);
           if (existingContextWindow === undefined || model.contextWindow > existingContextWindow) {
             contextWindowIdx.set(model.id, model.contextWindow);
           }
         }
+        if (isValidContextWindow(model.maxTokens)) {
+          const existingMaxTokens = maxTokensIdx.get(model.id);
+          if (existingMaxTokens === undefined || model.maxTokens > existingMaxTokens) {
+            maxTokensIdx.set(model.id, model.maxTokens);
+          }
+        }
       }
     }
     this.idIndex = idx;
     this.modelCapabilityIndex = modelIdx;
+    this.modelVideoCapabilityIndex = modelVideoIdx;
     this.modelContextWindowIndex = contextWindowIdx;
+    this.modelMaxTokensIndex = maxTokensIdx;
   }
 
   /** All provider IDs in definition order. */
@@ -716,6 +739,18 @@ class ProviderRegistryImpl {
     return this.modelCapabilityIndex.get(modelId);
   }
 
+  getProviderModelSupportsVideo(providerName: string, modelId: string): boolean | undefined {
+    const def = this.idIndex.get(providerName);
+    if (!def) return undefined;
+    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])]
+      .find(candidate => candidate.id === modelId);
+    return model?.supportsVideo;
+  }
+
+  getKnownModelSupportsVideo(modelId: string): boolean | undefined {
+    return this.modelVideoCapabilityIndex.get(modelId);
+  }
+
   getProviderModelSupportsThinking(providerName: string, modelId: string): boolean | undefined {
     const def = this.idIndex.get(providerName);
     if (!def) return undefined;
@@ -734,6 +769,18 @@ class ProviderRegistryImpl {
 
   getKnownModelContextWindow(modelId: string): number | undefined {
     return this.modelContextWindowIndex.get(modelId);
+  }
+
+  getProviderModelMaxTokens(providerName: string, modelId: string): number | undefined {
+    const def = this.idIndex.get(providerName);
+    if (!def) return undefined;
+    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])]
+      .find(candidate => candidate.id === modelId);
+    return model?.maxTokens;
+  }
+
+  getKnownModelMaxTokens(modelId: string): number | undefined {
+    return this.modelMaxTokensIndex.get(modelId);
   }
 
   resolveModelSupportsImage(
@@ -770,6 +817,25 @@ class ProviderRegistryImpl {
     return configuredSupportsThinking ?? false;
   }
 
+  resolveModelSupportsVideo(
+    providerName: string,
+    modelId: string,
+    configuredSupportsVideo?: boolean,
+  ): boolean {
+    const providerModelSupportsVideo = this.getProviderModelSupportsVideo(providerName, modelId);
+    if (providerModelSupportsVideo !== undefined) {
+      return providerModelSupportsVideo;
+    }
+    if (configuredSupportsVideo === true) {
+      return true;
+    }
+    const knownModelSupportsVideo = this.getKnownModelSupportsVideo(modelId);
+    if (knownModelSupportsVideo === true) {
+      return true;
+    }
+    return configuredSupportsVideo ?? false;
+  }
+
   resolveModelContextWindow(
     providerName: string,
     modelId: string,
@@ -780,6 +846,18 @@ class ProviderRegistryImpl {
     }
     return this.getProviderModelContextWindow(providerName, modelId)
       ?? this.getKnownModelContextWindow(modelId);
+  }
+
+  resolveModelMaxTokens(
+    providerName: string,
+    modelId: string,
+    configuredMaxTokens?: number,
+  ): number | undefined {
+    if (isValidContextWindow(configuredMaxTokens)) {
+      return configuredMaxTokens;
+    }
+    return this.getProviderModelMaxTokens(providerName, modelId)
+      ?? this.getKnownModelMaxTokens(modelId);
   }
 
   /** Provider IDs filtered by region. */

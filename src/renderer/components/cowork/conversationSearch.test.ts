@@ -91,6 +91,15 @@ describe('conversation search', () => {
     expect(matches.every(match => !match.key.includes('sensitive-query'))).toBe(true);
   });
 
+  test('caps collected matches to protect long conversations from unbounded allocations', () => {
+    const matches = findConversationSearchMatches([
+      message('many-matches', 'assistant', 'x x x x x'),
+    ], 'x', 0, 3);
+
+    expect(matches).toHaveLength(3);
+    expect(matches.map(match => match.occurrenceIndex)).toEqual([0, 1, 2]);
+  });
+
   test('searches visible Markdown labels and code but not hidden link or image URLs', () => {
     const text = getVisibleMarkdownSearchText([
       '# **Title**',

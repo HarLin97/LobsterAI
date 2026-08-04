@@ -21,6 +21,8 @@ export const ConversationSearchDirection = {
 export type ConversationSearchDirection =
   typeof ConversationSearchDirection[keyof typeof ConversationSearchDirection];
 
+export const CONVERSATION_SEARCH_MATCH_LIMIT = 10_000;
+
 export interface CoworkConversationSearchMatch {
   key: string;
   messageId: string;
@@ -97,9 +99,13 @@ export function findConversationSearchMatches(
   messages: CoworkMessage[],
   query: string,
   absoluteOffset = 0,
+  maxMatches = Number.POSITIVE_INFINITY,
 ): CoworkConversationSearchMatch[] {
   const normalizedQuery = normalizeConversationSearchQuery(query);
-  if (!normalizedQuery) return [];
+  const boundedMaxMatches = Number.isFinite(maxMatches)
+    ? Math.max(0, Math.floor(maxMatches))
+    : Number.POSITIVE_INFINITY;
+  if (!normalizedQuery || boundedMaxMatches === 0) return [];
 
   const matches: CoworkConversationSearchMatch[] = [];
 
@@ -125,6 +131,8 @@ export function findConversationSearchMatches(
         absoluteMessageIndex: absoluteOffset + messageIndex,
         occurrenceIndex,
       });
+
+      if (matches.length >= boundedMaxMatches) return matches;
 
       occurrenceIndex += 1;
       searchFrom = matchIndex + normalizedQuery.length;

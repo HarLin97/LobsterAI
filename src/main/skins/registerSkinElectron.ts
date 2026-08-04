@@ -7,6 +7,7 @@ import {
 } from '../../shared/skin/constants';
 import type {
   SkinApplyResponse,
+  SkinBindThemeResponse,
   SkinDeactivateResponse,
   SkinDeleteResponse,
   SkinGetActiveResponse,
@@ -72,9 +73,13 @@ export function registerSkinElectronIntegration(store: SkinStore): void {
     }
   });
 
-  ipcMain.handle(SkinIpc.Apply, async (_event, skinId: string): Promise<SkinApplyResponse> => {
+  ipcMain.handle(SkinIpc.Apply, async (
+    _event,
+    skinId: string,
+    boundThemeId?: string,
+  ): Promise<SkinApplyResponse> => {
     try {
-      const activeSkin = await store.apply(skinId);
+      const activeSkin = await store.apply(skinId, boundThemeId);
       notifySkinChanged();
       return {
         success: true,
@@ -85,6 +90,27 @@ export function registerSkinElectronIntegration(store: SkinStore): void {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to apply skin',
+      };
+    }
+  });
+
+  ipcMain.handle(SkinIpc.BindTheme, async (
+    _event,
+    skinId: string,
+    themeId: string,
+  ): Promise<SkinBindThemeResponse> => {
+    try {
+      const skin = await store.bindTheme(skinId, themeId);
+      notifySkinChanged();
+      return {
+        success: true,
+        skin: presentSkin(skin),
+      };
+    } catch (error) {
+      console.error('[Skin] failed to bind skin theme:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to bind skin theme',
       };
     }
   });
