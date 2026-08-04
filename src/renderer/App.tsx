@@ -39,6 +39,7 @@ import {
 import AppUpdateModal from './components/update/AppUpdateModal';
 import WelcomeDialog from './components/WelcomeDialog';
 import WindowsAppTitleBar from './components/window/WindowsAppTitleBar';
+import WindowTitleBar from './components/window/WindowTitleBar';
 import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config';
 import { SkinProvider } from './providers/SkinProvider';
 import type { ApiConfig } from './services/api';
@@ -1300,6 +1301,26 @@ const App: React.FC = () => {
     );
   }
 
+  if (privacyAgreed === false) {
+    // First-launch gate: render only the welcome screen — no app chrome (title
+    // bar/sidebar) until the agreement is accepted. An invisible drag strip
+    // keeps the frameless window movable; Windows caption buttons stay on top.
+    return (
+      <div className="relative h-screen overflow-hidden">
+        <WelcomeDialog
+          onLogin={handleWelcomeLogin}
+          onCustomModel={handleWelcomeCustomModel}
+        />
+        <div className="draggable absolute inset-x-0 top-0 z-[70] h-9" />
+        {isWindows && (
+          <div className="absolute right-0 top-0 z-[80] h-9">
+            <WindowTitleBar inline />
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <SkinProvider>
       <SkinPresentationScope
@@ -1390,7 +1411,7 @@ const App: React.FC = () => {
               />
             ) : (
               <CoworkView
-                onRequestAppSettings={privacyAgreed === true ? handleShowSettings : undefined}
+                onRequestAppSettings={handleShowSettings}
                 onShowSkills={handleShowSkills}
                 onShowKits={handleShowKits}
                 isSidebarCollapsed={isSidebarCollapsed}
@@ -1415,8 +1436,8 @@ const App: React.FC = () => {
       </div>
 
       <EngineFailureOverlay
-        onRequestAppSettings={privacyAgreed === true ? handleShowSettings : undefined}
-        suspended={showSettings || showUpdateModal || isPermissionModalOpen || privacyAgreed === false}
+        onRequestAppSettings={handleShowSettings}
+        suspended={showSettings || showUpdateModal || isPermissionModalOpen}
       />
 
       {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
@@ -1445,12 +1466,6 @@ const App: React.FC = () => {
         />
       )}
       {permissionModal}
-      {privacyAgreed === false && (
-        <WelcomeDialog
-          onLogin={handleWelcomeLogin}
-          onCustomModel={handleWelcomeCustomModel}
-        />
-      )}
       </SkinPresentationScope>
     </SkinProvider>
   );

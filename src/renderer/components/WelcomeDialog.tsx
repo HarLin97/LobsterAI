@@ -77,28 +77,25 @@ const WelcomeDialog: React.FC<WelcomeDialogProps> = ({ onLogin, onCustomModel })
           />
         </div>
 
-        <h1 className="text-2xl font-semibold text-foreground mb-10 text-center">
+        <h1 className="text-2xl font-semibold text-foreground mb-8 text-center">
           {i18nService.t('welcomeTitle')}
         </h1>
 
-        {/* primary: login — promo pill rides its corner so the incentive reads as "log in to get it" */}
-        <div className="relative w-full">
-          <span
-            className="absolute -top-3 right-3 z-10 px-2.5 py-1 rounded-full text-xs font-medium text-white pointer-events-none select-none"
-            style={{
-              background: 'linear-gradient(135deg, #FF6D3B 0%, #FF3D2E 100%)',
-              boxShadow: '0 2px 8px rgba(255, 61, 46, 0.35)',
-            }}
-          >
-            {i18nService.t('welcomePromo')}
-          </span>
-          <button
-            onClick={onLogin}
-            className="w-full h-11 rounded-xl text-sm font-medium bg-foreground text-surface transition-opacity hover:opacity-90 active:opacity-80"
-          >
-            {i18nService.t('welcomeLogin')}
-          </button>
+        {/* promo: quiet tinted chip sitting right above login, so the incentive reads as "log in to get it" */}
+        <div className="flex items-center gap-1.5 mb-3 px-3 py-1 rounded-full border text-xs font-medium select-none text-[#E5482C] bg-[#FF5A36]/10 border-[#FF5A36]/20 dark:text-[#FF9275] dark:bg-[#FF6D4A]/[0.14] dark:border-[#FF6D4A]/30">
+          <svg viewBox="0 0 16 16" className="h-3 w-3 shrink-0" fill="currentColor" aria-hidden="true">
+            <path d="M8 1.5c.25 2.7 1.05 4.4 1.95 5.3.9.9 2.6 1.7 5.3 1.95-2.7.25-4.4 1.05-5.3 1.95-.9.9-1.7 2.6-1.95 5.3-.25-2.7-1.05-4.4-1.95-5.3-.9-.9-2.6-1.7-5.3-1.95 2.7-.25 4.4-1.05 5.3-1.95.9-.9 1.7-2.6 1.95-5.3z" />
+          </svg>
+          {i18nService.t('welcomePromo')}
         </div>
+
+        {/* primary: login */}
+        <button
+          onClick={onLogin}
+          className="w-full h-11 rounded-xl text-sm font-medium bg-foreground text-surface transition-opacity hover:opacity-90 active:opacity-80"
+        >
+          {i18nService.t('welcomeLogin')}
+        </button>
 
         {/* secondary: custom model — quiet ghost style */}
         <button
