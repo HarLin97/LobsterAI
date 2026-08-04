@@ -145,6 +145,7 @@ const reportClaimFailure = (
   source: StartupCreditCampaignSourceType,
   errorCode: string | number,
   retryable: boolean,
+  errorMessage = i18nService.t('startupCreditClaimFailed'),
 ): void => {
   reportStartupCreditCampaignEvent(
     LogReporterAction.ActivityClaimFail,
@@ -152,6 +153,7 @@ const reportClaimFailure = (
     {
       source,
       error_code: errorCode,
+      error_message: errorMessage,
       retryable,
     },
   );
@@ -333,6 +335,8 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
               offerSourceRef.current,
               ActivityServerErrorCode.AlreadyClaimed,
               false,
+              response.error
+                || i18nService.t('startupCreditAlreadyClaimedDescription'),
             );
             clearPendingStartupCreditClaim(localStorage);
             const refreshed = await fetchCurrentSnapshot();
@@ -365,6 +369,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
               offerSourceRef.current,
               response.code,
               false,
+              response.error || i18nService.t('startupCreditEndedDescription'),
             );
             clearPendingStartupCreditClaim(localStorage);
             applySnapshot(null, false);
@@ -376,6 +381,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
             offerSourceRef.current,
             response.code ?? 'request_failed',
             true,
+            response.error || i18nService.t('startupCreditClaimFailed'),
           );
           showTerminalView(
             CampaignModalView.Failed,
@@ -391,6 +397,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
             offerSourceRef.current,
             'invalid_response',
             true,
+            i18nService.t('startupCreditClaimFailed'),
           );
           showTerminalView(
             CampaignModalView.Failed,
@@ -430,6 +437,9 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
         offerSourceRef.current,
         'network_error',
         true,
+        error instanceof Error
+          ? error.message
+          : i18nService.t('startupCreditClaimFailed'),
       );
       showTerminalView(
         CampaignModalView.Failed,
@@ -478,6 +488,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           StartupCreditCampaignSource.LoginReturn,
           ActivityServerErrorCode.AlreadyClaimed,
           false,
+          i18nService.t('startupCreditAlreadyClaimedDescription'),
         );
         clearPendingStartupCreditClaim(localStorage);
         showTerminalView(CampaignModalView.AlreadyClaimed, {
@@ -709,18 +720,24 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           createStartupCreditIdempotencyKey(),
         );
     if (!isLoggedIn || !current.context.authenticated) {
-      reportStartupCreditCampaignEvent(
-        LogReporterAction.ActivityLoginRedirect,
-        current.descriptor,
-        {
-          source: offerSourceRef.current,
-          return_to: 'netease_user_bonus_activity',
-          reason: 'claim_requires_login',
-        },
-      );
       showTerminalView(CampaignModalView.StartingLogin);
       try {
-        await authService.login();
+        const loginResult = await authService.login();
+        if (!loginResult.success || !loginResult.redirectUrl) {
+          throw new Error(
+            loginResult.error || i18nService.t('startupCreditLoginFailed'),
+          );
+        }
+        reportStartupCreditCampaignEvent(
+          LogReporterAction.ActivityLoginRedirect,
+          current.descriptor,
+          {
+            source: offerSourceRef.current,
+            redirect_url: loginResult.redirectUrl,
+            return_to: 'netease_user_bonus_activity',
+            reason: 'claim_requires_login',
+          },
+        );
         if (mountedRef.current) setModalView(CampaignModalView.Offer);
       } catch (error) {
         reportClaimFailure(
@@ -728,6 +745,9 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           offerSourceRef.current,
           'login_redirect_failed',
           true,
+          error instanceof Error
+            ? error.message
+            : i18nService.t('startupCreditLoginFailed'),
         );
         clearPendingStartupCreditClaim(localStorage);
         showTerminalView(
