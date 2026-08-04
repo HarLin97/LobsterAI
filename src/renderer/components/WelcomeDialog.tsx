@@ -89,7 +89,7 @@ const WelcomeDialog: React.FC<WelcomeDialogProps> = ({ onLogin, onCustomModel })
         {/* primary: login */}
         <button
           onClick={onLogin}
-          className="w-full h-11 rounded-xl text-sm font-medium bg-foreground text-surface transition-opacity hover:opacity-90 active:opacity-80 outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+          className="w-full h-11 rounded-xl text-sm font-medium bg-foreground text-surface transition-opacity hover:opacity-90 active:opacity-80 outline-none"
         >
           {i18nService.t('welcomeLogin')}
         </button>
@@ -97,7 +97,7 @@ const WelcomeDialog: React.FC<WelcomeDialogProps> = ({ onLogin, onCustomModel })
         {/* secondary: custom model — quiet ghost style */}
         <button
           onClick={onCustomModel}
-          className="mt-3 w-full h-11 rounded-xl text-sm font-medium text-secondary border border-border bg-transparent hover:text-foreground hover:bg-surface-raised transition-colors outline-none focus-visible:ring-2 focus-visible:ring-foreground/25 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+          className="mt-3 w-full h-11 rounded-xl text-sm font-medium text-secondary border border-border bg-transparent hover:text-foreground hover:bg-surface-raised transition-colors outline-none"
         >
           {i18nService.t('welcomeCustomModel')}
         </button>
@@ -110,7 +110,7 @@ const WelcomeDialog: React.FC<WelcomeDialogProps> = ({ onLogin, onCustomModel })
           <a
             href={SERVICE_TERMS_URL}
             onClick={handleTermsClick}
-            className="underline underline-offset-2 hover:text-foreground rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-foreground/25"
+            className="underline underline-offset-2 hover:text-foreground outline-none"
           >
             {linkText}
           </a>
