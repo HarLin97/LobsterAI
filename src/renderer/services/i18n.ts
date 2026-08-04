@@ -2668,6 +2668,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     autoLaunchDescription: '系统启动时自动运行应用',
     autoLaunchRequiresApproval: '需要在系统设置中允许开机自启动',
     autoLaunchUpdateFailed: '更新开机自启动设置失败',
+    artifactAutoPreviewEnabled: '自动打开文件预览',
+    artifactAutoPreviewEnabledDescription: 'AI 生成支持预览的文件后，自动打开右侧预览面板',
     useSystemProxy: '使用系统代理',
     useSystemProxyDescription: '开启后网络请求将跟随系统代理（保存后生效）',
     browserWebAccessTab: '浏览器',
@@ -6070,6 +6072,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     autoLaunchDescription: 'Automatically start the app when you log in',
     autoLaunchRequiresApproval: 'Launch at login requires approval in System Settings',
     autoLaunchUpdateFailed: 'Failed to update launch at login setting',
+    artifactAutoPreviewEnabled: 'Automatically Open File Previews',
+    artifactAutoPreviewEnabledDescription:
+      'Automatically open the right preview panel after AI generates a supported file',
     useSystemProxy: 'Use System Proxy',
     useSystemProxyDescription:
       'When enabled, network requests follow system proxy settings (applies after Save)',
