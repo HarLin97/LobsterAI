@@ -40,7 +40,7 @@ import {
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
 import { agentService } from '../../services/agent';
-import { configService } from '../../services/config';
+import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
 import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
 import {
@@ -2718,8 +2718,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       const latest = configService.getConfig().shortcuts?.sendMessage ?? 'Enter';
       setCurrentSendShortcut(latest);
     };
-    window.addEventListener('config-updated', syncFromConfig);
-    return () => window.removeEventListener('config-updated', syncFromConfig);
+    window.addEventListener(ConfigServiceEvent.Updated, syncFromConfig);
+    return () => window.removeEventListener(ConfigServiceEvent.Updated, syncFromConfig);
   }, []);
 
   const largeModelSelector = showModelSelector ? (

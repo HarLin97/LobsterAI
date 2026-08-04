@@ -118,7 +118,11 @@ describe('authenticated server model mapping', () => {
 describe('login diagnostics', () => {
   test('persists renderer lifecycle logs without including the login URL', async () => {
     const fromRenderer = vi.fn();
-    const login = vi.fn().mockResolvedValue({ success: true });
+    const loginResult = {
+      success: true,
+      redirectUrl: 'https://lobsterai.youdao.com/portal#/login?source=electron',
+    };
+    const login = vi.fn().mockResolvedValue(loginResult);
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'debug').mockImplementation(() => {});
     vi.stubGlobal('window', {
@@ -134,7 +138,7 @@ describe('login diagnostics', () => {
       },
     });
 
-    await authService.login();
+    await expect(authService.login()).resolves.toEqual(loginResult);
 
     expect(login).toHaveBeenCalledWith('https://lobsterai.youdao.com/portal#/login');
     expect(fromRenderer).toHaveBeenCalledWith(
@@ -150,7 +154,7 @@ describe('login diagnostics', () => {
     expect(fromRenderer.mock.calls.flat().join(' ')).not.toContain('lobsterai.youdao.com');
   });
 
-  test('records a warning while preserving the existing non-throwing IPC failure behavior', async () => {
+  test('returns the IPC failure result without throwing and records a warning', async () => {
     const fromRenderer = vi.fn();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'debug').mockImplementation(() => {});
@@ -168,7 +172,10 @@ describe('login diagnostics', () => {
       },
     });
 
-    await expect(authService.login()).resolves.toBeUndefined();
+    await expect(authService.login()).resolves.toEqual({
+      success: false,
+      error: 'open failed',
+    });
 
     expect(fromRenderer).toHaveBeenCalledWith(
       'warn',

@@ -186,6 +186,7 @@ import type {
   TelegramInstanceConfig,
   WecomInstanceConfig,
 } from './im/types';
+import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
@@ -5580,7 +5581,10 @@ if (!gotTheLock) {
 
   const syncOpenClawConfigIfAuthQuotaGateChanged = (previous: ReturnType<typeof getAuthQuotaGateState>) => {
     if (hasAuthQuotaGateStateChanged(previous)) {
-      syncOpenClawConfig({ reason: MEDIA_ENTITLEMENT_SYNC_REASON, restartGatewayIfRunning: true }).catch((error) => {
+      // The auth quota gate is enforced in the main process. Let config sync
+      // decide whether its rendered changes require a restart instead of
+      // forcing one before the post-login server-model metadata sync.
+      syncOpenClawConfig({ reason: MEDIA_ENTITLEMENT_SYNC_REASON, restartGatewayIfRunning: false }).catch((error) => {
         console.warn('[Auth] failed to sync OpenClaw config after quota gate changed:', error);
       });
       return true;
@@ -5669,13 +5673,13 @@ if (!gotTheLock) {
       });
       console.log('[Auth] opening portal login with local callback redirect');
       await shell.openExternal(finalUrl);
-      return { success: true };
+      return { success: true, redirectUrl: finalUrl };
     } catch (error) {
       // The callback may be shared by another login page and will clean itself up on timeout.
       console.warn('[Auth] local callback login failed, falling back to deep link login:', error);
       try {
         await shell.openExternal(fallbackUrl);
-        return { success: true };
+        return { success: true, redirectUrl: fallbackUrl };
       } catch (fallbackError) {
         console.error('[Auth] login failed:', fallbackError);
         return {
@@ -5684,6 +5688,20 @@ if (!gotTheLock) {
         };
       }
     }
+  });
+
+  registerActivityIpcHandlers({
+    ipcMain,
+    isDev,
+    isPackaged: app.isPackaged,
+    getMainWindow: () => mainWindow,
+    getServerBaseUrl: getServerApiBaseUrl,
+    getClientVersion: () => app.getVersion(),
+    platform: process.platform,
+    hasAuthTokens: () => getAuthTokens() !== null,
+    fetchPublic: (url, options) => net.fetch(url, options),
+    fetchWithAuth,
+    developmentServerBaseUrl: process.env.LOBSTER_ACTIVITY_SERVER_BASE_URL,
   });
 
   ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {

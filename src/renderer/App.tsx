@@ -26,6 +26,7 @@ import { SitesView } from './components/sites';
 import { SkillsView } from './components/skills';
 import SkinBackdrop, { SkinBackdropVariant } from './components/skin/SkinBackdrop';
 import SkinPresentationScope from './components/skin/SkinPresentationScope';
+import StartupCreditCampaign from './components/StartupCreditCampaign';
 import Toast from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateBlockingPanel from './components/update/AppUpdateBlockingPanel';
@@ -1363,6 +1364,11 @@ const App: React.FC = () => {
           onClose={() => setToastMessage(null)}
         />
       )}
+      {/* The welcome screen renders via the early return above, so agreement
+          alone gates the campaign here (no separate showWelcome flag). */}
+      <StartupCreditCampaign
+        enabled={privacyAgreed === true}
+      />
       {windowsStandaloneTitleBar}
       <div
         className="relative flex flex-1 min-h-0 overflow-hidden"

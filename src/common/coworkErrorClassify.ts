@@ -15,6 +15,7 @@ export const CoworkErrorI18nKey = {
   FreeQuotaExhausted: 'coworkErrorFreeQuotaExhausted',
   InsufficientBalance: 'coworkErrorInsufficientBalance',
   RateLimit: 'coworkErrorRateLimit',
+  ModelOverloaded: 'coworkErrorModelOverloaded',
   ModelResponseTimeout: 'coworkErrorModelResponseTimeout',
   NetworkError: 'coworkErrorNetworkError',
   ServerError: 'coworkErrorServerError',
@@ -24,6 +25,9 @@ export const CoworkErrorI18nKey = {
 
 const LOBSTERAI_QUOTA_EXHAUSTED_PATTERN =
   /\b4020[0-2]\b|(?:今日)?免费额度.*(用完|耗尽)|本月积分.*(用完|耗尽)|积分额度.*(用完|耗尽)|free.*quota.*(exhausted|used up|limit)|monthly.*credits?.*(exhausted|used up|limit)/i;
+
+const MODEL_CAPACITY_OVERLOAD_PATTERN =
+  /overloaded_error|\boverloaded\b|(?:selected\s+)?model\s+(?:is\s+)?at capacity|system capacity(?: limits?)?|(?:service|model).*(?:high demand|high load)|服务过载|当前负载过高|系统容量(?:不足|限制)?/i;
 
 const API_KEY_PATTERN = String.raw`(?:api\s*key|api[_-]?key|apikey)`;
 const UNAVAILABLE_NETWORK_CODE_PATTERN = String.raw`(?:ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|UND_ERR_[A-Z_]+)`;
@@ -37,9 +41,12 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   [new RegExp(`authentication[_ ](error|fails?)|${API_KEY_PATTERN}.*(invalid|expired|deleted|inactive|not[_ ]valid|not\\s+valid)|invalid.*${API_KEY_PATTERN}|incorrect.*${API_KEY_PATTERN}|unauthorized|PERMISSION_DENIED|\\b401\\b`, 'i'), CoworkErrorI18nKey.AuthInvalid],
   // LobsterAI plan/free quota. Must precede generic 402/billing handling.
   [LOBSTERAI_QUOTA_EXHAUSTED_PATTERN, CoworkErrorI18nKey.QuotaExhausted],
-  // Rate limit: HTTP 429, Anthropic/DeepSeek overloaded, Gemini RESOURCE_EXHAUSTED
+  // Provider/model capacity failures. Must precede rate-limit matching because
+  // capacity errors may also contain phrases such as "too many requests".
+  [MODEL_CAPACITY_OVERLOAD_PATTERN, CoworkErrorI18nKey.ModelOverloaded],
+  // Rate limit: HTTP 429 and Gemini RESOURCE_EXHAUSTED
   // (must precede billing so "RESOURCE_EXHAUSTED: quota exceeded" maps to rate-limit)
-  [/\b429\b|rate[_ ]limit|too many requests|overloaded|RESOURCE_EXHAUSTED/i, CoworkErrorI18nKey.RateLimit],
+  [/\b429\b|rate[_ ]limit|too many requests|RESOURCE_EXHAUSTED/i, CoworkErrorI18nKey.RateLimit],
   // Billing: DeepSeek 402, OpenAI, OpenRouter, Qwen, StepFun
   [/insufficient.*(balance|quota|credits)|billing|quota[_ ]exceeded|Arrearage|account.*not.*in.*good.*standing|余额不足|\b402\b/i, CoworkErrorI18nKey.InsufficientBalance],
   // Oversized Cowork/OpenClaw gateway message payloads.
