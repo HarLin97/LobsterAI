@@ -145,6 +145,7 @@ const App: React.FC = () => {
   const [isUpdateCardExpanded, setIsUpdateCardExpanded] = useState(false);
   const [isUserInitiatedUpdateFlowActive, setIsUserInitiatedUpdateFlowActive] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
+  const [welcomeLoginPending, setWelcomeLoginPending] = useState(false);
   const [enterpriseConfig, setEnterpriseConfig] = useState<{
     ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
     disableUpdate?: boolean;
@@ -756,14 +757,33 @@ const App: React.FC = () => {
     setPrivacyAgreed(true);
   }, []);
 
+  // Login keeps the welcome gate on screen while the browser flow runs; the
+  // effect below releases the gate only once the user is actually logged in.
   const handleWelcomeLogin = useCallback(async () => {
-    await acceptPrivacyAgreement();
-    await authService.login();
-  }, [acceptPrivacyAgreement]);
+    setWelcomeLoginPending(true);
+    try {
+      await authService.login();
+    } catch (error) {
+      console.error('[App] welcome login failed before browser handoff:', error);
+      setWelcomeLoginPending(false);
+      showToast(i18nService.t('welcomeLoginFailed'));
+    }
+  }, [showToast]);
+  const handleWelcomeCancelLogin = useCallback(() => {
+    setWelcomeLoginPending(false);
+  }, []);
   const handleWelcomeCustomModel = useCallback(async () => {
     await acceptPrivacyAgreement();
     handleShowSettings({ initialTab: 'model' });
   }, [acceptPrivacyAgreement, handleShowSettings]);
+
+  // Release the first-launch gate once login completes — including when the
+  // browser callback lands after the user tapped back on the welcome screen.
+  useEffect(() => {
+    if (privacyAgreed === false && authUser) {
+      void acceptPrivacyAgreement();
+    }
+  }, [privacyAgreed, authUser, acceptPrivacyAgreement]);
 
   const handlePermissionResponse = useCallback(async (result: CoworkPermissionResult) => {
     if (!pendingPermission) return;
@@ -1307,8 +1327,17 @@ const App: React.FC = () => {
     // keeps the frameless window movable; Windows caption buttons stay on top.
     return (
       <div className="relative h-screen overflow-hidden">
+        {toastMessage && (
+          <Toast
+            message={toastMessage}
+            closeLabel={i18nService.t('close')}
+            onClose={() => setToastMessage(null)}
+          />
+        )}
         <WelcomeDialog
           onLogin={handleWelcomeLogin}
+          loginPending={welcomeLoginPending}
+          onCancelLogin={handleWelcomeCancelLogin}
           onCustomModel={handleWelcomeCustomModel}
         />
         <div className="draggable absolute inset-x-0 top-0 z-[70] h-9" />
