@@ -972,6 +972,30 @@ const coworkSlice = createSlice({
       }
     },
 
+    /** Append newer messages when the active history window does not include the session end. */
+    appendNewerMessages(
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        messages: CoworkMessage[];
+        totalMessages: number;
+      }>,
+    ) {
+      const { sessionId, messages, totalMessages } = action.payload;
+      if (state.currentSession?.id !== sessionId) return;
+      if (messages.length === 0) return;
+      const existingIds = new Set(state.currentSession.messages.map(message => message.id));
+      const toInsert = messages.filter(message => !existingIds.has(message.id));
+      state.currentSession.messages = [...state.currentSession.messages, ...toInsert];
+      state.currentSession.totalMessages = Math.max(
+        state.currentSession.totalMessages,
+        totalMessages,
+      );
+      for (const message of toInsert) {
+        applyPendingMediaStatusUpdates(state, sessionId, message);
+      }
+    },
+
     // Runs on every streaming delta, so it intentionally leaves session
     // updatedAt untouched to keep the list order stable during runs.
     updateMessageContent(state, action: PayloadAction<{ sessionId: string; messageId: string; content: string; metadata?: Record<string, unknown> }>) {
@@ -1337,6 +1361,7 @@ export const {
   setMessageWindow,
   addMessage,
   prependMessages,
+  appendNewerMessages,
   updateMessageContent,
   updateToolUseMediaStatus,
   setStreaming,
