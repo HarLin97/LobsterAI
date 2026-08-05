@@ -2993,14 +2993,28 @@ export async function stopCoworkOpenAICompatProxy(): Promise<void> {
   proxyPort = null;
   proxyAuthToken = null;
 
+  // server.close() alone waits for every established client connection to
+  // drop. The OpenClaw gateway keeps keep-alive sockets to this proxy, so an
+  // unbounded close can hang shutdown forever: give clients a short drain
+  // window, then force-close connections, with a hard deadline either way.
   await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
+    let settled = false;
+    let drainTimer: ReturnType<typeof setTimeout> | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (drainTimer) clearTimeout(drainTimer);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
       if (error) {
         reject(error);
         return;
       }
       resolve();
-    });
+    };
+    drainTimer = setTimeout(() => server.closeAllConnections(), 1_000);
+    deadlineTimer = setTimeout(() => settle(), 3_000);
+    server.close((error) => settle(error ?? undefined));
   });
 }
 
