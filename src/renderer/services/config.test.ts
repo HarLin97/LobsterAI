@@ -1,7 +1,7 @@
 import { ProviderName } from '@shared/providers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { type AppConfig, CONFIG_KEYS, defaultConfig, FontPreferences, ShortcutAction } from '../config';
+import { type AppConfig, CONFIG_KEYS, defaultConfig, FontPreferences, resolveArtifactAutoPreviewEnabled, ShortcutAction } from '../config';
 
 const makeLegacyConfigWithoutMiniMaxAddedModels = (): AppConfig => ({
   ...defaultConfig,
@@ -185,6 +185,42 @@ describe('configService theme persistence', () => {
       theme: 'dark',
       themeId: 'ocean',
     });
+  });
+});
+
+describe('configService artifact auto-preview persistence', () => {
+  test('disables auto-preview only for an explicit false value', () => {
+    expect(resolveArtifactAutoPreviewEnabled(false)).toBe(false);
+    expect(resolveArtifactAutoPreviewEnabled(true)).toBe(true);
+    expect(resolveArtifactAutoPreviewEnabled(undefined)).toBe(true);
+    expect(resolveArtifactAutoPreviewEnabled(null)).toBe(true);
+  });
+
+  test('defaults legacy configs to auto-preview enabled', async () => {
+    const legacyConfig: Partial<AppConfig> = { ...defaultConfig };
+    delete legacyConfig.artifactAutoPreviewEnabled;
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(
+      legacyConfig as AppConfig,
+    );
+
+    await configService.init();
+
+    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(true);
+    expect((storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig).artifactAutoPreviewEnabled).toBe(true);
+  });
+
+  test('preserves a disabled auto-preview preference across partial updates', async () => {
+    const storedConfig: AppConfig = {
+      ...defaultConfig,
+      artifactAutoPreviewEnabled: false,
+    };
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+
+    await configService.init();
+    await configService.updateConfig({ useSystemProxy: true });
+
+    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(false);
+    expect((storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig).artifactAutoPreviewEnabled).toBe(false);
   });
 });
 

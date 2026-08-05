@@ -8,8 +8,10 @@ import {
   ActivityContainerApiVersion,
   type ActivityHostExecuteActionInput,
   type ActivityHostGetContextInput,
+  type ActivityHostGetSlotInput,
   ActivityIpc,
   ActivityPlacement,
+  type ActivityPlacement as ActivityPlacementType,
   type ActivityResult,
   ActivitySlotState,
 } from '../../../shared/activity/constants';
@@ -17,9 +19,9 @@ import { AuthSessionStatus } from '../../../shared/auth/constants';
 import {
   ActivityAuthMode,
   type ActivityFetch,
-  executeDailyCheckIn,
+  executeActivityAction,
+  getActivityContext,
   getActivitySlot,
-  getDailyCheckInContext,
 } from '../../libs/activity/activityClient';
 import { resolveActivityServerBaseUrl } from '../../libs/activity/activityDevelopmentConfig';
 import { resolveAuthSessionStatusFromError } from '../../libs/authSessionManager';
@@ -43,10 +45,27 @@ const failure = (error: unknown): ActivityResult<never> => ({
   error: error instanceof Error ? error.message : 'Activity operation failed',
 });
 
+const containerApiVersionByPlacement: Record<ActivityPlacementType, number> = {
+  [ActivityPlacement.DesktopSidebar]:
+    ActivityContainerApiVersion.NativeDailyCheckInV1,
+  [ActivityPlacement.DesktopStartupModal]:
+    ActivityContainerApiVersion.NativeStartupCreditV1,
+};
+
+function validateSlotInput(
+  input: ActivityHostGetSlotInput | undefined,
+): asserts input is ActivityHostGetSlotInput {
+  if (!input
+      || !Object.values(ActivityPlacement).includes(input.placement)) {
+    throw new Error('Invalid activity placement');
+  }
+}
+
 function validateActivityBinding(
   input: ActivityHostGetContextInput | undefined,
 ): asserts input is ActivityHostGetContextInput {
   if (!input
+      || !Object.values(ActivityPlacement).includes(input.placement)
       || !/^[a-z0-9][a-z0-9_-]{2,63}$/.test(input.activityCode)
       || !Number.isInteger(input.configRevision)
       || input.configRevision < 1) {
@@ -58,14 +77,18 @@ function validateExecuteInput(
   input: ActivityHostExecuteActionInput | undefined,
 ): asserts input is ActivityHostExecuteActionInput {
   validateActivityBinding(input);
-  if (!/^[A-Za-z0-9._:-]{1,64}$/.test(input.idempotencyKey)) {
+  if (!/^[a-z0-9_-]{1,64}$/.test(input.actionId)
+      || !/^[A-Za-z0-9._:-]{1,64}$/.test(input.idempotencyKey)) {
     throw new Error('Invalid activity idempotency key');
   }
 }
 
 export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void {
-  let actionInFlight = false;
-  let activeBinding: ActivityHostGetContextInput | null = null;
+  const actionsInFlight = new Set<string>();
+  const activeBindings = new Map<
+    ActivityPlacementType,
+    ActivityHostGetContextInput
+  >();
 
   const getActivityServerBaseUrl = () => resolveActivityServerBaseUrl({
     defaultBaseUrl: deps.getServerBaseUrl(),
@@ -102,25 +125,30 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
     }
   };
 
-  const loadSlot = async () => {
+  const loadSlot = async (input: ActivityHostGetSlotInput) => {
+    validateSlotInput(input);
     const result = await getActivitySlot(
       getActivityServerBaseUrl(),
       activityFetch,
       {
-        placement: ActivityPlacement.DesktopSidebar,
+        placement: input.placement,
         clientVersion: deps.getClientVersion(),
-        containerApiVersion: ActivityContainerApiVersion.NativeDailyCheckInV1,
+        containerApiVersion: containerApiVersionByPlacement[input.placement],
         platform: deps.platform,
       },
     );
     if (result.success) {
-      activeBinding = null;
+      activeBindings.delete(input.placement);
       if (result.data.slotState === ActivitySlotState.Available && result.data.activity) {
         validateActivityBinding(result.data.activity);
-        activeBinding = {
+        if (result.data.activity.placement !== input.placement) {
+          throw new Error('Activity placement does not match the requested slot');
+        }
+        activeBindings.set(input.placement, {
+          placement: input.placement,
           activityCode: result.data.activity.activityCode,
           configRevision: result.data.activity.configRevision,
-        };
+        });
       }
     }
     return result;
@@ -130,6 +158,7 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
     input: ActivityHostGetContextInput | undefined,
   ): asserts input is ActivityHostGetContextInput {
     validateActivityBinding(input);
+    const activeBinding = activeBindings.get(input.placement);
     if (!activeBinding
         || activeBinding.activityCode !== input.activityCode
         || activeBinding.configRevision !== input.configRevision) {
@@ -139,10 +168,11 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
 
   deps.ipcMain.handle(
     ActivityIpc.HostGetSlot,
-    async event => {
+    async (event, input?: ActivityHostGetSlotInput) => {
       try {
         requireMainRenderer(event);
-        return await loadSlot();
+        validateSlotInput(input);
+        return await loadSlot(input);
       } catch (error) {
         return failure(error);
       }
@@ -155,7 +185,7 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
       try {
         requireMainRenderer(event);
         requireActiveBinding(input);
-        return await getDailyCheckInContext(
+        return await getActivityContext(
           getActivityServerBaseUrl(),
           activityFetch,
           input.activityCode,
@@ -174,21 +204,27 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
         requireMainRenderer(event);
         validateExecuteInput(input);
         requireActiveBinding(input);
-        if (actionInFlight) {
+        const actionKey = [
+          input.placement,
+          input.activityCode,
+          input.configRevision,
+          input.actionId,
+        ].join(':');
+        if (actionsInFlight.has(actionKey)) {
           return {
             success: false,
-            error: 'A daily check-in request is already in progress',
+            error: 'An activity action is already in progress',
           } satisfies ActivityResult<never>;
         }
-        actionInFlight = true;
+        actionsInFlight.add(actionKey);
         try {
-          return await executeDailyCheckIn(
+          return await executeActivityAction(
             getActivityServerBaseUrl(),
             activityFetch,
             input,
           );
         } finally {
-          actionInFlight = false;
+          actionsInFlight.delete(actionKey);
         }
       } catch (error) {
         return failure(error);

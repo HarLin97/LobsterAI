@@ -47,9 +47,6 @@ history, fail during an active turn, or complete without displaying the answer.
 - Use OpenClaw's existing `chat.send` command handling and `chat.side_result`
   contract, with a version-scoped compatibility patch for the pinned runtime's
   provider run-safety integration.
-- Never expose provider-internal tool-call markup such as DeepSeek DSML,
-  MiniMax XML, Grok-style tool lines, or generic tool-call XML as a visible BTW
-  answer.
 - Preserve session and agent isolation when multiple Cowork sessions are open
   or syncing from external channels.
 - Add Chinese and English strings for all BTW UI and error states.
@@ -69,12 +66,6 @@ history, fail during an active turn, or complete without displaying the answer.
 - The side-chat window is not a durable or OpenClaw-native thread. Follow-up
   continuity is assembled from bounded renderer-memory entries and supplied to
   each independent `/btw` request.
-- This design does not make the non-Codex direct BTW fallback tool-capable.
-  Tool execution for that path is a separate runtime feature, not a renderer
-  protocol-parsing task.
-- The renderer must not parse or execute raw model-generated tool-call text.
-  Doing so would bypass OpenClaw's tool policy, sandbox, approval, timeout, and
-  audit boundaries.
 - LobsterAI does not reimplement OpenClaw's context snapshot, model selection,
   tool policy, or provider-specific BTW behavior.
 - External IM rendering remains owned by OpenClaw channel integrations. This
@@ -129,189 +120,6 @@ Agent boundary-aware stream because BTW does not own the host Agent dispatch
 scope required by that stream contract. The resolver defaults every caller
 without an explicit purpose to `Agent`, preserving the main task, compaction,
 and other embedded-agent run-safety paths.
-
-## Tool Capability, Protocol Leakage, and Runtime Safety Analysis
-
-This section records the source-level conclusions verified against the pinned
-OpenClaw `v2026.6.1` runtime on 2026-07-30.
-
-The relevant implementation points are OpenClaw's `src/agents/btw.ts`,
-`extensions/codex/src/app-server/side-question.ts`,
-`src/gateway/server-methods/chat.ts`, provider transport filters and the shared
-user-facing sanitizer, plus LobsterAI's
-`src/main/libs/agentEngine/openclawRuntimeAdapter.ts`.
-
-### Capability Is Selected by Runtime Path
-
-BTW tool support is not determined solely by whether a model can call tools in
-a normal Agent turn.
-
-| Runtime path | BTW implementation | Tool and file behavior |
-| --- | --- | --- |
-| Codex native harness | Forks an ephemeral Codex app-server side thread | Keeps the current Codex sandbox, approval policy, native tools, and bridged OpenClaw tools. It may read files and may perform an explicitly requested mutation when policy permits. |
-| Non-Codex providers, including DeepSeek, Qwen, and Ollama | Uses the direct one-shot provider fallback | Intentionally tool-less. It can answer from captured context but cannot perform a new `read`, `write`, `exec`, or other OpenClaw tool operation. |
-| Normal Cowork Agent turn | Uses the normal embedded/native Agent loop | Keeps the existing structured tool execution and LobsterAI tool UI. It is unaffected by the BTW fallback restriction. |
-
-Therefore, the same DeepSeek or Qwen model may execute tools in the main Cowork
-conversation but not through `/btw`. This is an OpenClaw BTW execution-path
-limitation, not a general model capability limitation and not evidence that
-LobsterAI failed to subscribe to a structured BTW tool event.
-
-The `chat.side_result` payload contains final `text` and no tool-call or
-tool-result fields. Codex BTW may execute tools internally and still return
-only the final text. A structured side-tool protocol is needed only if the
-floating window must display live tool progress, results, approvals, or
-failures.
-
-### Observed Tool-Protocol Leakage
-
-The observed failure renders provider protocol text similar to:
-
-```text
-<|DSML|tool_calls>...<|DSML|invoke name="read">...</|DSML|tool_calls>
-```
-
-This is not a Markdown rendering bug and does not mean a `read` succeeded. The
-failure sequence is:
-
-1. a non-Codex BTW question asks for work that requires a tool;
-2. the direct fallback exposes no tools or Agent tool loop;
-3. the model nevertheless emits a pseudo-tool call in provider-specific text;
-4. the fallback returns that text through `chat.side_result.text`;
-5. LobsterAI correctly routes the final text to the matching ephemeral entry;
-6. the Markdown renderer displays it because Markdown sanitization is not
-   model-protocol sanitization.
-
-The non-Codex fallback prompt currently says not to emit tool calls unless the
-side question explicitly asks for them. That exception is ambiguous for a
-tool-less path and can encourage a pseudo-tool call when the user explicitly
-asks to read or modify a file. The fallback instruction should instead state
-unconditionally that it cannot emit or execute tools and should return a
-concise capability message when a fresh tool operation is required.
-
-### Reuse of the Main Conversation Safety Pipeline
-
-The main Agent path provides the reference architecture:
-
-- native provider tool calls are normalized into structured OpenClaw tool
-  events;
-- DeepSeek DSML recovery/filtering is provider-specific and is enabled by the
-  OpenAI-compatible transport's DeepSeek compatibility metadata;
-- the shared `sanitizeUserFacingText` boundary removes known residual MiniMax,
-  Grok, legacy bracket, generic `<tool_call>`, and function-call markup;
-- LobsterAI consumes normalized Agent tool start/update/result events rather
-  than parsing assistant prose.
-
-There is no safe universal parser that can execute every provider's private
-text protocol. The common handling strategy is layered:
-
-1. provider-specific transport normalization for executable structured calls;
-2. a provider-agnostic final sanitizer for known residual control markup;
-3. a LobsterAI main-process display guard for older, unknown, or incompatible
-   runtime output.
-
-DeepSeek DSML should be factored into the shared user-visible sanitization
-boundary rather than implemented as a renderer-only special case. Coverage
-must include ASCII and full-width bar variants, split and truncated blocks,
-MiniMax, Grok, legacy bracket blocks, and generic tool/function-call XML.
-Literal protocol examples in inline or fenced code must remain visible when
-the user is discussing the syntax.
-
-### How Codex Native BTW Handles Tool Runtime Concerns
-
-The Codex harness implements substantially more than the non-Codex fallback:
-
-1. **Independent temporary execution**
-   - It forks the active Codex thread with `ephemeral: true`.
-   - It injects an explicit side-conversation boundary and starts a separate
-     turn with the same model and working directory.
-   - Parent history is reference context only; the side turn does not append
-     its question or answer to the parent transcript.
-2. **Sandbox and approval**
-   - It inherits the parent binding's `sandbox` and `approvalPolicy`.
-   - It resolves the OpenClaw coding-tool catalog through the same sandbox
-     context and bridges dynamic tool calls back to OpenClaw.
-   - App-server approval requests are handled through the existing approval
-     bridge. Auto-approval is derived from the effective sandbox and approval
-     policy.
-   - Developer instructions allow mutation only when the new side question
-     explicitly requests it. This prompt is guidance; sandbox and approvals
-     remain the actual enforcement boundary.
-3. **Stop, timeout, and cleanup**
-   - The upstream abort signal propagates into the side run and every bridged
-     dynamic tool call.
-   - Dynamic tools have bounded timeouts: 90 seconds by default, specialized
-     media timeouts where configured, and a hard maximum of 600 seconds.
-   - Waiting for the side turn also has a bounded completion timeout.
-   - Final cleanup removes listeners and request handlers, aborts remaining
-     tool work, interrupts an unfinished side turn, unsubscribes the child
-     thread, releases the leased app-server client, and unregisters the native
-     hook relay.
-   - LobsterAI's stop button calls `chat.abort` with the exact BTW run id; the
-     resulting abort signal is independent from the main Cowork turn.
-4. **Tool lifecycle and approvals**
-   - Codex internally handles dynamic tools and relays pre-tool, post-tool,
-     permission-request, and before-finalize hooks.
-   - The current Gateway BTW client contract still publishes only the final
-     `chat.side_result.text`.
-   - `OpenClawRuntimeAdapter` intentionally suppresses Agent events correlated
-     to a BTW run, so the LobsterAI floating window currently shows neither
-     tool progress nor tool result cards.
-
-### Remaining Codex BTW Gap: Concurrent Workspace Mutation
-
-Codex BTW does not provide a file lock, workspace snapshot, transaction,
-automatic merge, or conflict detector between the parent turn and the side
-turn. Both can use the same `cwd`.
-
-OpenClaw reduces risk through side-boundary instructions that prefer
-lightweight, non-mutating exploration and require an explicit side request
-before mutation. This is not hard concurrency isolation. If a user explicitly
-asks the side turn to modify a file while the main turn writes the same
-workspace, last-writer-wins behavior or inconsistent reads remain possible.
-
-Any future non-Codex tool-capable BTW implementation must make an explicit
-product decision:
-
-- start with read-only tools;
-- serialize mutating side tools against main-turn mutations;
-- use a snapshot/worktree and merge deliberately; or
-- allow concurrent writes with a visible warning and conflict detection.
-
-The current feature should not imply that OpenClaw already solves this
-concurrency problem.
-
-### Recommended Near-Term Handling
-
-The immediate fix is protocol hygiene, not renderer-side tool execution:
-
-1. patch the pinned OpenClaw fallback to use an unconditional no-tool prompt;
-2. apply the shared user-visible-text sanitizer before returning direct BTW
-   text and extend that boundary for DSML;
-3. preserve remaining visible prose but treat a tool-only response as a stable
-   tool-required failure;
-4. add a LobsterAI main-process defense that replaces residual protocol markup
-   with localized guidance to continue in the main conversation;
-5. log only marker family, run/session identity, and before/after character
-   counts, never the raw prompt, path, arguments, or answer;
-6. keep the renderer as a presentation layer and never execute parsed markup.
-
-If provider-independent localized copy requires a protocol field, prefer an
-optional stable error code such as `tool_required` over matching an English
-backend error string. Older runtimes remain compatible through the
-main-process fallback.
-
-### Future Tool-Capable Non-Codex BTW
-
-If the product later requires non-Codex BTW to use tools, replace the direct
-provider fallback with an independent ephemeral Agent tool loop that inherits
-the model, cwd, tool policy, sandbox, and approvals while owning separate
-abort, timeout, cleanup, and lifecycle state.
-
-Returning only the final answer can continue to use `chat.side_result.text`.
-Displaying tool progress, results, or approvals requires side-run-correlated
-structured events and a dedicated LobsterAI side-tool UI. Parsing DSML or
-other raw text in the renderer is not an acceptable substitute.
 
 ## Product Behavior
 
@@ -369,9 +177,7 @@ the normal message-list persistence model.
   resize or display-resolution changes automatically bring the full window
   back into view.
 - The message area independently scrolls and renders completed answers with
-  the existing sanitized Markdown renderer. Runtime and main-process protocol
-  sanitization happens before Markdown rendering; the renderer does not infer,
-  execute, or repair provider tool protocols.
+  the existing sanitized Markdown renderer.
 - The window reuses the main conversation's theme tokens, borders,
   rounded-input, and send-button treatments. Its shell uses the elevated
   `surface` layer, and the composer uses the same lighter `surface` layer
@@ -610,20 +416,8 @@ and the newly settled thread remain protected.
 
 BTW does not elevate permissions or bypass sandbox/approval policy. Provider,
 Codex harness, tool, and reasoning behavior remains controlled by OpenClaw.
-LobsterAI never executes model-generated control markup. The current floating
-window renders only normalized final side-result text; existing OpenClaw
-sandbox and approval flows remain authoritative even when Codex native BTW
-uses tools internally.
-
-### INV-6: No Provider Protocol Leakage
-
-Recognized provider control blocks must not be exposed as BTW answers. The
-trusted runtime or main-process boundary removes residual DSML, MiniMax, Grok,
-legacy bracket, generic tool-call XML, and function-call markup before the
-answer reaches renderer state. Ordinary prose and literal protocol examples
-inside inline or fenced code remain intact. A tool-only response becomes a
-localized, stable tool-required failure and never becomes an executable
-renderer action.
+LobsterAI renders only the final side-result text and existing approval flows
+remain authoritative.
 
 ## Compatibility
 
@@ -631,12 +425,6 @@ renderer action.
 - The version-scoped OpenClaw `v2026.6.1` patch keeps BTW utility fallbacks
   outside Agent run-safety streams while leaving the default Agent path
   unchanged.
-- The OpenClaw fallback prompt and final-text sanitizer fix applies across
-  non-Codex providers; it is not coupled to DeepSeek model names. DeepSeek DSML
-  is one provider-specific marker family covered by the shared boundary.
-- A LobsterAI main-process residual guard protects installations using an
-  older or incompatible OpenClaw runtime. It changes only BTW display output
-  and must not parse or alter normal main-Agent tool events.
 - macOS and Windows use the same Electron IPC and Gateway event path.
 - Older or incompatible runtimes return a visible ephemeral failure instead of
   silently falling back to a normal chat message.
@@ -651,9 +439,6 @@ renderer action.
 - Runtime logs include the resolved session key, active-main-turn presence,
   side-result routing, question-normalization character counts, terminal-final
   suppression, and cleanup reason.
-- Protocol-sanitization diagnostics include only the marker family, run and
-  session identity, whether visible prose remained, and before/after character
-  counts.
 - Logs must not include raw BTW question or answer content.
 - Unexpected `chat.side_result` payloads and session-mapping failures use
   `console.warn`; request or runtime failures use `console.error`.
@@ -674,22 +459,11 @@ renderer action.
   - duplicate and out-of-order terminal events;
   - Gateway rejection, disconnect, timeout, and session deletion cleanup;
   - absence of Cowork message and transcript mutations.
-- Sanitizer and compatibility tests verify:
-  - complete, split, and truncated DeepSeek DSML blocks using ASCII and
-    full-width bar variants;
-  - MiniMax XML, Grok-style tool lines, legacy bracket blocks, generic
-    tool-call XML, and function-call markup;
-  - mixed prose preserves the visible answer while removing control markup;
-  - a tool-only BTW response becomes the localized tool-required failure;
-  - literal protocol syntax in inline or fenced code remains visible;
-  - no raw prompts, file paths, tool arguments, or answers are logged;
-  - normal main-Agent structured tool start/update/result behavior is
-    unchanged.
 - The Electron compile verifies the shared IPC/preload request, response, and
   listener type contract.
 - UI tests verify the two-action selected-text toolbar, bottom-right default
-  fallback, prompt-anchored default geometry, viewport clamping, thread state,
-  and pending/result/error rendering outside the normal chat message model.
+  geometry, viewport clamping, thread state, and pending/result/error rendering
+  outside the normal chat message model.
 - Changed TypeScript/TSX files pass targeted ESLint.
 - Main/preload changes pass `npm run compile:electron`.
 - Renderer changes pass `npm run build`.
@@ -697,19 +471,9 @@ renderer action.
   - BTW returns while a long main task continues;
   - main streaming/tool state is not interrupted;
   - `/side` behaves identically to `/btw`;
-  - a non-Codex BTW request that needs a fresh tool operation returns safe
-    guidance rather than provider protocol text;
-  - a Codex native BTW tool request follows the inherited sandbox and approval
-    policy, and stopping it does not stop the main task;
-  - the current floating window shows only the Codex BTW final answer and does
-    not falsely imply that live tool progress or approval cards are supported;
-  - explicitly mutating the same workspace from a Codex BTW request and the
-    main task is treated as an unsupported concurrency case until a product
-    isolation policy is implemented;
   - switching sessions does not leak a window or thread;
-  - the window opens above and right-aligned with the main prompt, falls back
-    to the bottom-right when no anchor exists, remains draggable/resizable, and
-    is recovered into view after shrinking the application;
+  - the window opens in the bottom-right, remains draggable/resizable, and is
+    recovered into view after shrinking the application;
   - reload removes the temporary thread;
   - selecting assistant text shows both actions and the side-chat action does
     not send until the side-chat excerpt tag or editable input is submitted;

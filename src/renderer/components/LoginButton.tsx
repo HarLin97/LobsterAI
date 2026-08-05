@@ -7,8 +7,6 @@ import promoSubscriptionIconUrl from '../assets/icons/promo-subscription.svg';
 import rechargeIconUrl from '../assets/icons/recharge.svg';
 import soccerBallIconUrl from '../assets/icons/soccer-ball.svg';
 import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
-import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/EnterpriseAccountMenu';
-import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
 import { authService } from '../services/auth';
 import {
   getPortalCreditsResetActivityUrl,
@@ -502,7 +500,6 @@ interface LoginButtonProps {
 
 const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
   const { isLoggedIn, isLoading, profileSummary, user } = useSelector((state: RootState) => state.auth);
-  const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const [showMenu, setShowMenu] = useState(false);
   const [finalRewardOpen, setFinalRewardOpen] = useState(false);
   const [finalRewardLoading, setFinalRewardLoading] = useState(false);
@@ -510,24 +507,10 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
   const finalReward = getFinalRewards(profileSummary?.creditsResetCampaign)[0];
   const finalRewardText = getFinalRewardText(finalReward);
   const finalRewardAvailable = finalReward !== undefined;
-  const finalRewardUserKey = profileSummary?.id?.toString()
-    ?? user?.id?.toString()
-    ?? user?.userId
-    ?? user?.yid;
-  const finalRewardDismissKey = finalRewardAvailable && finalRewardUserKey && finalReward
-    ? `credits_final_reward_session_dismissed.${finalRewardUserKey}.${finalReward.campaignCode}`
-    : null;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target;
-      const isEnterpriseAccountFlyout = target instanceof Element
-        && target.closest('[data-enterprise-account-flyout="true"]') !== null;
-      if (
-        containerRef.current
-        && !containerRef.current.contains(target as Node)
-        && !isEnterpriseAccountFlyout
-      ) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         setShowMenu(false);
       }
     };
@@ -540,12 +523,10 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
   }, [showMenu]);
 
   useEffect(() => {
-    if (!isLoggedIn || !finalRewardDismissKey) {
+    if (!isLoggedIn || !finalRewardAvailable) {
       setFinalRewardOpen(false);
-      return;
     }
-    setFinalRewardOpen(sessionStorage.getItem(finalRewardDismissKey) !== '1');
-  }, [finalRewardDismissKey, isLoggedIn]);
+  }, [finalRewardAvailable, isLoggedIn]);
 
   if (isLoading) {
     return null;
@@ -580,9 +561,6 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
 
   const closeFinalReward = () => {
     if (finalRewardLoading) return;
-    if (finalRewardDismissKey) {
-      sessionStorage.setItem(finalRewardDismissKey, '1');
-    }
     setFinalRewardOpen(false);
   };
 
@@ -631,19 +609,10 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
         )}
       </button>
       {showMenu && isLoggedIn && (
-        enterpriseAccountContext
-          ? (
-            <EnterpriseAccountMenu
-              context={enterpriseAccountContext}
-              onClose={() => setShowMenu(false)}
-            />
-          )
-          : (
-            <UserMenu
-              onClose={() => setShowMenu(false)}
-              onOpenFinalReward={() => setFinalRewardOpen(true)}
-            />
-          )
+        <UserMenu
+          onClose={() => setShowMenu(false)}
+          onOpenFinalReward={() => setFinalRewardOpen(true)}
+        />
       )}
       <CreditsFinalRewardModal
         open={finalRewardOpen}

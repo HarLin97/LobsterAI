@@ -1,8 +1,12 @@
 import {
   type ActivityContextResponse,
-  type ActivityDescriptor,
   ActivityLifecycleState,
+  ActivityPlacement,
+  ActivityTemplate,
+  ActivityType,
   DailyCheckInAction,
+  type DailyCheckInContextResponse,
+  type DailyCheckInDescriptor,
   type DailyCheckInState,
 } from '../../shared/activity/constants';
 
@@ -16,9 +20,11 @@ const isNonEmptyString = (value: unknown): value is string => (
   typeof value === 'string' && value.trim().length > 0
 );
 
-export function isDailyCheckInDescriptor(value: unknown): value is ActivityDescriptor {
+export function isDailyCheckInDescriptor(
+  value: unknown,
+): value is DailyCheckInDescriptor {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const descriptor = value as Partial<ActivityDescriptor>;
+  const descriptor = value as Partial<DailyCheckInDescriptor>;
   return typeof descriptor.activityCode === 'string'
     && ACTIVITY_CODE_PATTERN.test(descriptor.activityCode)
     && Number.isInteger(descriptor.configRevision)
@@ -27,6 +33,9 @@ export function isDailyCheckInDescriptor(value: unknown): value is ActivityDescr
     && isNonEmptyString(descriptor.endAt)
     && isNonEmptyString(descriptor.timezone)
     && typeof descriptor.loginRequired === 'boolean'
+    && descriptor.activityType === ActivityType.DailyCheckIn
+    && descriptor.placement === ActivityPlacement.DesktopSidebar
+    && descriptor.templateKey === ActivityTemplate.NativeDailyCheckInV1
     && typeof descriptor.periodLabel === 'string'
     && typeof descriptor.cardTitle === 'string'
     && typeof descriptor.guestModalTitle === 'string'
@@ -54,7 +63,9 @@ export function isDailyCheckInState(value: unknown): value is DailyCheckInState 
     && state.timezone.trim().length > 0;
 }
 
-export function isDailyCheckInContext(value: unknown): value is ActivityContextResponse {
+export function isDailyCheckInContext(
+  value: unknown,
+): value is DailyCheckInContextResponse {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const context = value as Partial<ActivityContextResponse>;
   return typeof context.activityCode === 'string'
@@ -74,7 +85,7 @@ export function isDailyCheckInContext(value: unknown): value is ActivityContextR
 
 export function isActiveDailyCheckInContext(
   value: unknown,
-): value is ActivityContextResponse {
+): value is DailyCheckInContextResponse {
   return isDailyCheckInContext(value)
     && value.lifecycleState === ActivityLifecycleState.Active;
 }

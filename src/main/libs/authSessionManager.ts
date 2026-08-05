@@ -33,7 +33,6 @@ type AuthFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 type AuthSessionManagerOptions = {
   getTokens: () => AuthTokens | null;
-  getSessionKey?: () => string | null;
   saveTokens: (tokens: AuthTokens) => void;
   fetch: AuthFetch;
   getRefreshUrl: () => string;
@@ -52,7 +51,6 @@ type AuthSessionManagerOptions = {
 type PendingRefresh = {
   promise: Promise<AuthRefreshResult>;
   joinedRequests: number;
-  sessionKey: string | null;
 };
 
 const DEFAULT_REFRESH_TIMEOUT_MS = 15_000;
@@ -134,8 +132,7 @@ export class AuthSessionManager {
   }
 
   refresh(reason: AuthRefreshReasonValue): Promise<AuthRefreshResult> {
-    const sessionKey = this.getSessionKey();
-    if (this.pendingRefresh?.sessionKey === sessionKey) {
+    if (this.pendingRefresh) {
       this.pendingRefresh.joinedRequests += 1;
       return this.pendingRefresh.promise;
     }
@@ -143,7 +140,6 @@ export class AuthSessionManager {
     const startedAt = this.options.now();
     const pending: PendingRefresh = {
       joinedRequests: 0,
-      sessionKey,
       promise: Promise.resolve({
         outcome: AuthRefreshOutcome.NoTokens,
         reason,
@@ -152,7 +148,7 @@ export class AuthSessionManager {
       }),
     };
 
-    const promise = this.performRefresh(reason, sessionKey)
+    const promise = this.performRefresh(reason)
       .then(result => {
         const completed: AuthRefreshResult = {
           ...result,
@@ -181,33 +177,16 @@ export class AuthSessionManager {
         'No auth tokens are available',
       );
     }
-    const sessionKey = this.getSessionKey();
 
     const doFetch = async (accessToken: string): Promise<Response> => {
-      if (this.getSessionKey() !== sessionKey) {
-        throw new AuthSessionRequestError(
-          AuthSessionStatus.TemporarilyUnavailable,
-          'Auth session changed before the authenticated request was sent',
-        );
-      }
       const headers = new Headers(options?.headers);
       headers.set('Authorization', `Bearer ${accessToken}`);
       try {
-        const response = await this.options.fetch(url, {
+        return await this.options.fetch(url, {
           ...options,
           headers,
         });
-        if (this.getSessionKey() !== sessionKey) {
-          throw new AuthSessionRequestError(
-            AuthSessionStatus.TemporarilyUnavailable,
-            'Auth session changed while the authenticated request was running',
-          );
-        }
-        return response;
       } catch (error) {
-        if (error instanceof AuthSessionRequestError) {
-          throw error;
-        }
         throw new AuthSessionRequestError(
           AuthSessionStatus.TemporarilyUnavailable,
           'Authenticated request failed',
@@ -260,7 +239,6 @@ export class AuthSessionManager {
 
   private async performRefresh(
     reason: AuthRefreshReasonValue,
-    sessionKey: string | null,
   ): Promise<AuthRefreshResultWithoutTiming> {
     const tokens = this.options.getTokens();
     if (!tokens?.refreshToken) {
@@ -292,17 +270,10 @@ export class AuthSessionManager {
       const accessToken = readAccessToken(data);
       const currentTokens = this.options.getTokens();
 
-      if (!currentTokens || this.getSessionKey() !== sessionKey) {
+      if (!currentTokens) {
         this.options.log?.info(
-          `[Auth] ignored token refresh response after the auth session changed (reason: ${reason})`,
+          `[Auth] ignored token refresh response after credentials were cleared (reason: ${reason})`,
         );
-        if (currentTokens) {
-          return {
-            outcome: AuthRefreshOutcome.Success,
-            reason,
-            accessToken: currentTokens.accessToken,
-          };
-        }
         return {
           outcome: AuthRefreshOutcome.NoTokens,
           reason,
@@ -388,10 +359,6 @@ export class AuthSessionManager {
       errorCode: result.errorCode,
       joinedRequests: result.joinedRequests,
     });
-  }
-
-  private getSessionKey(): string | null {
-    return this.options.getSessionKey?.() ?? null;
   }
 
   private invokeSafely<T>(callback: ((value: T) => void) | undefined, value: T): void {

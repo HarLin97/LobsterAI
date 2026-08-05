@@ -69,9 +69,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
       '积分额度已用完，请升级套餐后继续使用。[立即升级/充值](https://lobsterai.youdao.com/portal#/pricing)',
     coworkErrorFreeQuotaExhausted:
       '积分额度已用完，请升级套餐后继续使用。[立即升级/充值](https://lobsterai.youdao.com/portal#/pricing)',
-    coworkErrorEnterpriseMemberQuotaExhausted: '当前企业成员月度额度已用完。',
-    coworkErrorEnterprisePoolExhausted: '当前企业积分池已用完。',
-    coworkErrorEnterpriseCreditBatchesExpired: '当前企业积分批次已全部过期。',
     coworkErrorInsufficientBalance: 'API 余额不足，请充值后重试。',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制。',
     coworkErrorMessageTooLarge:
@@ -87,6 +84,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorModelResponseTimeout: '模型响应超时，请稍后重试。',
     coworkErrorNetworkError: '网络连接失败，请检查网络设置。',
     coworkErrorRateLimit: '请求过于频繁，请稍后再试。',
+    coworkErrorModelOverloaded: '模型服务当前繁忙或容量不足，请稍后重试。',
     coworkErrorContentFiltered: '内容未通过安全审核，请修改后重试。',
     coworkErrorServerError: '服务端出现错误，请稍后重试。',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
@@ -115,7 +113,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkBtwSubmitFailed: '提交顺便问问失败。',
     coworkBtwNoPending: '找不到正在回答的顺便问问。',
     coworkBtwStopFailed: '停止顺便问问失败，请重试。',
-    coworkBtwToolRequired: '这个问题需要调用工具，请在主对话中继续。',
     imErrorPrefix: '处理消息时出错',
 
     // Exec approval continuation
@@ -132,14 +129,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Auth quota
     authPlanFree: '免费',
     authPlanStandard: '标准',
-    enterpriseAccountContextMismatchTitle: '企业身份已失效',
-    enterpriseAccountContextMismatchMessage:
-      '当前企业身份与登录凭证不一致。相关图片和视频任务已停止轮询，请重新登录或重新选择企业身份后再试。',
-    enterpriseAccountContextMismatchConfirm: '知道了',
-    authAccountChanged: '登录账号已发生变化，请重试。',
-    authLoginRequired: '请先登录后再试。',
-    mediaTaskAccountMismatch: '该媒体任务属于其他账号，无法操作。',
-    enterpriseMediaQuotaUnavailable: '当前企业的媒体生成额度暂不可用。',
 
     // Data migration dialogs
     dataMigrationBackupDialogTitle: '备份 LobsterAI 数据',
@@ -402,9 +391,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Your credits have been used up. Upgrade your plan to continue.\n\n[Upgrade or recharge](https://lobsterai.youdao.com/portal#/pricing)',
     coworkErrorFreeQuotaExhausted:
       'Your credits have been used up. Upgrade your plan to continue.\n\n[Upgrade or recharge](https://lobsterai.youdao.com/portal#/pricing)',
-    coworkErrorEnterpriseMemberQuotaExhausted: 'The current enterprise member monthly quota has been used up.',
-    coworkErrorEnterprisePoolExhausted: 'The current enterprise credit pool has been used up.',
-    coworkErrorEnterpriseCreditBatchesExpired: 'All credit batches for the current enterprise have expired.',
     coworkErrorInsufficientBalance: 'Insufficient API balance. Please top up and try again.',
     coworkErrorInputTooLong: 'Input too long, exceeding model context limit.',
     coworkErrorMessageTooLarge:
@@ -420,6 +406,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorModelResponseTimeout: 'The model response timed out. Please try again.',
     coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
     coworkErrorRateLimit: 'Too many requests. Please try again later.',
+    coworkErrorModelOverloaded:
+      'The model service is temporarily busy or at capacity. Please try again later.',
     coworkErrorContentFiltered:
       'Content did not pass the safety review. Please modify and try again.',
     coworkErrorServerError: 'Server error occurred. Please try again later.',
@@ -454,8 +442,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkBtwSubmitFailed: 'Failed to submit the BTW side question.',
     coworkBtwNoPending: 'No pending BTW side question was found.',
     coworkBtwStopFailed: 'Failed to stop the BTW side question. Please try again.',
-    coworkBtwToolRequired:
-      'This question requires a tool operation. Continue in the main conversation.',
     imErrorPrefix: 'Error processing message',
 
     // Exec approval continuation
@@ -473,14 +459,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Auth quota
     authPlanFree: 'Free',
     authPlanStandard: 'Standard',
-    enterpriseAccountContextMismatchTitle: 'Enterprise identity expired',
-    enterpriseAccountContextMismatchMessage:
-      'Your enterprise identity no longer matches the login credentials. Related image and video polling has stopped. Sign in again or choose an enterprise identity before retrying.',
-    enterpriseAccountContextMismatchConfirm: 'OK',
-    authAccountChanged: 'The signed-in account changed. Try again.',
-    authLoginRequired: 'Sign in and try again.',
-    mediaTaskAccountMismatch: 'This media task belongs to another account.',
-    enterpriseMediaQuotaUnavailable: 'Media generation quota is unavailable for this enterprise.',
 
     // Data migration dialogs
     dataMigrationBackupDialogTitle: 'Back Up LobsterAI Data',

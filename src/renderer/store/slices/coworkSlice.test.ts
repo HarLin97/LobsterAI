@@ -10,17 +10,13 @@ import {
   type CoworkSelectedTextSnippet,
   CoworkSelectedTextSource,
 } from '../../../shared/cowork/selectedText';
-import { CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { CoworkSessionStatusValue } from '../../types/cowork';
-import type { MediaModel } from '../../types/mediaGeneration';
 import coworkReducer, {
   addMessage,
-  addPendingSteer,
   addSession,
   appendBtwEntry,
   clearBtwComposerIfUnchanged,
   clearCurrentSession,
-  clearMediaAccountState,
   closeBtwThread,
   deleteSession,
   finishSessionNavigation,
@@ -31,8 +27,6 @@ import coworkReducer, {
   setConfig,
   setCurrentSession,
   setCurrentSessionId,
-  setMediaModels,
-  setMediaSelection,
   setSessions,
   settleBtwEntry,
   updateCurrentSessionModelOverride,
@@ -84,54 +78,6 @@ test('defaults hidden OpenClaw session policy to thirty days', () => {
   });
   expect(state.config.skipMissedJobs).toBe(true);
   expect(state.config.openClawHeartbeatEnabled).toBe(true);
-});
-
-test('clears account-scoped media models and selections together', () => {
-  const imageModel: MediaModel = {
-    modelId: 'image-model',
-    displayName: 'Image Model',
-    provider: 'provider',
-    mediaType: 'image',
-    generationTimeout: 60,
-    pricing: {},
-  };
-  const withModels = coworkReducer(undefined, setMediaModels({
-    image: [imageModel],
-    video: [],
-    ownerAccountKey: 'enterprise:6:1001',
-  }));
-  const withSelection = coworkReducer(withModels, setMediaSelection({
-    draftKey: '__home__',
-    selection: {
-      mode: 'image',
-      modelId: imageModel.modelId,
-      modelName: imageModel.displayName,
-    },
-  }));
-  const withPendingMediaStatus = coworkReducer(withSelection, updateToolUseMediaStatus({
-    sessionId: 'session-1',
-    toolCallId: 'tool-enterprise-a',
-    details: { taskId: 'task-enterprise-a', status: 'running' },
-  }));
-  const withQueuedTurn = coworkReducer(withPendingMediaStatus, addPendingSteer({
-    id: 'steer-enterprise-a',
-    sessionId: 'session-1',
-    ownerAccountKey: 'enterprise:6:1001',
-    accountGeneration: 2,
-    text: 'generate an image',
-    mediaSelection: { mode: 'image', modelId: imageModel.modelId },
-    status: CoworkSteerStatus.Pending,
-    createdAt: 1,
-    updatedAt: 1,
-  }));
-  const cleared = coworkReducer(withQueuedTurn, clearMediaAccountState());
-
-  expect(cleared.mediaModels).toEqual({ image: [], video: [] });
-  expect(cleared.mediaModelsOwnerAccountKey).toBeNull();
-  expect(cleared.mediaSelection).toEqual({});
-  expect(cleared.pendingMediaStatusUpdates).toEqual({});
-  expect(cleared.pendingSteers).toEqual({});
-  expect(cleared.rejectedSteers).toEqual({});
 });
 
 test('keeps a cross-agent session presentation target until the session loads', () => {

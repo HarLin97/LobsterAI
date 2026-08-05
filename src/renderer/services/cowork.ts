@@ -990,12 +990,9 @@ class CoworkService {
     }
 
     const now = Date.now();
-    const authStateAtStart = store.getState().auth;
     store.dispatch(addPendingSteer({
       id: options.clientSteerId,
       sessionId: options.sessionId,
-      ownerAccountKey: authStateAtStart.ownerAccountKey,
-      accountGeneration: authStateAtStart.accountGeneration,
       text,
       status: CoworkSteerStatus.Pending,
       createdAt: now,
@@ -1012,17 +1009,6 @@ class CoworkService {
         ...options,
         text,
       });
-      const currentAuthState = store.getState().auth;
-      if (
-        currentAuthState.ownerAccountKey !== authStateAtStart.ownerAccountKey
-        || currentAuthState.accountGeneration !== authStateAtStart.accountGeneration
-      ) {
-        this.logDiagnostic(
-          'warn',
-          `discarded steer ${options.clientSteerId} response after the account changed`,
-        );
-        return false;
-      }
       if (result?.success && result.status === CoworkSteerStatus.Accepted) {
         store.dispatch(updateSteerStatus({
           sessionId: options.sessionId,
@@ -1052,13 +1038,6 @@ class CoworkService {
       );
       return false;
     } catch (error) {
-      const currentAuthState = store.getState().auth;
-      if (
-        currentAuthState.ownerAccountKey !== authStateAtStart.ownerAccountKey
-        || currentAuthState.accountGeneration !== authStateAtStart.accountGeneration
-      ) {
-        return false;
-      }
       const message = error instanceof Error ? error.message : 'Failed to submit steer input';
       store.dispatch(updateSteerStatus({
         sessionId: options.sessionId,

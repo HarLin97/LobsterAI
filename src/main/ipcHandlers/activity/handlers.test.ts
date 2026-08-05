@@ -10,9 +10,13 @@ import {
   type ActivityContextResponse,
   ActivityIpc,
   ActivityLifecycleState,
+  ActivityPlacement,
   type ActivityResult,
   ActivitySlotState,
+  ActivityTemplate,
+  ActivityType,
   DailyCheckInAction,
+  OneTimeCreditAction,
 } from '../../../shared/activity/constants';
 import { registerActivityIpcHandlers } from './handlers';
 
@@ -29,6 +33,9 @@ const apiResponse = (data: unknown): Response => new Response(
 const activityDescriptor = {
   activityCode: 'login-seven-days',
   configRevision: 3,
+  activityType: ActivityType.DailyCheckIn,
+  placement: ActivityPlacement.DesktopSidebar,
+  templateKey: ActivityTemplate.NativeDailyCheckInV1,
   startAt: '2026-07-30T00:00:00Z',
   endAt: '2026-08-06T00:00:00Z',
   timezone: 'Asia/Shanghai',
@@ -58,6 +65,43 @@ const activityContext: ActivityContextResponse = {
     timezone: 'Asia/Shanghai',
   },
   actions: [DailyCheckInAction.CheckIn],
+};
+
+const startupDescriptor = {
+  activityCode: 'netease-user-welcome',
+  configRevision: 1,
+  activityType: ActivityType.OneTimeCreditReward,
+  placement: ActivityPlacement.DesktopStartupModal,
+  templateKey: ActivityTemplate.NativeStartupCreditV1,
+  startAt: '2026-07-30T00:00:00Z',
+  endAt: '2026-08-30T00:00:00Z',
+  timezone: 'Asia/Shanghai',
+  loginRequired: true,
+  periodLabel: 'Limited time',
+  cardTitle: 'User reward',
+  modalTitle: 'Welcome to LobsterAI',
+  modalDescription: 'Log in to claim 5000 credits',
+  actionText: 'Claim now',
+  posterUrl: 'https://example.com/reward.png',
+  posterAlt: 'LobsterAI user reward',
+  autoPopupStartAt: '2026-07-30T00:00:00Z',
+  autoPopupEndAt: '2026-08-15T00:00:00Z',
+};
+
+const startupContext: ActivityContextResponse = {
+  activityCode: startupDescriptor.activityCode,
+  configRevision: startupDescriptor.configRevision,
+  lifecycleState: ActivityLifecycleState.Active,
+  authenticated: true,
+  loginRequired: true,
+  serverTime: '2026-07-30T01:00:00Z',
+  state: {
+    claimed: false,
+    claimable: true,
+    rewardCredits: 5000,
+    rewardValidityDays: 30,
+  },
+  actions: [OneTimeCreditAction.Claim],
 };
 
 const actionResponse: ActivityActionResponse = {
@@ -131,7 +175,7 @@ describe('activity IPC handlers', () => {
     vi.restoreAllMocks();
   });
 
-  test('uses the fixed desktop slot and binds context access to its activity', async () => {
+  test('uses the requested supported slot and binds context access to its activity', async () => {
     const harness = createHarness();
     harness.fetchWithAuth
       .mockResolvedValueOnce(apiResponse({
@@ -145,7 +189,7 @@ describe('activity IPC handlers', () => {
 
     const slotResult = await getSlot?.(
       harness.event,
-      { placement: 'untrusted_placement' },
+      { placement: ActivityPlacement.DesktopSidebar },
     );
     expect(slotResult?.success).toBe(true);
     expect(harness.fetchWithAuth).toHaveBeenNthCalledWith(
@@ -157,6 +201,7 @@ describe('activity IPC handlers', () => {
     );
 
     const rejected = await getContext?.(harness.event, {
+      placement: ActivityPlacement.DesktopSidebar,
       activityCode: 'different-activity',
       configRevision: 3,
     });
@@ -167,6 +212,7 @@ describe('activity IPC handlers', () => {
     expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
 
     const accepted = await getContext?.(harness.event, {
+      placement: ActivityPlacement.DesktopSidebar,
       activityCode: activityDescriptor.activityCode,
       configRevision: activityDescriptor.configRevision,
     });
@@ -186,10 +232,14 @@ describe('activity IPC handlers', () => {
     const getSlot = harness.handlers.get(ActivityIpc.HostGetSlot);
     const executeAction = harness.handlers.get(ActivityIpc.HostExecuteAction);
 
-    await getSlot?.(harness.event);
+    await getSlot?.(harness.event, {
+      placement: ActivityPlacement.DesktopSidebar,
+    });
     const rejected = await executeAction?.(harness.event, {
+      placement: ActivityPlacement.DesktopSidebar,
       activityCode: activityDescriptor.activityCode,
       configRevision: activityDescriptor.configRevision + 1,
+      actionId: DailyCheckInAction.CheckIn,
       idempotencyKey: 'request-1',
     });
     expect(rejected).toEqual({
@@ -199,8 +249,10 @@ describe('activity IPC handlers', () => {
     expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
 
     const accepted = await executeAction?.(harness.event, {
+      placement: ActivityPlacement.DesktopSidebar,
       activityCode: activityDescriptor.activityCode,
       configRevision: activityDescriptor.configRevision,
+      actionId: DailyCheckInAction.CheckIn,
       idempotencyKey: 'request-2',
     });
     expect(accepted).toEqual({ success: true, data: actionResponse });
@@ -218,6 +270,53 @@ describe('activity IPC handlers', () => {
     );
   });
 
+  test('keeps sidebar and startup-modal bindings independent', async () => {
+    const harness = createHarness();
+    harness.fetchWithAuth
+      .mockResolvedValueOnce(apiResponse({
+        slotState: ActivitySlotState.Available,
+        serverTime: '2026-07-30T01:00:00Z',
+        activity: activityDescriptor,
+      }))
+      .mockResolvedValueOnce(apiResponse({
+        slotState: ActivitySlotState.Available,
+        serverTime: '2026-07-30T01:00:00Z',
+        activity: startupDescriptor,
+      }))
+      .mockResolvedValueOnce(apiResponse(activityContext))
+      .mockResolvedValueOnce(apiResponse(startupContext));
+    const getSlot = harness.handlers.get(ActivityIpc.HostGetSlot);
+    const getContext = harness.handlers.get(ActivityIpc.HostGetContext);
+
+    await getSlot?.(harness.event, {
+      placement: ActivityPlacement.DesktopSidebar,
+    });
+    await getSlot?.(harness.event, {
+      placement: ActivityPlacement.DesktopStartupModal,
+    });
+
+    const sidebarResult = await getContext?.(harness.event, {
+      placement: ActivityPlacement.DesktopSidebar,
+      activityCode: activityDescriptor.activityCode,
+      configRevision: activityDescriptor.configRevision,
+    });
+    const startupResult = await getContext?.(harness.event, {
+      placement: ActivityPlacement.DesktopStartupModal,
+      activityCode: startupDescriptor.activityCode,
+      configRevision: startupDescriptor.configRevision,
+    });
+
+    expect(sidebarResult).toEqual({ success: true, data: activityContext });
+    expect(startupResult).toEqual({ success: true, data: startupContext });
+    expect(harness.fetchWithAuth).toHaveBeenNthCalledWith(
+      2,
+      'https://server.example/api/client-activities/slot'
+        + '?placement=desktop_startup_modal&clientVersion=2026.7.30'
+        + '&containerApiVersion=3&platform=win32',
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+  });
+
   test('rejects activity requests from a non-main frame', async () => {
     const harness = createHarness();
     const getSlot = harness.handlers.get(ActivityIpc.HostGetSlot);
@@ -226,7 +325,9 @@ describe('activity IPC handlers', () => {
       senderFrame: {},
     } as unknown as IpcMainInvokeEvent;
 
-    const result = await getSlot?.(untrustedEvent);
+    const result = await getSlot?.(untrustedEvent, {
+      placement: ActivityPlacement.DesktopSidebar,
+    });
 
     expect(result).toEqual({
       success: false,

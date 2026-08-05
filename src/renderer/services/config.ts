@@ -19,10 +19,17 @@ import {
   FontPreferences,
   isCustomProvider,
   normalizeFontPreference,
+  resolveArtifactAutoPreviewEnabled,
   ShortcutAction,
   type ShortcutConfig,
 } from '../config';
 import { localStore } from './store';
+
+export const ConfigServiceEvent = {
+  Updated: 'config-updated',
+} as const;
+
+export type ConfigServiceEvent = typeof ConfigServiceEvent[keyof typeof ConfigServiceEvent];
 
 type ProviderModel = NonNullable<ProviderConfig['models']>[number];
 
@@ -684,6 +691,9 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
       FontPreferences.CodeFontSizeMin,
       FontPreferences.CodeFontSizeMax,
     ),
+    artifactAutoPreviewEnabled: resolveArtifactAutoPreviewEnabled(
+      storedConfig.artifactAutoPreviewEnabled,
+    ),
     browserWebAccess: normalizeBrowserWebAccessConfig(storedConfig.browserWebAccess),
     notificationSettings: normalizeNotificationSettings(storedConfig.notificationSettings),
   });
@@ -761,7 +771,7 @@ class ConfigService {
       ),
     } as AppConfig);
     await localStore.setItem(CONFIG_KEYS.APP_CONFIG, this.config);
-    window.dispatchEvent(new CustomEvent('config-updated'));
+    window.dispatchEvent(new CustomEvent(ConfigServiceEvent.Updated));
   }
 
   getApiConfig() {
