@@ -12,15 +12,21 @@ export interface UserProfile {
   userId?: string;         // exchange endpoint only (string "6")
   id?: number;             // profile endpoint only (number 6)
   status?: number;         // profile endpoint only
+  accountMode?: 'personal' | 'enterprise';
 }
 
 export interface UserQuota {
   planName: string;           // "免费", "标准", "进阶", "专业"
-  subscriptionStatus: string; // "free" | "active"
+  subscriptionStatus: string; // "free" | "active" | "enterprise"
   creditsLimit: number;       // total credits limit
   creditsUsed: number;        // credits used
   creditsRemaining: number;   // credits remaining
   hasPaidCredits?: boolean;   // true if user has subscription, boost, or invitation credits
+  mediaGenerationEntitled?: boolean; // explicit server-computed media entitlement
+  shareEntitled?: boolean;    // explicit server-computed sharing entitlement
+  deploymentEntitled?: boolean; // explicit server-computed deployment entitlement
+  accountMode?: 'personal' | 'enterprise';
+  enterpriseId?: number;
 }
 
 export interface CreditItem {
@@ -93,6 +99,8 @@ interface AuthState {
   user: UserProfile | null;
   quota: UserQuota | null;
   profileSummary: ProfileSummary | null;
+  ownerAccountKey: string | null;
+  accountGeneration: number;
 }
 
 const initialState: AuthState = {
@@ -102,6 +110,8 @@ const initialState: AuthState = {
   user: null,
   quota: null,
   profileSummary: null,
+  ownerAccountKey: null,
+  accountGeneration: 0,
 };
 
 const authSlice = createSlice({
@@ -111,28 +121,50 @@ const authSlice = createSlice({
     setAuthLoading(state, action: PayloadAction<boolean>) {
       state.isLoading = action.payload;
     },
-    setLoggedIn(state, action: PayloadAction<{ user: UserProfile; quota: UserQuota }>) {
+    setLoggedIn(state, action: PayloadAction<{
+      user: UserProfile;
+      quota: UserQuota | null;
+      ownerAccountKey: string;
+    }>) {
+      if (state.ownerAccountKey !== action.payload.ownerAccountKey) {
+        state.accountGeneration += 1;
+        state.profileSummary = null;
+      }
       state.isLoggedIn = true;
       state.isLoading = false;
       state.sessionStatus = AuthSessionStatus.Authenticated;
       state.user = action.payload.user;
       state.quota = action.payload.quota;
+      state.ownerAccountKey = action.payload.ownerAccountKey;
     },
     setLoggedOut(state) {
+      if (state.ownerAccountKey !== null) {
+        state.accountGeneration += 1;
+      }
       state.isLoggedIn = false;
       state.isLoading = false;
       state.sessionStatus = AuthSessionStatus.Unauthenticated;
       state.user = null;
       state.quota = null;
       state.profileSummary = null;
+      state.ownerAccountKey = null;
+    },
+    invalidateAuthAccountContext(state) {
+      state.accountGeneration += 1;
+      state.quota = null;
+      state.profileSummary = null;
     },
     setAuthExpired(state) {
+      if (state.ownerAccountKey !== null) {
+        state.accountGeneration += 1;
+      }
       state.isLoggedIn = false;
       state.isLoading = false;
       state.sessionStatus = AuthSessionStatus.Expired;
       state.user = null;
       state.quota = null;
       state.profileSummary = null;
+      state.ownerAccountKey = null;
     },
     setAuthTemporarilyUnavailable(
       state,
@@ -156,11 +188,16 @@ const authSlice = createSlice({
     setProfileSummary(state, action: PayloadAction<ProfileSummary>) {
       state.profileSummary = action.payload;
     },
+    clearProfileSummary(state) {
+      state.profileSummary = null;
+    },
   },
 });
 
 export const {
+  clearProfileSummary,
   setAuthExpired,
+  invalidateAuthAccountContext,
   setAuthLoading,
   setAuthTemporarilyUnavailable,
   setLoggedIn,
