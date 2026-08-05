@@ -4097,7 +4097,16 @@ if (!gotTheLock) {
       : level === 'warn' ? console.warn
         : level === 'debug' ? console.debug
           : console.log;
-    fn(`[Renderer][${tag}] ${message}`);
+    // Keep renderer diagnostics useful without allowing an accidental large
+    // payload or malformed tag to inflate the main-process log indefinitely.
+    const safeTag = (typeof tag === 'string' ? tag : 'Unknown')
+      .replace(/[^a-zA-Z0-9_.-]/g, '_')
+      .slice(0, 64) || 'Unknown';
+    const safeMessage = (typeof message === 'string' ? message : String(message ?? ''))
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 2_000);
+    fn(`[Renderer][${safeTag}] ${safeMessage}`);
   });
 
   // Allow renderer to retrieve a buffered auth code on init

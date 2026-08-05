@@ -38,6 +38,7 @@ import {
   resolveSidebarCarouselIndex,
   shouldShowSidebarCarouselControls,
 } from './sidebarExperienceCarouselState';
+import { logSidebarExperienceDiagnostic } from './sidebarExperienceDiagnostics';
 import {
   type DailyCheckInSnapshot,
   useDailyCheckInActivity,
@@ -121,14 +122,28 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
       return undefined;
     }
     let isCurrent = true;
-    void readDailyCheckInDismissState(activityDismissKey).then(state => {
-      if (isCurrent) {
+    void readDailyCheckInDismissState(activityDismissKey)
+      .then(state => {
+        if (isCurrent) {
+          setActivityDismissState({
+            key: activityDismissKey,
+            state,
+          });
+        }
+      })
+      .catch(error => {
+        if (!isCurrent) return;
+        // Storage failure should not leave the entire experience slot loading forever.
         setActivityDismissState({
           key: activityDismissKey,
-          state,
+          state: null,
         });
-      }
-    });
+        logSidebarExperienceDiagnostic(
+          'warn',
+          'failed to read daily check-in dismiss state; continuing without dismissal',
+          error,
+        );
+      });
     return () => {
       isCurrent = false;
     };
@@ -262,8 +277,9 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
       activityBusinessDate,
       dismissedAt,
     ).catch(error => {
-      console.warn(
-        '[DailyCheckIn] failed to persist sidebar dismiss state:',
+      logSidebarExperienceDiagnostic(
+        'warn',
+        'failed to persist daily check-in dismiss state',
         error,
       );
     });
@@ -277,6 +293,10 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
     }
     try {
       const response = await claim();
+      logSidebarExperienceDiagnostic(
+        'info',
+        `daily check-in claimed; creditsGranted=${response.result.creditsGranted}`,
+      );
       setSuccessCredits(response.result.creditsGranted);
       if (successTimerRef.current) clearTimeout(successTimerRef.current);
       successTimerRef.current = setTimeout(() => {
@@ -284,6 +304,7 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
         successTimerRef.current = null;
       }, CLAIM_SUCCESS_DURATION_MS);
     } catch (error) {
+      logSidebarExperienceDiagnostic('warn', 'daily check-in claim failed', error);
       window.dispatchEvent(new CustomEvent('app:showToast', {
         detail: error instanceof Error
           ? error.message

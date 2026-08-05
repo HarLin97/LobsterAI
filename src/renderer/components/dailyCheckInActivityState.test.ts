@@ -12,6 +12,7 @@ import {
 import {
   canClaimDailyCheckIn,
   formatDailyCheckInCredits,
+  getDailyCheckInAuthScopeKey,
   isActiveDailyCheckInContext,
   isDailyCheckInContext,
   isDailyCheckInDescriptor,
@@ -43,6 +44,16 @@ const context = (
 });
 
 describe('dailyCheckInActivityState', () => {
+  test('separates daily check-in requests across account modes and generations', () => {
+    expect(getDailyCheckInAuthScopeKey('personal:6', 1)).not.toBe(
+      getDailyCheckInAuthScopeKey('enterprise:6:1001', 2),
+    );
+    expect(getDailyCheckInAuthScopeKey('enterprise:6:1001', 2)).not.toBe(
+      getDailyCheckInAuthScopeKey('enterprise:6:1001', 3),
+    );
+    expect(getDailyCheckInAuthScopeKey(null, 4)).toBe('anonymous:4');
+  });
+
   test('allows an authenticated active user to claim', () => {
     expect(canClaimDailyCheckIn(context())).toBe(true);
     expect(shouldShowDailyCheckInSidebar(context())).toBe(true);

@@ -14,6 +14,7 @@ import {
   shouldShowSidebarBanners,
   type SidebarBannerDismissState,
 } from './sidebarAdBannerState';
+import { logSidebarExperienceDiagnostic } from './sidebarExperienceDiagnostics';
 
 interface SidebarBannerLoadOptions {
   silent?: boolean;
@@ -70,7 +71,7 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
       setDismissState(nextDismissState);
     } catch (error) {
       if (isCurrentRequest()) {
-        console.warn('[SidebarBanner] failed to load banners:', error);
+        logSidebarExperienceDiagnostic('warn', 'failed to load sidebar banners', error);
         if (!silent) {
           setBanners([]);
           setDismissState(null);
@@ -101,7 +102,7 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
     try {
       await saveSidebarBannerDismissState(nextState);
     } catch (error) {
-      console.warn('[SidebarBanner] failed to persist dismiss state:', error);
+      logSidebarExperienceDiagnostic('warn', 'failed to persist sidebar banner dismiss state', error);
     }
   }, [banners, dismissState]);
 
