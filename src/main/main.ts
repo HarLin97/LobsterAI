@@ -344,7 +344,7 @@ import {
   DEFAULT_MANAGED_AGENT_ID,
   OpenClawChannelSessionSync,
 } from './libs/openclawChannelSessionSync';
-import { deliverOpenClawConfigToGateway } from './libs/openclawConfigDelivery';
+import { CONFIG_DELIVERY_FALLBACK_REASON_PREFIX, deliverOpenClawConfigToGateway } from './libs/openclawConfigDelivery';
 import {
   classifyAppConfigChange,
   classifyCoworkConfigChange,
@@ -2376,6 +2376,8 @@ const waitForOpenClawConfigApply = async (context: string): Promise<OpenClawEngi
   return null;
 };
 
+const DEFERRED_SYNC_REASON_PREFIX = 'deferred:';
+
 const executeDeferredGatewayRestart = async (reason: string) => {
   clearDeferredRestart();
   deferredRestartReason = null;
@@ -2383,10 +2385,43 @@ const executeDeferredGatewayRestart = async (reason: string) => {
     `${gwDiagTs()} executeDeferredGatewayRestart: performing deferred restart (reason: ${reason})`,
   );
   await syncOpenClawConfig({
-    reason: `deferred:${reason}`,
+    reason: `${DEFERRED_SYNC_REASON_PREFIX}${reason}`,
     restartGatewayIfRunning: true,
     expectedImpact: OpenClawConfigImpact.Restart,
   });
+};
+
+// A hard restart requested while the gateway is restarting itself (config
+// reload → SIGUSR1) is parked here instead of killing the mid-restart process.
+// When the gateway client reconnects we either drop it (the self-restart
+// already loaded the on-disk config) or replay it (env vars need a respawn).
+type PendingSelfRestartReevaluation = {
+  reasons: string[];
+  requiresRespawn: boolean;
+  gatewayPid: number | null;
+};
+let pendingSelfRestartReevaluation: PendingSelfRestartReevaluation | null = null;
+
+/**
+ * True when this sync's restart demand is satisfied by the gateway reloading
+ * the on-disk config (which a self-restart does). Env-var changes need a
+ * respawn (same-process restart keeps the old environment), and explicit
+ * restart flags may depend on out-of-config state — except the
+ * config-delivery fallback, whose only goal is on-disk config convergence.
+ */
+const selfRestartSatisfiesSync = (
+  options: SyncOpenClawConfigOptions,
+  secretEnvVarsChanged: boolean,
+): boolean => {
+  if (secretEnvVarsChanged) {
+    return false;
+  }
+  if (options.restartGatewayIfRunning === true) {
+    return options.reason.startsWith(
+      `${DEFERRED_SYNC_REASON_PREFIX}${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}`,
+    );
+  }
+  return true;
 };
 
 const scheduleDeferredGatewayRestart = (reason: string) => {
@@ -2574,6 +2609,26 @@ const _syncOpenClawConfigImpl = async (
     };
   }
 
+  if (manager.isGatewaySelfRestartActive()) {
+    // Killing the gateway mid self-restart poisons its single-instance lock
+    // (empty lock file → 30s of "gateway already running; lock timeout").
+    // Park the demand; the gateway-ready callback re-evaluates it.
+    const requiresRespawn = !selfRestartSatisfiesSync(options, secretEnvVarsChanged);
+    pendingSelfRestartReevaluation = {
+      reasons: [...(pendingSelfRestartReevaluation?.reasons ?? []), options.reason],
+      requiresRespawn: (pendingSelfRestartReevaluation?.requiresRespawn ?? false) || requiresRespawn,
+      gatewayPid: pendingSelfRestartReevaluation?.gatewayPid ?? manager.getGatewayProcessPid(),
+    };
+    console.log(
+      `${D()} ──── RESTART PARKED (gateway self-restart in progress). reason=${options.reason}, requiresRespawn=${requiresRespawn}`,
+    );
+    return {
+      success: true,
+      changed: true,
+      status,
+    };
+  }
+
   console.log(
     `${D()} ──── HARD RESTART EXECUTING. reason=${options.reason}, phase=${status.phase}, port=${status.message?.match(/loopback:(\d+)/)?.[1] ?? 'unknown'}`,
   );
@@ -2641,6 +2696,35 @@ const syncOpenClawConfig = async (
       openClawConfigApplyState = null;
     }
   }
+};
+
+// The gateway client reconnected — any self-restart has settled. Resolve the
+// parked restart demand: a same-pid (in-process) restart already loaded the
+// on-disk config, so only env-var style demands still need a real respawn.
+// A changed pid means the process was respawned with fresh env anyway.
+const handleGatewaySelfRestartSettled = () => {
+  const manager = getOpenClawEngineManager();
+  manager.clearGatewaySelfRestart();
+  const pending = pendingSelfRestartReevaluation;
+  if (!pending) {
+    return;
+  }
+  pendingSelfRestartReevaluation = null;
+  const currentPid = manager.getGatewayProcessPid();
+  const respawned = pending.gatewayPid != null && currentPid != null && currentPid !== pending.gatewayPid;
+  if (pending.requiresRespawn && !respawned) {
+    console.log(
+      `${gwDiagTs()} parked restart still required after gateway self-restart (reasons: ${pending.reasons.join(', ')}); executing now`,
+    );
+    void syncOpenClawConfig({
+      reason: `self-restart-reevaluate:${pending.reasons[0]}`,
+      restartGatewayIfRunning: true,
+    });
+    return;
+  }
+  console.log(
+    `${gwDiagTs()} parked restart satisfied by gateway self-restart (reasons: ${pending.reasons.join(', ')}, respawned=${respawned})`,
+  );
 };
 
 type OpenClawGatewayRepairResult = {
@@ -2996,7 +3080,10 @@ const getCoworkEngineRouter = () => {
         getOpenClawEngineManager(),
         {
           normalizeModelRef: normalizeOpenClawModelRef,
-          onGatewayClientReady: () => getCronJobService().notifyGatewayReady(),
+          onGatewayClientReady: () => {
+            getCronJobService().notifyGatewayReady();
+            handleGatewaySelfRestartSettled();
+          },
         },
         new SubagentRunStore(getStore().getDatabase()),
         new SubagentMessageStore(getStore().getDatabase()),
@@ -4068,9 +4155,23 @@ if (!gotTheLock) {
     authCallbackRouter.handleDeepLink(url);
   };
 
+  // First-frame gate for window activation. Showing a window whose renderer
+  // has never painted produces a stuck plain-white window (field case: slow
+  // first load after install while security software scans the fresh files,
+  // user clicks the desktop icon, second-instance force-showed the blank
+  // window). Activation requests arriving before the first frame are queued
+  // and honored from ready-to-show / did-finish-load.
+  let hasRenderedFirstFrame = false;
+  let pendingShowOnFirstFrame = false;
+
   const focusMainWindow = (reason: string) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     try {
+      if (!mainWindow.isVisible() && !hasRenderedFirstFrame) {
+        pendingShowOnFirstFrame = true;
+        console.log(`[Main] deferred showing main window after ${reason}: renderer has not painted yet`);
+        return;
+      }
       if (mainWindow.isMinimized()) mainWindow.restore();
       if (!mainWindow.isVisible()) mainWindow.show();
       mainWindow.moveTop();
@@ -12186,6 +12287,8 @@ if (!gotTheLock) {
     }
     mainWindow = null;
     isOpenSessionFromNotificationReady = false;
+    hasRenderedFirstFrame = false;
+    pendingShowOnFirstFrame = false;
 
     const initialWindowState = resolveInitialAppWindowState(
       getStore().get(AppWindowStoreKey.State),
@@ -12302,19 +12405,71 @@ if (!gotTheLock) {
       mainWindow.maximize();
     }
 
-    // 设置窗口加载超时
-    const loadTimeout = setTimeout(() => {
-      if (mainWindow && mainWindow.webContents.isLoadingMainFrame()) {
-        console.log('Window load timed out, attempting to reload...');
-        scheduleReload('load-timeout');
+    const markFirstFrameRendered = (source: string) => {
+      hasRenderedFirstFrame = true;
+      if (pendingShowOnFirstFrame && mainWindow && !mainWindow.isDestroyed()) {
+        pendingShowOnFirstFrame = false;
+        focusMainWindow(`deferred activation (${source})`);
       }
-    }, 30000);
+    };
 
-    // 清除超时
-    mainWindow.webContents.once('did-finish-load', () => {
-      clearTimeout(loadTimeout);
-    });
+    // 窗口加载看门狗。一次性 30s 超时救不回被杀软扫描拖慢的首启动(现场案例:
+    // 首次加载超 30s,唯一一次 reload 后再无人接管,窗口永久空白),改为按退避
+    // 重试,封顶后停手保留现场。
+    const LOAD_WATCHDOG_DELAYS_MS = [30_000, 45_000, 60_000, 90_000];
+    let loadRecoveryAttempts = 0;
+    let loadWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearLoadWatchdog = () => {
+      if (loadWatchdogTimer) {
+        clearTimeout(loadWatchdogTimer);
+        loadWatchdogTimer = null;
+      }
+    };
+
+    const scheduleLoadWatchdog = () => {
+      clearLoadWatchdog();
+      const delay = LOAD_WATCHDOG_DELAYS_MS[
+        Math.min(loadRecoveryAttempts, LOAD_WATCHDOG_DELAYS_MS.length - 1)
+      ];
+      loadWatchdogTimer = setTimeout(() => {
+        loadWatchdogTimer = null;
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (!mainWindow.webContents.isLoadingMainFrame()) return;
+        if (loadRecoveryAttempts >= LOAD_WATCHDOG_DELAYS_MS.length) {
+          console.error(
+            `[Main] window still not loaded after ${loadRecoveryAttempts} reload attempts, giving up`,
+          );
+          return;
+        }
+        loadRecoveryAttempts++;
+        console.warn(
+          `[Main] window load watchdog: still loading after ${delay}ms, reload attempt ${loadRecoveryAttempts}/${LOAD_WATCHDOG_DELAYS_MS.length}`,
+        );
+        scheduleReload('load-watchdog');
+        scheduleLoadWatchdog();
+      }, delay);
+    };
+    scheduleLoadWatchdog();
+
+    // 兜底显示:首帧迟迟不来时,宁可让用户看到纯背景色的窗口,也不能看起来
+    // "应用没打开"。开机自启保持仅托盘,不弹窗。
+    const SHOW_FALLBACK_DELAY_MS = 10_000;
+    const showFallbackTimer = setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isVisible() || hasRenderedFirstFrame) return;
+      if (isAutoLaunched()) return;
+      console.warn(
+        `[Main] window not ready after ${SHOW_FALLBACK_DELAY_MS}ms, showing it before first paint`,
+      );
+      pendingShowOnFirstFrame = false;
+      mainWindow.show();
+    }, SHOW_FALLBACK_DELAY_MS);
+
     mainWindow.webContents.on('did-finish-load', () => {
+      clearLoadWatchdog();
+      loadRecoveryAttempts = 0;
+      markFirstFrameRendered('did-finish-load');
       windowStatePersist.emitState();
       if (openClawEngineManager && !mainWindow?.isDestroyed()) {
         mainWindow.webContents.send(
@@ -12391,6 +12546,15 @@ if (!gotTheLock) {
           setTimeout(() => {
             scheduleReload('did-fail-load');
           }, 3000);
+        } else if (loadRecoveryAttempts < LOAD_WATCHDOG_DELAYS_MS.length) {
+          loadRecoveryAttempts++;
+          console.warn(
+            `[Main] retrying window load after failure (attempt ${loadRecoveryAttempts}/${LOAD_WATCHDOG_DELAYS_MS.length})`,
+          );
+          setTimeout(() => {
+            scheduleReload('did-fail-load');
+            scheduleLoadWatchdog();
+          }, 3_000);
         }
       },
     );
@@ -12403,6 +12567,8 @@ if (!gotTheLock) {
 
     // 当窗口关闭时，清除引用
     mainWindow.on('closed', () => {
+      clearLoadWatchdog();
+      clearTimeout(showFallbackTimer);
       windowStatePersist.cleanup();
       authCallbackRouter.markRendererUnavailable();
       isOpenSessionFromNotificationReady = false;
@@ -12413,10 +12579,12 @@ if (!gotTheLock) {
 
     // 等待内容加载完成后再显示窗口
     mainWindow.once('ready-to-show', () => {
+      clearTimeout(showFallbackTimer);
       // 开机自启时不显示窗口，仅显示托盘图标
       if (!isAutoLaunched()) {
         mainWindow?.show();
       }
+      markFirstFrameRendered('ready-to-show');
       // Initialize main-process i18n from stored language before creating UI elements.
       const initLang = getStore().get<{ language?: string }>('app_config')?.language;
       setLanguage(initLang === 'en' ? 'en' : 'zh');
@@ -12629,9 +12797,14 @@ if (!gotTheLock) {
     await new Promise(resolve => { setTimeout(resolve, 500); });
   };
 
+  // Read by the quit watchdog to report which cleanup step was in flight when
+  // it had to force-exit.
+  let currentAppCleanupStep = 'not-started';
+
   const runAppCleanup = async (reason = 'quit'): Promise<void> => {
+    const cleanupStartedAt = Date.now();
     console.log(`[Main] App cleanup started for ${reason}`);
-    destroyTray();
+    currentAppCleanupStep = 'sync-teardown';
     skillManager?.stopWatching();
     stopMediaPollTimer();
     pendingMediaTasks.clear();
@@ -12650,34 +12823,43 @@ if (!gotTheLock) {
       openClawRuntimeAdapter.disconnectGatewayClient();
     }
 
+    // Stop skill services.
+    currentAppCleanupStep = 'skill-services';
+    const skillServices = getSkillServiceManager();
+    await skillServices.stopAll();
+
+    // Stop all IM gateways gracefully.
+    if (imGatewayManager) {
+      currentAppCleanupStep = 'im-gateways';
+      await imGatewayManager.stopAll().catch(err => {
+        console.error('[IM Gateway] Error stopping gateways on quit:', err);
+      });
+    }
+
+    // Stop the gateway before closing the local HTTP proxies below: the
+    // gateway is their client, and closing a server first would leave it
+    // draining the gateway's keep-alive sockets.
+    if (openClawEngineManager) {
+      currentAppCleanupStep = 'openclaw-gateway';
+      await openClawEngineManager.stopGateway().catch(error => {
+        console.error('[OpenClaw] Failed to stop gateway on quit:', error);
+      });
+    }
+
+    currentAppCleanupStep = 'openai-compat-proxy';
     await stopCoworkOpenAICompatProxy().catch(error => {
       console.error('Failed to stop OpenAI compatibility proxy:', error);
     });
 
+    currentAppCleanupStep = 'html-preview-server';
     await stopHtmlPreviewServer().catch(error => {
       console.error('[HtmlPreviewServer] Failed to stop:', error);
     });
 
     stopOpenClawTokenProxy();
 
-    // Stop skill services.
-    const skillServices = getSkillServiceManager();
-    await skillServices.stopAll();
-
-    // Stop all IM gateways gracefully.
-    if (imGatewayManager) {
-      await imGatewayManager.stopAll().catch(err => {
-        console.error('[IM Gateway] Error stopping gateways on quit:', err);
-      });
-    }
-
-    if (openClawEngineManager) {
-      await openClawEngineManager.stopGateway().catch(error => {
-        console.error('[OpenClaw] Failed to stop gateway on quit:', error);
-      });
-    }
-
     // Stop the cron job polling
+    currentAppCleanupStep = 'cron-and-store';
     try {
       getCronJobService().stopPolling();
     } catch {
@@ -12692,6 +12874,42 @@ if (!gotTheLock) {
     } catch {
       // Store may not have been initialized — safe to ignore.
     }
+
+    // Destroyed last so the tray icon keeps reflecting that the process is
+    // still alive while cleanup runs; destroying it first made a hung cleanup
+    // look like a finished exit while the process lived on invisibly.
+    destroyTray();
+    currentAppCleanupStep = 'done';
+    console.log(`[Main] App cleanup finished for ${reason} in ${Date.now() - cleanupStartedAt}ms`);
+  };
+
+  // Hard ceiling for graceful cleanup. Past this the process force-exits and
+  // logs the step that was still in flight: a hung await here used to leave an
+  // invisible zombie (tray destroyed, no window) that only Task Manager could
+  // kill — and that zombie is what the installer later has to hunt down.
+  const APP_CLEANUP_WATCHDOG_MS = 10_000;
+
+  const runAppCleanupAndExit = (trigger: string) => {
+    isCleanupInProgress = true;
+    isQuitting = true;
+
+    const watchdog = setTimeout(() => {
+      console.error(
+        `[Main] App cleanup did not finish within ${APP_CLEANUP_WATCHDOG_MS}ms (trigger=${trigger}, stuck at step: ${currentAppCleanupStep}), forcing exit`,
+      );
+      app.exit(1);
+    }, APP_CLEANUP_WATCHDOG_MS);
+
+    void runAppCleanup()
+      .catch(error => {
+        console.error(`[Main] Cleanup error (trigger=${trigger}):`, error);
+      })
+      .finally(() => {
+        clearTimeout(watchdog);
+        isCleanupFinished = true;
+        isCleanupInProgress = false;
+        app.exit(0);
+      });
   };
 
   app.on('before-quit', e => {
@@ -12702,18 +12920,7 @@ if (!gotTheLock) {
       return;
     }
 
-    isCleanupInProgress = true;
-    isQuitting = true;
-
-    void runAppCleanup()
-      .catch(error => {
-        console.error('[Main] Cleanup error:', error);
-      })
-      .finally(() => {
-        isCleanupFinished = true;
-        isCleanupInProgress = false;
-        app.exit(0);
-      });
+    runAppCleanupAndExit('before-quit');
   });
 
   const handleTerminationSignal = (signal: NodeJS.Signals) => {
@@ -12721,17 +12928,7 @@ if (!gotTheLock) {
       return;
     }
     console.log(`[Main] Received ${signal}, running cleanup before exit...`);
-    isCleanupInProgress = true;
-    isQuitting = true;
-    void runAppCleanup()
-      .catch(error => {
-        console.error(`[Main] Cleanup error during ${signal}:`, error);
-      })
-      .finally(() => {
-        isCleanupFinished = true;
-        isCleanupInProgress = false;
-        app.exit(0);
-      });
+    runAppCleanupAndExit(signal);
   };
 
   process.once('SIGINT', () => handleTerminationSignal('SIGINT'));
