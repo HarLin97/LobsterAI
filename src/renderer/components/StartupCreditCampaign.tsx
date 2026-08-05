@@ -386,7 +386,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           showTerminalView(
             CampaignModalView.Failed,
             null,
-            response.error || i18nService.t('startupCreditClaimFailed'),
+            i18nService.t('startupCreditClaimFailed'),
           );
           return;
         }
@@ -444,9 +444,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
       showTerminalView(
         CampaignModalView.Failed,
         null,
-        error instanceof Error
-          ? error.message
-          : i18nService.t('startupCreditClaimFailed'),
+        i18nService.t('startupCreditClaimFailed'),
       );
     } finally {
       actionInFlightRef.current = false;
@@ -753,9 +751,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
         showTerminalView(
           CampaignModalView.Failed,
           null,
-          error instanceof Error
-            ? error.message
-            : i18nService.t('startupCreditLoginFailed'),
+          i18nService.t('startupCreditLoginFailed'),
         );
       }
       return;
@@ -764,7 +760,9 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   }, [isLoggedIn, performClaim, showTerminalView]);
 
   const handleRetry = useCallback(async () => {
-    const current = snapshotRef.current ?? await load(false);
+    // Reload the slot before retrying so the main process can renew an
+    // activity binding that became stale after a config or runtime refresh.
+    const current = await load(false);
     if (!current) {
       showTerminalView(CampaignModalView.Ended);
       return;
