@@ -16,6 +16,7 @@ import {
 
 const PROXY_BIND_HOST = '127.0.0.1';
 const RECENT_QUOTA_ERROR_TTL_MS = 30_000;
+const MAX_PROXY_SSE_SCAN_BUFFER_CHARS = 1_048_576;
 const GEMINI_FALLBACK_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
 
 let proxyServer: http.Server | null = null;
@@ -28,12 +29,16 @@ let tokenRefresher: (
   (reason: AuthRefreshReasonValue) => Promise<AuthTokenRefreshResult>
 ) | null = null;
 let serverBaseUrlGetter: (() => string) | null = null;
+let accountContextHeadersGetter: (() => Record<string, string>) | null = null;
+let sessionKeyGetter: (() => string | null) | null = null;
 let clientVersionGetter: (() => string) | null = null;
 
 export type OpenClawTokenProxyConfig = {
   getAuthTokens: () => { accessToken: string; refreshToken: string } | null;
   refreshToken: (reason: AuthRefreshReasonValue) => Promise<AuthTokenRefreshResult>;
   getServerBaseUrl: () => string;
+  getAccountContextHeaders?: () => Record<string, string>;
+  getSessionKey?: () => string | null;
   getClientVersion: () => string;
 };
 
@@ -47,6 +52,8 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
   tokenGetter = config.getAuthTokens;
   tokenRefresher = config.refreshToken;
   serverBaseUrlGetter = config.getServerBaseUrl;
+  accountContextHeadersGetter = config.getAccountContextHeaders ?? null;
+  sessionKeyGetter = config.getSessionKey ?? null;
   clientVersionGetter = config.getClientVersion;
 
   return new Promise((resolve, reject) => {
@@ -84,12 +91,17 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
 export function stopOpenClawTokenProxy(): void {
   if (proxyServer) {
     proxyServer.close();
-    proxyServer = null;
-    proxyPort = null;
-    recentQuotaError = null;
-    clientVersionGetter = null;
     console.log('[OpenClawTokenProxy] stopped');
   }
+  proxyServer = null;
+  proxyPort = null;
+  recentQuotaError = null;
+  tokenGetter = null;
+  tokenRefresher = null;
+  serverBaseUrlGetter = null;
+  accountContextHeadersGetter = null;
+  sessionKeyGetter = null;
+  clientVersionGetter = null;
 }
 
 export function getOpenClawTokenProxyPort(): number | null {
@@ -141,10 +153,29 @@ function writeTemporaryAuthRefreshFailure(res: http.ServerResponse): void {
   }));
 }
 
+function isProxySessionKeyCurrent(
+  expectedSessionKey: string | null,
+  getCurrentSessionKey: (() => string | null) | null,
+): boolean {
+  return getCurrentSessionKey === null || getCurrentSessionKey() === expectedSessionKey;
+}
+
+function writeAuthSessionChanged(res: http.ServerResponse): void {
+  res.writeHead(409, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: {
+      message: 'The authenticated account changed while the request was running.',
+      type: 'authentication_error',
+      code: 'auth_session_changed',
+    },
+  }));
+}
+
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
     const tokens = tokenGetter?.();
     const serverBaseUrl = serverBaseUrlGetter?.();
+    const requestSessionKey = sessionKeyGetter?.() ?? null;
 
     if (!tokens?.accessToken || !serverBaseUrl) {
       res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -171,6 +202,11 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       req.headers,
       clientVersion,
     );
+    if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
+      cancelUpstreamResult(result);
+      writeAuthSessionChanged(res);
+      return;
+    }
 
     if (shouldRefreshLobsterAIToken(result.status) && tokenRefresher) {
       const latestAccessToken = tokenGetter?.()?.accessToken;
@@ -183,6 +219,11 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
           req.headers,
           clientVersion,
         );
+        if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
+          cancelUpstreamResult(result);
+          writeAuthSessionChanged(res);
+          return;
+        }
         if (result.status !== 401) {
           pipeResponse(result, res);
           return;
@@ -191,6 +232,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
       console.log('[OpenClawTokenProxy] received 401, attempting token refresh');
       const refreshResult = await tokenRefresher(AuthRefreshReason.OpenClawProxy);
+      if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
+        writeAuthSessionChanged(res);
+        return;
+      }
       if (refreshResult.accessToken) {
         const retryResult = await forwardRequest(
           upstreamUrl,
@@ -200,6 +245,11 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
           req.headers,
           clientVersion,
         );
+        if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
+          cancelUpstreamResult(retryResult);
+          writeAuthSessionChanged(res);
+          return;
+        }
         pipeResponse(retryResult, res);
         return;
       }
@@ -225,6 +275,28 @@ type UpstreamResult = {
   body: NodeJS.ReadableStream | Buffer;
   isStream: boolean;
 };
+
+function cancelUpstreamResult(result: UpstreamResult): void {
+  if (Buffer.isBuffer(result.body)) return;
+  const body = result.body as NodeJS.ReadableStream & {
+    cancel?: (reason?: unknown) => Promise<void>;
+    destroy?: () => void;
+    destroyed?: boolean;
+  };
+  try {
+    if (typeof body.destroy === 'function' && !body.destroyed) {
+      body.destroy();
+      return;
+    }
+    if (typeof body.cancel === 'function') {
+      void body.cancel('Authenticated account changed').catch(error => {
+        console.debug('[OpenClawTokenProxy] stale upstream cancellation failed:', error);
+      });
+    }
+  } catch (error) {
+    console.debug('[OpenClawTokenProxy] stale upstream cancellation failed:', error);
+  }
+}
 
 type ParsedProxySSEPacket = {
   event: string;
@@ -424,6 +496,7 @@ type ProxySSEStreamScanState = {
   eventCount: number;
   startedAt: number;
   downstreamClosedAt: number | null;
+  downstreamCancellationRequested: boolean;
   upstreamSettled: boolean;
 };
 
@@ -434,6 +507,7 @@ function createProxySSEStreamScanState(now = Date.now()): ProxySSEStreamScanStat
     eventCount: 0,
     startedAt: now,
     downstreamClosedAt: null,
+    downstreamCancellationRequested: false,
     upstreamSettled: false,
   };
 }
@@ -525,7 +599,10 @@ function extractQuotaErrorFromProxyErrorPayload(
 
     const message = getErrorMessage(parsed);
     const code = getErrorCode(parsed);
-    const isErrorPayload = event === 'error' || parsed.type === 'error' || parsed.error != null;
+    const isErrorPayload = event === 'error'
+      || parsed.type === 'error'
+      || parsed.error != null
+      || (code !== undefined && String(code) !== '0');
     const searchable = `${message} ${code ?? ''} ${payload}`;
     if (isErrorPayload && isLobsterAIQuotaExhaustedError(searchable)) {
       return {
@@ -596,7 +673,9 @@ function scanProxySSEBufferForQuotaError(
     boundary = findSSEPacketBoundary(remaining);
   }
 
-  return remaining;
+  return remaining.length <= MAX_PROXY_SSE_SCAN_BUFFER_CHARS
+    ? remaining
+    : remaining.slice(-MAX_PROXY_SSE_SCAN_BUFFER_CHARS);
 }
 
 function flushProxySSEBufferForQuotaError(
@@ -627,10 +706,17 @@ async function forwardRequest(
   incomingHeaders: http.IncomingHttpHeaders,
   clientVersion: string,
 ): Promise<UpstreamResult> {
+  let accountContextHeaders: Record<string, string> = {};
+  try {
+    accountContextHeaders = accountContextHeadersGetter?.() ?? {};
+  } catch (error) {
+    console.warn('[OpenClawTokenProxy] failed to read account context headers; forwarding with token only:', error);
+  }
   const headers = buildUpstreamRequestHeaders(
     accessToken,
     incomingHeaders,
     clientVersion,
+    accountContextHeaders,
   );
 
   const resp = await net.fetch(url, {
@@ -669,8 +755,10 @@ function buildUpstreamRequestHeaders(
   accessToken: string,
   incomingHeaders: http.IncomingHttpHeaders,
   clientVersion: string,
+  accountContextHeaders: Record<string, string> = {},
 ): Record<string, string> {
   const headers: Record<string, string> = {
+    ...accountContextHeaders,
     'Authorization': `Bearer ${accessToken}`,
     'Content-Type': incomingHeaders['content-type'] || 'application/json',
     [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: KIMI_K3_AGENTIC_CAPABILITY,
@@ -758,14 +846,23 @@ function formatProxySSEOutcome(
 
 function observeProxyResponseClose(
   res: http.ServerResponse,
+  cancelUpstream: () => boolean,
   scanState?: ProxySSEStreamScanState,
 ): void {
-  if (!scanState) {
-    return;
-  }
   res.on('close', () => {
-    if (!scanState.upstreamSettled && scanState.downstreamClosedAt === null) {
+    if (
+      scanState
+      && (scanState.upstreamSettled || scanState.downstreamClosedAt !== null)
+    ) {
+      return;
+    }
+    if (scanState) {
       scanState.downstreamClosedAt = Date.now();
+    }
+    const cancellationRequested = cancelUpstream();
+    if (scanState && cancellationRequested) {
+      scanState.downstreamCancellationRequested = true;
+      console.debug(formatProxySSEOutcome('downstream_closed_upstream_cancelled', scanState));
     }
   });
 }
@@ -785,6 +882,9 @@ function endProxyResponseAfterScan(
 ): void {
   if (scanState) {
     scanState.upstreamSettled = true;
+  }
+  if (scanState?.downstreamCancellationRequested) {
+    return;
   }
   if (scanState && scanState.downstreamClosedAt !== null) {
     if (scanState.terminalKind === ProxySSETerminalKind.Error) {
@@ -813,6 +913,9 @@ function abortProxyResponseAfterReadError(
 ): void {
   if (scanState) {
     scanState.upstreamSettled = true;
+    if (scanState.downstreamCancellationRequested) {
+      return;
+    }
     const outcome = scanState.downstreamClosedAt === null
       ? 'transport_error'
       : 'transport_error_after_downstream_close';
@@ -830,8 +933,27 @@ function pipeNodeReadableResponseWithQuotaScan(
 ): void {
   const decoder = new TextDecoder();
   let sseBuffer = '';
+  let upstreamSettled = false;
 
-  observeProxyResponseClose(res, scanState);
+  observeProxyResponseClose(res, () => {
+    if (upstreamSettled) {
+      return false;
+    }
+    const destroyableStream = stream as NodeJS.ReadableStream & {
+      destroy?: () => void;
+      destroyed?: boolean;
+    };
+    if (typeof destroyableStream.destroy !== 'function' || destroyableStream.destroyed) {
+      return false;
+    }
+    try {
+      destroyableStream.destroy();
+      return true;
+    } catch (error) {
+      console.debug('[OpenClawTokenProxy] upstream stream cancellation failed:', error);
+      return false;
+    }
+  }, scanState);
   res.on('error', (err) => {
     console.debug('[OpenClawTokenProxy] response write error:', err);
   });
@@ -847,12 +969,14 @@ function pipeNodeReadableResponseWithQuotaScan(
   });
 
   stream.on('end', () => {
+    upstreamSettled = true;
     const tail = decoder.decode();
     flushProxySSEBufferForQuotaError(sseBuffer + tail, Date.now(), scanState);
     endProxyResponseAfterScan(res, scanState);
   });
 
   stream.on('error', (err) => {
+    upstreamSettled = true;
     flushProxySSEBufferForQuotaError(sseBuffer + decoder.decode(), Date.now(), scanState);
     abortProxyResponseAfterReadError(res, err, scanState);
   });
@@ -866,8 +990,17 @@ function pipeWebReadableResponseWithQuotaScan(
   const reader = webStream.getReader();
   const decoder = new TextDecoder();
   let sseBuffer = '';
+  let upstreamSettled = false;
 
-  observeProxyResponseClose(res, scanState);
+  observeProxyResponseClose(res, () => {
+    if (upstreamSettled) {
+      return false;
+    }
+    void reader.cancel('Downstream response closed').catch((error) => {
+      console.debug('[OpenClawTokenProxy] upstream stream cancellation failed:', error);
+    });
+    return true;
+  }, scanState);
   res.on('error', (err) => {
     console.debug('[OpenClawTokenProxy] response write error:', err);
   });
@@ -875,6 +1008,7 @@ function pipeWebReadableResponseWithQuotaScan(
   const pump = (): void => {
     reader.read().then(({ done, value }) => {
       if (done) {
+        upstreamSettled = true;
         const tail = decoder.decode();
         flushProxySSEBufferForQuotaError(sseBuffer + tail, Date.now(), scanState);
         endProxyResponseAfterScan(res, scanState);
@@ -889,6 +1023,7 @@ function pipeWebReadableResponseWithQuotaScan(
       writeProxyResponseChunk(res, value);
       pump();
     }).catch((err) => {
+      upstreamSettled = true;
       flushProxySSEBufferForQuotaError(sseBuffer + decoder.decode(), Date.now(), scanState);
       abortProxyResponseAfterReadError(res, err, scanState);
     });
@@ -915,5 +1050,6 @@ export const __openClawTokenProxyTestUtils = {
   pipeWebReadableResponseWithQuotaScan,
   pipeStreamingResponseWithQuotaScan,
   isTemporaryAuthRefreshFailure,
+  isProxySessionKeyCurrent,
   shouldRefreshLobsterAIToken,
 };

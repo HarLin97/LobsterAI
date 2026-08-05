@@ -33,6 +33,16 @@ export const SiteStatus = {
 
 export type SiteStatus = (typeof SiteStatus)[keyof typeof SiteStatus];
 
+export const SiteDeploymentStatus = {
+  Queued: 'queued',
+  Building: 'building',
+  Deploying: 'deploying',
+  HealthChecking: 'health_checking',
+} as const;
+
+export type SiteDeploymentStatus =
+  (typeof SiteDeploymentStatus)[keyof typeof SiteDeploymentStatus];
+
 export const SiteFilterStatus = {
   Unavailable: 'unavailable',
 } as const;

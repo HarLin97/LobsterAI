@@ -24,7 +24,7 @@ export const CoworkErrorI18nKey = {
 } as const;
 
 const LOBSTERAI_QUOTA_EXHAUSTED_PATTERN =
-  /\b4020[0-2]\b|(?:今日)?免费额度.*(用完|耗尽)|本月积分.*(用完|耗尽)|积分额度.*(用完|耗尽)|free.*quota.*(exhausted|used up|limit)|monthly.*credits?.*(exhausted|used up|limit)/i;
+  /\b(?:4020[0-2]|4160[678])\b|(?:今日)?免费额度.*(用完|耗尽)|本月积分.*(用完|耗尽)|积分额度.*(用完|耗尽)|free.*quota.*(exhausted|used up|limit)|monthly.*credits?.*(exhausted|used up|limit)/i;
 
 const MODEL_CAPACITY_OVERLOAD_PATTERN =
   /overloaded_error|\boverloaded\b|(?:selected\s+)?model\s+(?:is\s+)?at capacity|system capacity(?: limits?)?|(?:service|model).*(?:high demand|high load)|服务过载|当前负载过高|系统容量(?:不足|限制)?/i;

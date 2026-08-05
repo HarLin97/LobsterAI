@@ -287,6 +287,7 @@ const AssistantTurnBlock: React.FC<{
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
   completedGoal?: CoworkGoal | null;
+  hiddenSystemMessageId?: string | null;
 }> = ({
   turn,
   artifacts,
@@ -305,6 +306,7 @@ const AssistantTurnBlock: React.FC<{
   showTypingIndicator = false,
   showCopyButtons = true,
   completedGoal,
+  hiddenSystemMessageId,
 }) => {
   const [artifactCardsExpanded, setArtifactCardsExpanded] = useState(false);
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
@@ -351,6 +353,9 @@ const AssistantTurnBlock: React.FC<{
   }, [turn.id]);
 
   const renderSystemMessage = (message: CoworkMessage) => {
+    if (message.id === hiddenSystemMessageId) {
+      return null;
+    }
     const isError = !hasText(message.content) && typeof message.metadata?.error === 'string';
     const rawContent = hasText(message.content)
       ? message.content

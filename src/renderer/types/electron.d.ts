@@ -48,6 +48,13 @@ import type {
   DataMigrationLastRestoreResponse,
   DataMigrationRestoreScheduleResult,
 } from '../../shared/dataMigration/constants';
+import type { EnterpriseQuotaRequestType } from '../../shared/enterpriseAccount/constants';
+import type {
+  EnterpriseAccountContext,
+  EnterpriseAccountContextResult,
+  EnterpriseAccountIdentitiesResult,
+  EnterpriseQuotaRequestResult,
+} from '../../shared/enterpriseAccount/types';
 import type {
   HtmlShareAccessMode,
   HtmlShareConfigurableStatus,
@@ -1762,16 +1769,27 @@ interface IElectronAPI {
     login: (loginUrl?: string) => Promise<AuthLoginResult>;
     exchange: (
       code: string,
-    ) => Promise<{ success: boolean; user?: any; quota?: any; error?: string }>;
+    ) => Promise<{
+      success: boolean;
+      user?: import('../store/slices/authSlice').UserProfile;
+      quota?: import('../store/slices/authSlice').UserQuota;
+      enterpriseContext?: EnterpriseAccountContext | null;
+      error?: string;
+    }>;
     getUser: () => Promise<{
       success: boolean;
       status?: AuthSessionStatus;
       hasCredentials?: boolean;
-      cachedUser?: any;
-      user?: any;
-      quota?: any;
+      cachedUser?: import('../store/slices/authSlice').UserProfile | null;
+      user?: import('../store/slices/authSlice').UserProfile;
+      quota?: import('../store/slices/authSlice').UserQuota | null;
+      enterpriseContext?: EnterpriseAccountContext | null;
     }>;
-    getQuota: () => Promise<{ success: boolean; quota?: any }>;
+    getQuota: () => Promise<{
+      success: boolean;
+      quota?: import('../store/slices/authSlice').UserQuota;
+      enterpriseContext?: EnterpriseAccountContext | null;
+    }>;
     logout: () => Promise<{ success: boolean }>;
     refreshToken: () => Promise<{
       success: boolean;
@@ -1838,59 +1856,17 @@ interface IElectronAPI {
       name: string;
     } | null>;
   };
+  enterpriseAccount: {
+    getContext: () => Promise<EnterpriseAccountContextResult>;
+    getIdentities: () => Promise<EnterpriseAccountIdentitiesResult>;
+    requestQuotaIncrease: (
+      enterpriseId: number,
+      requestType: EnterpriseQuotaRequestType,
+    ) => Promise<EnterpriseQuotaRequestResult>;
+    onContextInvalidated: (callback: () => void) => () => void;
+  };
   networkStatus: {
     send: (status: 'online' | 'offline') => void;
-  };
-  auth: {
-    login: (loginUrl?: string) => Promise<AuthLoginResult>;
-    exchange: (code: string) => Promise<{
-      success: boolean;
-      user?: import('../store/slices/authSlice').UserProfile;
-      quota?: {
-        planName: string;
-        subscriptionStatus: string;
-        creditsLimit: number;
-        creditsUsed: number;
-        creditsRemaining: number;
-      };
-      error?: string;
-    }>;
-    getUser: () => Promise<{
-      success: boolean;
-      status?: AuthSessionStatus;
-      hasCredentials?: boolean;
-      cachedUser?: import('../store/slices/authSlice').UserProfile | null;
-      user?: import('../store/slices/authSlice').UserProfile;
-      quota?: {
-        planName: string;
-        subscriptionStatus: string;
-        creditsLimit: number;
-        creditsUsed: number;
-        creditsRemaining: number;
-      };
-    }>;
-    getQuota: () => Promise<{
-      success: boolean;
-      quota?: {
-        planName: string;
-        subscriptionStatus: string;
-        creditsLimit: number;
-        creditsUsed: number;
-        creditsRemaining: number;
-      };
-    }>;
-    logout: () => Promise<{ success: boolean }>;
-    refreshToken: () => Promise<{
-      success: boolean;
-      accessToken?: string;
-      outcome?: AuthRefreshOutcome;
-    }>;
-    getAccessToken: () => Promise<string | null>;
-    getPendingCallback: () => Promise<string | null>;
-    onCallback: (callback: (data: { code: string }) => void) => () => void;
-    onQuotaChanged: (callback: () => void) => () => void;
-    onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => () => void;
-    onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => () => void;
   };
   qwen: Record<string, never>;
   feishu: {
