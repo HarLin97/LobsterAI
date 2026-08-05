@@ -25,6 +25,7 @@ import { recoverInstallerResourcesFromTar } from './installerResourceRecovery';
 import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
 import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigration';
+import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { ensureOpenClawWorkerShims } from './openclawWorkerShims';
@@ -48,6 +49,10 @@ const GATEWAY_PORT_SCAN_LIMIT = 80;
 const GATEWAY_BOOT_TIMEOUT_MS = 300 * 1000;
 const GATEWAY_MAX_RESTART_ATTEMPTS = 5;
 const GATEWAY_RESTART_DELAYS = [3_000, 5_000, 10_000, 20_000, 30_000];
+// How long a gateway-initiated restart (SIGUSR1 in-process restart after a
+// config change) is trusted to complete before LobsterAI resumes managing the
+// process itself.
+const GATEWAY_SELF_RESTART_WINDOW_MS = 30_000;
 const OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB = 4096;
 const OPENCLAW_GATEWAY_MAX_OLD_SPACE_OPTION = `--max-old-space-size=${OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB}`;
 const NODE_MAX_OLD_SPACE_RE = /(?:^|\s)--max-old-space-size(?:=|\s|$)/;
@@ -235,6 +240,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private secretEnvVars: Record<string, string> = {};
   private gatewaySpawnedAt: number | null = null;
   private gatewayLogPrunedDateKey: string | null = null;
+  private gatewaySelfRestartNotedAt: number | null = null;
 
   constructor() {
     super();
@@ -343,6 +349,73 @@ export class OpenClawEngineManager extends EventEmitter {
       return null;
     }
     return { ...failure };
+  }
+
+  getGatewayProcessPid(): number | null {
+    const child = this.gatewayProcess;
+    if (!child || !isGatewayProcessAlive(child)) {
+      return null;
+    }
+    return 'pid' in child && typeof child.pid === 'number' ? child.pid : null;
+  }
+
+  /**
+   * Called when the gateway announced it is restarting itself (WS close 1012
+   * "service restart" after an OpenClaw config reload). While the window is
+   * active LobsterAI must not kill/respawn the process: the gateway is between
+   * releasing and re-acquiring its single-instance lock, and a TerminateProcess
+   * there leaves a poisoned (empty) lock file behind.
+   */
+  noteGatewaySelfRestart(reason: string): void {
+    this.gatewaySelfRestartNotedAt = Date.now();
+    console.log(`${gwDiagTs()} gateway self-restart detected (${reason}); deferring supervisor restarts for up to ${GATEWAY_SELF_RESTART_WINDOW_MS}ms`);
+  }
+
+  isGatewaySelfRestartActive(): boolean {
+    if (this.gatewaySelfRestartNotedAt == null) {
+      return false;
+    }
+    if (Date.now() - this.gatewaySelfRestartNotedAt > GATEWAY_SELF_RESTART_WINDOW_MS) {
+      this.gatewaySelfRestartNotedAt = null;
+      return false;
+    }
+    // An in-process restart keeps the same pid; if the process is gone the
+    // self-restart failed and normal crash handling owns recovery again.
+    if (!isGatewayProcessAlive(this.gatewayProcess)) {
+      this.gatewaySelfRestartNotedAt = null;
+      return false;
+    }
+    return true;
+  }
+
+  clearGatewaySelfRestart(): void {
+    this.gatewaySelfRestartNotedAt = null;
+  }
+
+  /**
+   * Reclaim stale gateway lock files. Safe only when we have no live gateway
+   * child (locks with a live owner are never touched, so the worst case of a
+   * misjudged call is a no-op).
+   */
+  private cleanupStaleGatewayLocksSafely(context: string): void {
+    if (isGatewayProcessAlive(this.gatewayProcess)) {
+      return;
+    }
+    try {
+      const results = cleanupStaleGatewayLocks({ configPath: this.configPath });
+      for (const result of results) {
+        const owner = result.ownerPid != null ? ` ownerPid=${result.ownerPid}` : '';
+        if (result.action === GatewayLockCleanupAction.KeptAliveOwner) {
+          console.warn(`${gwDiagTs()} gateway lock kept (owner alive)${owner} path=${result.lockPath} context=${context}`);
+        } else if (result.action === GatewayLockCleanupAction.RemoveFailed) {
+          console.warn(`${gwDiagTs()} gateway lock remove failed${owner} path=${result.lockPath} context=${context}`);
+        } else {
+          console.log(`${gwDiagTs()} stale gateway lock reclaimed (${result.action})${owner} path=${result.lockPath} context=${context}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`${gwDiagTs()} gateway lock cleanup failed (non-fatal) context=${context}:`, err);
+    }
   }
 
   private pruneGatewayLogsIfNeeded(now = new Date()): void {
@@ -477,6 +550,13 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     if (isGatewayProcessAlive(this.gatewayProcess)) {
+      if (this.isGatewaySelfRestartActive()) {
+        // The gateway is mid self-restart (lock release/reacquire window):
+        // killing it now poisons the lock file. Let it finish; callers retry
+        // through their normal ready-wait paths.
+        console.log(`${gwDiagTs()} startGateway: gateway self-restart in progress, leaving process alone (${elapsed()})`);
+        return this.getStatus();
+      }
       const port = this.gatewayPort ?? this.readGatewayPort();
       if (port) {
         const healthy = await this.isGatewayHealthy(port);
@@ -536,6 +616,9 @@ export class OpenClawEngineManager extends EventEmitter {
     this.gatewayPort = port;
     this.writeGatewayPort(port);
     this.ensureConfigFile();
+    // A force-killed (or crashed) gateway can leave a stale/empty lock file
+    // that blocks every new gateway for OpenClaw's 30s staleness window.
+    this.cleanupStaleGatewayLocksSafely('pre-spawn');
     console.log(`[OpenClaw] startGateway: pre-fork setup done (${elapsed()})`);
 
     this.setStatus({
@@ -736,6 +819,8 @@ export class OpenClawEngineManager extends EventEmitter {
 
   async stopGateway(): Promise<void> {
     this.shutdownRequested = true;
+    // The supervisor is explicitly taking over; any self-restart window is moot.
+    this.clearGatewaySelfRestart();
 
     if (this.gatewayRestartTimer) {
       clearTimeout(this.gatewayRestartTimer);
@@ -747,6 +832,9 @@ export class OpenClawEngineManager extends EventEmitter {
       await this.stopGatewayProcess(this.gatewayProcess);
       console.log('[OpenClaw] gateway process stopped');
       this.gatewayProcess = null;
+      // On Windows the kill is TerminateProcess — the gateway had no chance
+      // to release its single-instance lock, so reclaim it now.
+      this.cleanupStaleGatewayLocksSafely('post-stop');
     }
 
     const runtime = this.resolveRuntimeMetadata();
@@ -1682,6 +1770,9 @@ export class OpenClawEngineManager extends EventEmitter {
       this.gatewayRecentOutput.delete(child);
       if (this.gatewayProcess === child) {
         this.gatewayProcess = null;
+        // A self-restart never exits the process; if it exited anyway the
+        // self-restart failed and normal crash handling owns recovery.
+        this.clearGatewaySelfRestart();
       }
       if (this.expectedGatewayExits.has(child)) {
         this.expectedGatewayExits.delete(child);
