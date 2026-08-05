@@ -117,6 +117,7 @@ import {
 } from '../artifacts/autoPreviewPolicy';
 import ComposeIcon from '../icons/ComposeIcon';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
+import SidebarSearchIcon from '../icons/SidebarSearchIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
@@ -4524,38 +4525,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
   }, []);
 
-  useEffect(() => {
-    const handleConversationSearchShortcut = () => {
-      if (!sessionId) return;
-      if (!isConversationSearchOpen) {
-        if (forcedRailTurnReleaseTimerRef.current) {
-          clearTimeout(forcedRailTurnReleaseTimerRef.current);
-          forcedRailTurnReleaseTimerRef.current = null;
-        }
-        setForcedRailTurnIndex(null);
-        conversationSearchForcedTurnRef.current = null;
+  const handleOpenConversationSearch = useCallback(() => {
+    if (!sessionId) return;
+    if (!isConversationSearchOpen) {
+      if (forcedRailTurnReleaseTimerRef.current) {
+        clearTimeout(forcedRailTurnReleaseTimerRef.current);
+        forcedRailTurnReleaseTimerRef.current = null;
       }
-      userDetachedFromBottomRef.current = true;
-      scrollToBottomIntentRef.current = false;
-      clearScrollToBottomSettleTimers();
-      updateShouldAutoScroll(false);
-      setIsArtifactPanelExpanded(false);
-      setIsExpandedPromptInputHidden(false);
-      setIsExpandedConversationPreviewOpen(false);
-      setShowArtifactAddMenu(false);
-      openConversationSearch();
-    };
-
-    window.addEventListener(
-      CoworkUiEvent.ShortcutConversationSearch,
-      handleConversationSearchShortcut,
-    );
-    return () => {
-      window.removeEventListener(
-        CoworkUiEvent.ShortcutConversationSearch,
-        handleConversationSearchShortcut,
-      );
-    };
+      setForcedRailTurnIndex(null);
+      conversationSearchForcedTurnRef.current = null;
+    }
+    userDetachedFromBottomRef.current = true;
+    scrollToBottomIntentRef.current = false;
+    clearScrollToBottomSettleTimers();
+    updateShouldAutoScroll(false);
+    setIsArtifactPanelExpanded(false);
+    setIsExpandedPromptInputHidden(false);
+    setIsExpandedConversationPreviewOpen(false);
+    setShowArtifactAddMenu(false);
+    openConversationSearch();
   }, [
     clearScrollToBottomSettleTimers,
     isConversationSearchOpen,
@@ -4563,6 +4551,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     sessionId,
     updateShouldAutoScroll,
   ]);
+
+  useEffect(() => {
+    window.addEventListener(
+      CoworkUiEvent.ShortcutConversationSearch,
+      handleOpenConversationSearch,
+    );
+    return () => {
+      window.removeEventListener(
+        CoworkUiEvent.ShortcutConversationSearch,
+        handleOpenConversationSearch,
+      );
+    };
+  }, [handleOpenConversationSearch]);
 
   useEffect(() => {
     if (isConversationSearchOpen) return undefined;
@@ -5490,6 +5491,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               )}
             </button>
           )}
+          <button
+            type="button"
+            onClick={handleOpenConversationSearch}
+            className="non-draggable relative h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+            aria-label={i18nService.t('coworkConversationSearchOpen')}
+            title={i18nService.t('coworkConversationSearchOpen')}
+          >
+            <SidebarSearchIcon className="h-[18px] w-[18px]" />
+          </button>
           <button
             type="button"
             onClick={handleToggleArtifactPanel}
