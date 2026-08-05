@@ -324,7 +324,7 @@ import {
   DEFAULT_MANAGED_AGENT_ID,
   OpenClawChannelSessionSync,
 } from './libs/openclawChannelSessionSync';
-import { deliverOpenClawConfigToGateway } from './libs/openclawConfigDelivery';
+import { CONFIG_DELIVERY_FALLBACK_REASON_PREFIX, deliverOpenClawConfigToGateway } from './libs/openclawConfigDelivery';
 import {
   classifyAppConfigChange,
   classifyCoworkConfigChange,
@@ -2338,6 +2338,8 @@ const waitForOpenClawConfigApply = async (context: string): Promise<OpenClawEngi
   return null;
 };
 
+const DEFERRED_SYNC_REASON_PREFIX = 'deferred:';
+
 const executeDeferredGatewayRestart = async (reason: string) => {
   clearDeferredRestart();
   deferredRestartReason = null;
@@ -2345,10 +2347,43 @@ const executeDeferredGatewayRestart = async (reason: string) => {
     `${gwDiagTs()} executeDeferredGatewayRestart: performing deferred restart (reason: ${reason})`,
   );
   await syncOpenClawConfig({
-    reason: `deferred:${reason}`,
+    reason: `${DEFERRED_SYNC_REASON_PREFIX}${reason}`,
     restartGatewayIfRunning: true,
     expectedImpact: OpenClawConfigImpact.Restart,
   });
+};
+
+// A hard restart requested while the gateway is restarting itself (config
+// reload → SIGUSR1) is parked here instead of killing the mid-restart process.
+// When the gateway client reconnects we either drop it (the self-restart
+// already loaded the on-disk config) or replay it (env vars need a respawn).
+type PendingSelfRestartReevaluation = {
+  reasons: string[];
+  requiresRespawn: boolean;
+  gatewayPid: number | null;
+};
+let pendingSelfRestartReevaluation: PendingSelfRestartReevaluation | null = null;
+
+/**
+ * True when this sync's restart demand is satisfied by the gateway reloading
+ * the on-disk config (which a self-restart does). Env-var changes need a
+ * respawn (same-process restart keeps the old environment), and explicit
+ * restart flags may depend on out-of-config state — except the
+ * config-delivery fallback, whose only goal is on-disk config convergence.
+ */
+const selfRestartSatisfiesSync = (
+  options: SyncOpenClawConfigOptions,
+  secretEnvVarsChanged: boolean,
+): boolean => {
+  if (secretEnvVarsChanged) {
+    return false;
+  }
+  if (options.restartGatewayIfRunning === true) {
+    return options.reason.startsWith(
+      `${DEFERRED_SYNC_REASON_PREFIX}${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}`,
+    );
+  }
+  return true;
 };
 
 const scheduleDeferredGatewayRestart = (reason: string) => {
@@ -2536,6 +2571,26 @@ const _syncOpenClawConfigImpl = async (
     };
   }
 
+  if (manager.isGatewaySelfRestartActive()) {
+    // Killing the gateway mid self-restart poisons its single-instance lock
+    // (empty lock file → 30s of "gateway already running; lock timeout").
+    // Park the demand; the gateway-ready callback re-evaluates it.
+    const requiresRespawn = !selfRestartSatisfiesSync(options, secretEnvVarsChanged);
+    pendingSelfRestartReevaluation = {
+      reasons: [...(pendingSelfRestartReevaluation?.reasons ?? []), options.reason],
+      requiresRespawn: (pendingSelfRestartReevaluation?.requiresRespawn ?? false) || requiresRespawn,
+      gatewayPid: pendingSelfRestartReevaluation?.gatewayPid ?? manager.getGatewayProcessPid(),
+    };
+    console.log(
+      `${D()} ──── RESTART PARKED (gateway self-restart in progress). reason=${options.reason}, requiresRespawn=${requiresRespawn}`,
+    );
+    return {
+      success: true,
+      changed: true,
+      status,
+    };
+  }
+
   console.log(
     `${D()} ──── HARD RESTART EXECUTING. reason=${options.reason}, phase=${status.phase}, port=${status.message?.match(/loopback:(\d+)/)?.[1] ?? 'unknown'}`,
   );
@@ -2603,6 +2658,35 @@ const syncOpenClawConfig = async (
       openClawConfigApplyState = null;
     }
   }
+};
+
+// The gateway client reconnected — any self-restart has settled. Resolve the
+// parked restart demand: a same-pid (in-process) restart already loaded the
+// on-disk config, so only env-var style demands still need a real respawn.
+// A changed pid means the process was respawned with fresh env anyway.
+const handleGatewaySelfRestartSettled = () => {
+  const manager = getOpenClawEngineManager();
+  manager.clearGatewaySelfRestart();
+  const pending = pendingSelfRestartReevaluation;
+  if (!pending) {
+    return;
+  }
+  pendingSelfRestartReevaluation = null;
+  const currentPid = manager.getGatewayProcessPid();
+  const respawned = pending.gatewayPid != null && currentPid != null && currentPid !== pending.gatewayPid;
+  if (pending.requiresRespawn && !respawned) {
+    console.log(
+      `${gwDiagTs()} parked restart still required after gateway self-restart (reasons: ${pending.reasons.join(', ')}); executing now`,
+    );
+    void syncOpenClawConfig({
+      reason: `self-restart-reevaluate:${pending.reasons[0]}`,
+      restartGatewayIfRunning: true,
+    });
+    return;
+  }
+  console.log(
+    `${gwDiagTs()} parked restart satisfied by gateway self-restart (reasons: ${pending.reasons.join(', ')}, respawned=${respawned})`,
+  );
 };
 
 type OpenClawGatewayRepairResult = {
@@ -2945,7 +3029,10 @@ const getCoworkEngineRouter = () => {
         getOpenClawEngineManager(),
         {
           normalizeModelRef: normalizeOpenClawModelRef,
-          onGatewayClientReady: () => getCronJobService().notifyGatewayReady(),
+          onGatewayClientReady: () => {
+            getCronJobService().notifyGatewayReady();
+            handleGatewaySelfRestartSettled();
+          },
         },
         new SubagentRunStore(getStore().getDatabase()),
         new SubagentMessageStore(getStore().getDatabase()),

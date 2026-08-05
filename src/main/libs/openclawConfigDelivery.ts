@@ -30,6 +30,13 @@ export const OpenClawConfigDeliveryMode = {
 export type OpenClawConfigDeliveryMode =
   typeof OpenClawConfigDeliveryMode[keyof typeof OpenClawConfigDeliveryMode];
 
+/**
+ * Reason prefix for deferred restarts scheduled by the fallback path. Their
+ * only goal is "make the gateway load the already-on-disk config", so a
+ * gateway self-restart satisfies them without a supervisor respawn.
+ */
+export const CONFIG_DELIVERY_FALLBACK_REASON_PREFIX = 'config-delivery-fallback:';
+
 export type OpenClawConfigRpcClient = {
   request: <T = Record<string, unknown>>(
     method: string,
@@ -139,7 +146,7 @@ export async function deliverOpenClawConfigToGateway(
       );
     }
     lastFallbackRestartAtMs = now();
-    input.scheduleDeferredRestart(`config-delivery-fallback:${input.reason}`);
+    input.scheduleDeferredRestart(`${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}${input.reason}`);
     return finish(OpenClawConfigDeliveryMode.Fallback, detail, true);
   };
 
