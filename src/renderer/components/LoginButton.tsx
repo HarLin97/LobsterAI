@@ -25,7 +25,6 @@ import type {
 import CreditsFinalRewardModal from './CreditsFinalRewardModal';
 import { DailyCheckInProfileCard } from './DailyCheckInActivity';
 import UserAvatarIcon from './icons/UserAvatarIcon';
-import { useStartupCreditCampaignEntry } from './startupCreditCampaignBridge';
 import { useDailyCheckInActivity } from './useDailyCheckInActivity';
 
 const ACCOUNT_MENU_ANALYTICS_SOURCE = 'home_account_menu';
@@ -504,18 +503,10 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [finalRewardOpen, setFinalRewardOpen] = useState(false);
   const [finalRewardLoading, setFinalRewardLoading] = useState(false);
-  const startupCreditEntry = useStartupCreditCampaignEntry();
   const containerRef = useRef<HTMLDivElement>(null);
   const finalReward = getFinalRewards(profileSummary?.creditsResetCampaign)[0];
   const finalRewardText = getFinalRewardText(finalReward);
   const finalRewardAvailable = finalReward !== undefined;
-  const finalRewardUserKey = profileSummary?.id?.toString()
-    ?? user?.id?.toString()
-    ?? user?.userId
-    ?? user?.yid;
-  const finalRewardDismissKey = finalRewardAvailable && finalRewardUserKey && finalReward
-    ? `credits_final_reward_session_dismissed.${finalRewardUserKey}.${finalReward.campaignCode}`
-    : null;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -532,12 +523,10 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
   }, [showMenu]);
 
   useEffect(() => {
-    if (!isLoggedIn || !finalRewardDismissKey || startupCreditEntry.available) {
+    if (!isLoggedIn || !finalRewardAvailable) {
       setFinalRewardOpen(false);
-      return;
     }
-    setFinalRewardOpen(sessionStorage.getItem(finalRewardDismissKey) !== '1');
-  }, [finalRewardDismissKey, isLoggedIn, startupCreditEntry.available]);
+  }, [finalRewardAvailable, isLoggedIn]);
 
   if (isLoading) {
     return null;
@@ -572,9 +561,6 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
 
   const closeFinalReward = () => {
     if (finalRewardLoading) return;
-    if (finalRewardDismissKey) {
-      sessionStorage.setItem(finalRewardDismissKey, '1');
-    }
     setFinalRewardOpen(false);
   };
 

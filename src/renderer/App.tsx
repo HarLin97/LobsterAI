@@ -19,7 +19,6 @@ import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import KitsView from './components/kits/KitsView';
 import { McpView } from './components/mcp';
-import PrivacyDialog from './components/PrivacyDialog';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
@@ -41,6 +40,7 @@ import {
 import AppUpdateModal from './components/update/AppUpdateModal';
 import WelcomeDialog from './components/WelcomeDialog';
 import WindowsAppTitleBar from './components/window/WindowsAppTitleBar';
+import WindowTitleBar from './components/window/WindowTitleBar';
 import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config';
 import { SkinProvider } from './providers/SkinProvider';
 import type { ApiConfig } from './services/api';
@@ -146,7 +146,7 @@ const App: React.FC = () => {
   const [isUpdateCardExpanded, setIsUpdateCardExpanded] = useState(false);
   const [isUserInitiatedUpdateFlowActive, setIsUserInitiatedUpdateFlowActive] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
-  const [showWelcome, setShowWelcome] = useState(false);
+  const [welcomeLoginPending, setWelcomeLoginPending] = useState(false);
   const [enterpriseConfig, setEnterpriseConfig] = useState<{
     ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
     disableUpdate?: boolean;
@@ -752,25 +752,39 @@ const App: React.FC = () => {
     await handleConfirmUpdate();
   }, [handleConfirmUpdate]);
 
-  const handlePrivacyAccept = useCallback(async () => {
+  // Continuing from the welcome screen (login or custom model) counts as accepting the agreement.
+  const acceptPrivacyAgreement = useCallback(async () => {
     await window.electron.store.set('privacy_agreed', true);
     setPrivacyAgreed(true);
-    setShowWelcome(true);
   }, []);
 
-  const handlePrivacyReject = useCallback(() => {
-    // 立刻隐藏窗口，让用户感觉立即关闭
-    window.electron.window.close();
-  }, []);
-
+  // Login keeps the welcome gate on screen while the browser flow runs; the
+  // effect below releases the gate only once the user is actually logged in.
   const handleWelcomeLogin = useCallback(async () => {
-    setShowWelcome(false);
-    await authService.login();
+    setWelcomeLoginPending(true);
+    try {
+      await authService.login();
+    } catch (error) {
+      console.error('[App] welcome login failed before browser handoff:', error);
+      setWelcomeLoginPending(false);
+      showToast(i18nService.t('welcomeLoginFailed'));
+    }
+  }, [showToast]);
+  const handleWelcomeCancelLogin = useCallback(() => {
+    setWelcomeLoginPending(false);
   }, []);
-  const handleWelcomeCustomModel = useCallback(() => {
-    setShowWelcome(false);
+  const handleWelcomeCustomModel = useCallback(async () => {
+    await acceptPrivacyAgreement();
     handleShowSettings({ initialTab: 'model' });
-  }, [handleShowSettings]);
+  }, [acceptPrivacyAgreement, handleShowSettings]);
+
+  // Release the first-launch gate once login completes — including when the
+  // browser callback lands after the user tapped back on the welcome screen.
+  useEffect(() => {
+    if (privacyAgreed === false && authUser) {
+      void acceptPrivacyAgreement();
+    }
+  }, [privacyAgreed, authUser, acceptPrivacyAgreement]);
 
   const handlePermissionResponse = useCallback(async (result: CoworkPermissionResult) => {
     if (!pendingPermission) return;
@@ -1308,6 +1322,35 @@ const App: React.FC = () => {
     );
   }
 
+  if (privacyAgreed === false) {
+    // First-launch gate: render only the welcome screen — no app chrome (title
+    // bar/sidebar) until the agreement is accepted. An invisible drag strip
+    // keeps the frameless window movable; Windows caption buttons stay on top.
+    return (
+      <div className="relative h-screen overflow-hidden">
+        {toastMessage && (
+          <Toast
+            message={toastMessage}
+            closeLabel={i18nService.t('close')}
+            onClose={() => setToastMessage(null)}
+          />
+        )}
+        <WelcomeDialog
+          onLogin={handleWelcomeLogin}
+          loginPending={welcomeLoginPending}
+          onCancelLogin={handleWelcomeCancelLogin}
+          onCustomModel={handleWelcomeCustomModel}
+        />
+        <div className="draggable absolute inset-x-0 top-0 z-[70] h-9" />
+        {isWindows && (
+          <div className="absolute right-0 top-0 z-[80] h-9">
+            <WindowTitleBar inline />
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <SkinProvider>
       <SkinPresentationScope
@@ -1321,8 +1364,10 @@ const App: React.FC = () => {
           onClose={() => setToastMessage(null)}
         />
       )}
+      {/* The welcome screen renders via the early return above, so agreement
+          alone gates the campaign here (no separate showWelcome flag). */}
       <StartupCreditCampaign
-        enabled={privacyAgreed === true && !showWelcome}
+        enabled={privacyAgreed === true}
       />
       {windowsStandaloneTitleBar}
       <div
@@ -1401,7 +1446,7 @@ const App: React.FC = () => {
               />
             ) : (
               <CoworkView
-                onRequestAppSettings={privacyAgreed === true && !showWelcome ? handleShowSettings : undefined}
+                onRequestAppSettings={handleShowSettings}
                 onShowSkills={handleShowSkills}
                 onShowKits={handleShowKits}
                 isSidebarCollapsed={isSidebarCollapsed}
@@ -1426,8 +1471,8 @@ const App: React.FC = () => {
       </div>
 
       <EngineFailureOverlay
-        onRequestAppSettings={privacyAgreed === true && !showWelcome ? handleShowSettings : undefined}
-        suspended={showSettings || showUpdateModal || isPermissionModalOpen || privacyAgreed === false || showWelcome}
+        onRequestAppSettings={handleShowSettings}
+        suspended={showSettings || showUpdateModal || isPermissionModalOpen}
       />
 
       {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
@@ -1456,18 +1501,6 @@ const App: React.FC = () => {
         />
       )}
       {permissionModal}
-      {privacyAgreed === false && (
-        <PrivacyDialog
-          onAccept={handlePrivacyAccept}
-          onReject={handlePrivacyReject}
-        />
-      )}
-      {showWelcome && (
-        <WelcomeDialog
-          onLogin={handleWelcomeLogin}
-          onCustomModel={handleWelcomeCustomModel}
-        />
-      )}
       </SkinPresentationScope>
     </SkinProvider>
   );

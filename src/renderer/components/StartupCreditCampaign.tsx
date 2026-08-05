@@ -17,6 +17,8 @@ import React, {
 import { createPortal } from 'react-dom';
 import { useSelector } from 'react-redux';
 
+import startupCreditActionArtworkUrl from '../assets/startup-credit-action.png';
+import startupCreditPosterArtworkUrl from '../assets/startup-credit-poster.png';
 import { authService } from '../services/auth';
 import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
@@ -32,7 +34,6 @@ import {
   STARTUP_CREDIT_OPEN_EVENT,
 } from './startupCreditCampaignBridge';
 import {
-  buildStartupCreditPosterUrl,
   canClaimStartupCredit,
   clearPendingStartupCreditClaim,
   createStartupCreditIdempotencyKey,
@@ -144,6 +145,7 @@ const reportClaimFailure = (
   source: StartupCreditCampaignSourceType,
   errorCode: string | number,
   retryable: boolean,
+  errorMessage = i18nService.t('startupCreditClaimFailed'),
 ): void => {
   reportStartupCreditCampaignEvent(
     LogReporterAction.ActivityClaimFail,
@@ -151,6 +153,7 @@ const reportClaimFailure = (
     {
       source,
       error_code: errorCode,
+      error_message: errorMessage,
       retryable,
     },
   );
@@ -193,12 +196,9 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   const exposureReportedRef = useRef(false);
   const exposureStartedAtRef = useRef<number | null>(null);
   const reportedLoginSuccessRef = useRef(new Set<string>());
-  const posterUrl = snapshot
-    ? buildStartupCreditPosterUrl(
-        snapshot.descriptor.posterUrl,
-        snapshot.descriptor.configRevision,
-      )
-    : null;
+  // This one-off campaign ships its final offer artwork with the client. The
+  // server still controls availability, timing, state, and reward fulfillment.
+  const posterUrl = snapshot ? startupCreditPosterArtworkUrl : null;
 
   const openOffer = useCallback((source: StartupCreditCampaignSourceType): void => {
     offerSourceRef.current = source;
@@ -335,6 +335,8 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
               offerSourceRef.current,
               ActivityServerErrorCode.AlreadyClaimed,
               false,
+              response.error
+                || i18nService.t('startupCreditAlreadyClaimedDescription'),
             );
             clearPendingStartupCreditClaim(localStorage);
             const refreshed = await fetchCurrentSnapshot();
@@ -367,6 +369,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
               offerSourceRef.current,
               response.code,
               false,
+              response.error || i18nService.t('startupCreditEndedDescription'),
             );
             clearPendingStartupCreditClaim(localStorage);
             applySnapshot(null, false);
@@ -378,11 +381,12 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
             offerSourceRef.current,
             response.code ?? 'request_failed',
             true,
+            response.error || i18nService.t('startupCreditClaimFailed'),
           );
           showTerminalView(
             CampaignModalView.Failed,
             null,
-            response.error || i18nService.t('startupCreditClaimFailed'),
+            i18nService.t('startupCreditClaimFailed'),
           );
           return;
         }
@@ -393,6 +397,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
             offerSourceRef.current,
             'invalid_response',
             true,
+            i18nService.t('startupCreditClaimFailed'),
           );
           showTerminalView(
             CampaignModalView.Failed,
@@ -432,13 +437,14 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
         offerSourceRef.current,
         'network_error',
         true,
+        error instanceof Error
+          ? error.message
+          : i18nService.t('startupCreditClaimFailed'),
       );
       showTerminalView(
         CampaignModalView.Failed,
         null,
-        error instanceof Error
-          ? error.message
-          : i18nService.t('startupCreditClaimFailed'),
+        i18nService.t('startupCreditClaimFailed'),
       );
     } finally {
       actionInFlightRef.current = false;
@@ -480,6 +486,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           StartupCreditCampaignSource.LoginReturn,
           ActivityServerErrorCode.AlreadyClaimed,
           false,
+          i18nService.t('startupCreditAlreadyClaimedDescription'),
         );
         clearPendingStartupCreditClaim(localStorage);
         showTerminalView(CampaignModalView.AlreadyClaimed, {
@@ -549,12 +556,15 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     setPosterLoad(current => current.url === posterUrl && current.settled
       ? current
       : { url: posterUrl, settled: false, failed: false });
-    void preloadStartupCreditPoster(posterUrl).then((success) => {
+    void Promise.all([
+      preloadStartupCreditPoster(posterUrl),
+      preloadStartupCreditPoster(startupCreditActionArtworkUrl),
+    ]).then(([posterSuccess, actionArtworkSuccess]) => {
       if (!active) return;
       setPosterLoad({
         url: posterUrl,
         settled: true,
-        failed: !success,
+        failed: !posterSuccess || !actionArtworkSuccess,
       });
     });
     return () => {
@@ -708,18 +718,24 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           createStartupCreditIdempotencyKey(),
         );
     if (!isLoggedIn || !current.context.authenticated) {
-      reportStartupCreditCampaignEvent(
-        LogReporterAction.ActivityLoginRedirect,
-        current.descriptor,
-        {
-          source: offerSourceRef.current,
-          return_to: 'netease_user_bonus_activity',
-          reason: 'claim_requires_login',
-        },
-      );
       showTerminalView(CampaignModalView.StartingLogin);
       try {
-        await authService.login();
+        const loginResult = await authService.login();
+        if (!loginResult.success || !loginResult.redirectUrl) {
+          throw new Error(
+            loginResult.error || i18nService.t('startupCreditLoginFailed'),
+          );
+        }
+        reportStartupCreditCampaignEvent(
+          LogReporterAction.ActivityLoginRedirect,
+          current.descriptor,
+          {
+            source: offerSourceRef.current,
+            redirect_url: loginResult.redirectUrl,
+            return_to: 'netease_user_bonus_activity',
+            reason: 'claim_requires_login',
+          },
+        );
         if (mountedRef.current) setModalView(CampaignModalView.Offer);
       } catch (error) {
         reportClaimFailure(
@@ -727,14 +743,15 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
           offerSourceRef.current,
           'login_redirect_failed',
           true,
+          error instanceof Error
+            ? error.message
+            : i18nService.t('startupCreditLoginFailed'),
         );
         clearPendingStartupCreditClaim(localStorage);
         showTerminalView(
           CampaignModalView.Failed,
           null,
-          error instanceof Error
-            ? error.message
-            : i18nService.t('startupCreditLoginFailed'),
+          i18nService.t('startupCreditLoginFailed'),
         );
       }
       return;
@@ -743,7 +760,9 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   }, [isLoggedIn, performClaim, showTerminalView]);
 
   const handleRetry = useCallback(async () => {
-    const current = snapshotRef.current ?? await load(false);
+    // Reload the slot before retrying so the main process can renew an
+    // activity binding that became stale after a config or runtime refresh.
+    const current = await load(false);
     if (!current) {
       showTerminalView(CampaignModalView.Ended);
       return;
@@ -844,16 +863,16 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
       >
         <button
           type="button"
-          className={`absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:cursor-wait disabled:opacity-60 ${
+          className={`absolute z-10 flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:cursor-wait disabled:opacity-60 ${
             shouldShowPoster
-              ? 'bg-black/35 text-white hover:bg-black/50'
-              : 'bg-surface-raised text-secondary hover:text-foreground'
+              ? 'right-[2%] top-[2%] bg-transparent text-transparent hover:bg-white/10'
+              : 'right-3 top-3 bg-surface-raised text-secondary hover:text-foreground'
           }`}
           aria-label={i18nService.t('close')}
           onClick={closeByUser}
           disabled={isBusy}
         >
-          <XMarkIcon className="h-5 w-5" />
+          <XMarkIcon className={`h-5 w-5 ${shouldShowPoster ? 'opacity-0' : ''}`} />
         </button>
         {shouldShowPoster && descriptor && posterUrl ? (
           <div className="relative overflow-hidden rounded-2xl bg-surface">
@@ -878,13 +897,21 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
                 type="button"
                 disabled={isBusy}
                 onClick={() => void handlePrimaryAction()}
-                className="absolute inset-x-[13%] bottom-[7%] flex h-11 items-center justify-center rounded-lg bg-[#292c32] px-4 text-sm font-semibold text-white shadow-lg transition-colors hover:bg-black disabled:cursor-wait disabled:opacity-70"
-              >
-                {modalView === CampaignModalView.Claiming
+                aria-label={modalView === CampaignModalView.Claiming
                   ? i18nService.t('startupCreditClaiming')
                   : modalView === CampaignModalView.StartingLogin
                     ? i18nService.t('startupCreditStartingLogin')
-                    : descriptor?.actionText}
+                    : descriptor.actionText}
+                className="absolute bottom-[1.5%] left-1/2 w-[60%] -translate-x-1/2 overflow-hidden bg-transparent transition-transform hover:scale-[1.015] disabled:cursor-wait disabled:opacity-70"
+                style={{ aspectRatio: '3.32 / 1' }}
+              >
+                <img
+                  src={startupCreditActionArtworkUrl}
+                  alt=""
+                  aria-hidden="true"
+                  className="pointer-events-none h-full w-full object-cover"
+                  style={{ objectPosition: '50% 49%' }}
+                />
               </button>
             )}
           </div>

@@ -3123,17 +3123,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksDataAnomalyWarning:
       '定时任务「{name}」存在异常数据，已自动修正显示，建议重新编辑该任务',
 
-    // 隐私协议弹窗
-    privacyDialogTitle: '网易有道LobsterAI服务协议',
-    privacyDialogDesc: '在使用网易有道LobsterAI之前，请您仔细阅读{link}内容，并进行确认。',
-    privacyDialogLinkText: '网易有道LobsterAI服务协议',
-    privacyDialogAccept: '我已阅读并同意',
-    privacyDialogReject: '拒绝',
-    welcomeTitle: '欢迎使用LobsterAI',
-    welcomeSubtitle: '超多AI功能等你探索～',
-    welcomePromo: '新用户限时送百万Token',
+    // 首次启动欢迎页（协议 + 登录合并）
+    welcomeTitle: '登录到 LobsterAI',
+    welcomePromo: '登录即送百万Token',
     welcomeLogin: '登录',
     welcomeCustomModel: '自定义模型',
+    welcomeAgreementNotice: '继续即表示您已阅读并同意{link}',
+    welcomeAgreementLinkText: '《网易有道LobsterAI服务协议》',
+    welcomeCopyright: '© {year} 网易有道',
+    welcomeLoginWaiting: '请在浏览器中完成登录',
+    welcomeLoginFailed: '登录发起失败，请重试',
     githubCopilotAuth: 'GitHub 账号认证',
     githubCopilotSignIn: '使用 GitHub 登录',
     githubCopilotSignOut: '退出登录',
@@ -6567,18 +6566,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksDataAnomalyWarning:
       'Scheduled task "{name}" has abnormal data. Display has been auto-corrected. Consider re-editing this task',
 
-    // Privacy dialog
-    privacyDialogTitle: 'NetEase Youdao LobsterAI Terms of Service',
-    privacyDialogDesc:
-      'Before using NetEase Youdao LobsterAI, please carefully read the {link} and confirm.',
-    privacyDialogLinkText: 'NetEase Youdao LobsterAI Terms of Service',
-    privacyDialogAccept: 'I have read and agree',
-    privacyDialogReject: 'Decline',
-    welcomeTitle: 'Welcome to LobsterAI',
-    welcomeSubtitle: 'Explore a world of AI features~',
-    welcomePromo: 'New users get 1M free tokens',
-    welcomeLogin: 'Login',
+    // First-launch welcome screen (terms + login merged)
+    welcomeTitle: 'Log in to LobsterAI',
+    welcomePromo: 'Log in for 1M free tokens',
+    welcomeLogin: 'Log in',
     welcomeCustomModel: 'Custom Model',
+    welcomeAgreementNotice: 'By continuing, you agree to the {link}',
+    welcomeAgreementLinkText: 'NetEase Youdao LobsterAI Terms of Service',
+    welcomeCopyright: '© {year} NetEase Youdao',
+    welcomeLoginWaiting: 'Complete the sign-in in your browser',
+    welcomeLoginFailed: 'Could not start sign-in. Please try again.',
     githubCopilotAuth: 'GitHub Account Authentication',
     githubCopilotSignIn: 'Sign in with GitHub',
     githubCopilotSignOut: 'Sign Out',

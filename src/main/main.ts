@@ -5701,13 +5701,13 @@ if (!gotTheLock) {
       });
       console.log('[Auth] opening portal login with local callback redirect');
       await shell.openExternal(finalUrl);
-      return { success: true };
+      return { success: true, redirectUrl: finalUrl };
     } catch (error) {
       // The callback may be shared by another login page and will clean itself up on timeout.
       console.warn('[Auth] local callback login failed, falling back to deep link login:', error);
       try {
         await shell.openExternal(fallbackUrl);
-        return { success: true };
+        return { success: true, redirectUrl: fallbackUrl };
       } catch (fallbackError) {
         console.error('[Auth] login failed:', fallbackError);
         return {
