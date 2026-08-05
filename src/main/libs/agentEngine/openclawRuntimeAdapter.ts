@@ -218,6 +218,9 @@ export const OPENCLAW_CHAT_SEND_PAYLOAD_SAFE_LIMIT_BYTES =
   OPENCLAW_CHAT_SEND_PAYLOAD_LIMIT_BYTES - OPENCLAW_CHAT_SEND_PAYLOAD_SAFETY_MARGIN_BYTES;
 const WebSocketCloseCode = {
   MessageTooBig: 1009,
+  // RFC 6455 "Service Restart" — the OpenClaw gateway sends this when a config
+  // reload makes it restart itself (in-process SIGUSR1 restart).
+  ServiceRestart: 1012,
 } as const;
 const MediaGenerationToolAction = {
   Status: 'status',
@@ -5774,6 +5777,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         }
 
         console.warn('[OpenClawRuntime] gateway WS disconnected — code:', _code, 'reason:', reason);
+        if (_code === WebSocketCloseCode.ServiceRestart) {
+          // The gateway is restarting itself after a config reload. Flag the
+          // window so the supervisor doesn't kill the process mid-restart
+          // (which poisons the single-instance lock file on Windows).
+          this.engineManager.noteGatewaySelfRestart(reason || 'service restart');
+        }
         const gatewayFailure = typeof this.engineManager.getLastGatewayFailure === 'function'
           ? this.engineManager.getLastGatewayFailure()
           : null;
