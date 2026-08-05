@@ -6,7 +6,7 @@
 
 LobsterAI 需要增加产品使用日志上报能力，帮助项目维护者了解应用安装、核心功能入口和关键交互的使用情况，为功能优化、兼容性改进和开发优先级提供数据依据。
 
-当前关注的数据包括用户选择和使用的技能、MCP、专家套件、模型来源与模型类型、设置项、Agent、定时任务、会话输入框、消息交互、artifact/浏览器预览以及其他核心功能的使用情况。具体事件名称、触发时机和业务参数已在本文 2.4 中维护，后续新增事件继续按同一规范补充。
+当前关注的数据包括用户选择和使用的技能、MCP、专家套件、模型来源与模型类型、设置项、Agent、定时任务、会话输入框、IM 消息提交、消息交互、artifact/浏览器预览以及其他核心功能的使用情况。具体事件名称、触发时机和业务参数已在本文 2.4 中维护，后续新增事件继续按同一规范补充。
 
 当前实现已建立独立、统一的日志请求入口，集中处理日志服务地址、通用参数、用户标识、时间戳、基础环境信息、使用统计开关和网络请求，避免各业务模块自行拼接和发送日志。
 
@@ -35,19 +35,27 @@ LobsterAI 需要增加产品使用日志上报能力，帮助项目维护者了�
 
 ### 2.1 文件位置
 
-日志请求实现在：
+共享事件常量和 Renderer 日志请求实现在：
 
 ```text
+src/shared/analytics/constants.ts
 src/renderer/services/logReporter.ts
+```
+
+主进程日志请求实现在：
+
+```text
+src/main/libs/mainLogReporter.ts
 ```
 
 对应单元测试位于：
 
 ```text
 src/renderer/services/logReporter.test.ts
+src/main/libs/mainLogReporter.test.ts
 ```
 
-业务调用方统一通过 `reportYdAnalyzer()` 发送事件。当前已接入计划模式、应用启动、技能、MCP、专家套件、模型选择、设置页和 IM 机器人等入口；具体事件列表见下文 2.4。
+Renderer 业务调用方统一通过 `reportYdAnalyzer()` 发送事件。必须在主进程生命周期中触发的事件通过 `MainLogReporter.report()` 发送。两条路径复用相同的事件名、服务配置、通用参数和使用统计开关，任一上报失败都不得阻断原业务流程。当前已接入计划模式、应用启动、技能、MCP、专家套件、模型选择、设置页和 IM 机器人等入口；具体事件列表见下文 2.4。
 
 ### 2.2 日志服务配置
 
@@ -82,15 +90,15 @@ export const LogReporterActionPrefix = {
 | `_npid` | 通用配置 | 产品 ID，当前为 `wisdom` |
 | `_ncat` | 通用配置 | 日志分类，当前为 `actions` |
 | `action` | 业务调用方 | 事件名称，不能为空且必须以 `lobsterai_` 开头 |
-| `app_version` | Electron 应用信息 | 当前应用版本；首次上报前异步读取并缓存，读取失败时为空字符串 |
-| `os_platform` | Preload 暴露的运行环境 | 当前系统平台，例如 `darwin`、`win32`、`linux` |
-| `os_arch` | Preload 暴露的运行环境 | 当前系统架构，例如 `arm64`、`x64` |
+| `app_version` | Electron 应用信息 | 当前应用版本；Renderer 首次上报前异步读取并缓存，主进程直接读取，读取失败时为空字符串 |
+| `os_platform` | 运行环境 | 当前系统平台，例如 `darwin`、`win32`、`linux` |
+| `os_arch` | 运行环境 | 当前系统架构，例如 `arm64`、`x64` |
 | `language` | 应用配置 | 当前应用语言 |
 | `uuid` | 本地安装 ID | 复用现有 `installation_uuid`，未登录时也可用于安装维度统计；读取失败时不发送 |
 | `firstKeyfrom` | 渠道归因 | 复用现有首次渠道归因；读取失败时不发送 |
 | `latestKeyfrom` | 渠道归因 | 复用现有最近渠道归因；读取失败时不发送 |
-| `is_logged_in` | Redux 登录态 | 当前是否存在登录用户 `yid` |
-| `log_Usid` | Redux 登录态 | 当前用户的 `yid`，未登录时为空字符串 |
+| `is_logged_in` | 登录态 | 当前是否存在登录用户 `yid`；Renderer 从 Redux 读取，主进程从已有 `auth_user` 读取 |
+| `log_Usid` | 登录态 | 当前用户的 `yid`，未登录时为空字符串 |
 | `uts` | 日志模块 | `Date.now()` 生成的毫秒时间戳 |
 | 其他参数 | 业务调用方 | 当前事件特有的字符串、数字或布尔值参数 |
 
@@ -1051,6 +1059,30 @@ export const LogReporterActionPrefix = {
   - 不上传完整本地路径、完整 URL、URL query、文件名全文、HTML/代码/图片/文档内容、sessionId、artifactId、messageId、App 可执行路径或错误详情。
   - 会上传 artifact 类型、扩展名、标题长度、来源、打开目标、App 展示名称、tab/面板状态、浏览器 URL 类型、设备/缩放参数和动作结果，用于分析 artifact 预览链路是否被用户持续使用。
 
+#### 2.4.41 `lobsterai_im_prompt_submit`
+
+- 状态：已实现。
+- 触发时机：OpenClaw 接收到 IM channel 消息、成功创建对应 Agent turn，并发送 `sessions.changed phase=start` 后，LobsterAI 将 channel 映射到本地会话并发送事件。对于仍通过 `agent` / `chat` 事件创建本地 ActiveTurn 的兼容链路，在 ActiveTurn 创建后使用同一方法回退触发。两条路径共享 run ID 去重，同一 run 的重复生命周期事件、恢复重试或双路径命中不重复发送；进程内仅保留最近 2000 个已上报 run ID，避免去重集合随运行时间无限增长。
+- 事件含义：统计从 IM 侧成功进入 Agent 执行链路的任务提交量，并区分平台、新任务/续聊和 Agent 路由。该事件不替代 `lobsterai_prompt_submit`；后者继续只统计桌面端首页和历史对话输入框提交。
+- 排除范围：
+  - 不统计桌面端 managed session、定时任务、子 Agent 会话、心跳、通知投递镜像或失效 Agent 绑定产生的事件。
+  - 消息在进入 Agent turn 前被 IM 平台、OpenClaw 插件或权限策略拒绝时不发送。
+  - Agent turn 创建后的模型、工具或回复失败不改变本事件的成功提交口径。
+- 业务参数：
+  - `source`：string，当前固定为 `openclaw_channel`。
+  - `platform`：string，归一化后的 IM 平台，例如 `weixin`、`dingtalk`、`feishu`、`telegram`、`discord`、`email`。
+  - `conversationState`：string，当前取值为 `new_task` 或 `continue_session`。创建 turn 前本地映射会话中不存在历史助手消息时为 `new_task`，否则为 `continue_session`。
+  - `agentId`：string，实际承接该 IM turn 的 Agent ID。
+  - `isMainAgent`：boolean，是否由主 Agent 承接。
+- 发送与容错口径：
+  - 事件由主进程直接发送，不依赖 Renderer 窗口是否已加载。
+  - 使用与 Renderer 相同的 `usageAnalyticsEnabled` 开关、安装 ID、渠道归因、登录态和基础环境参数。
+  - 采用 fire-and-forget；单次请求最多等待 10 秒，主进程同时最多保留 20 个日志请求，超出并发上限、超时或失败时只写警告日志，不重试、不影响 IM 消息处理、Agent 执行或回复投递。
+  - 读取使用统计开关失败时按关闭处理，本次事件直接跳过，避免在无法确认用户设置时发送请求。
+- 隐私边界：
+  - 不上传 IM 消息正文、prompt hash、会话 ID、session key、run ID、群 ID、用户 ID、账号 ID、实例 ID、Agent 名称、附件内容、文件名、本地路径或错误详情。
+  - 只上传平台、会话状态和 Agent 路由等结构化摘要。
+
 ### 2.5 请求流程
 
 ```text
@@ -1067,9 +1099,22 @@ export const LogReporterActionPrefix = {
 
 `uuid` 复用已有 `installation_uuid`，不新增数据库表或迁移脚本。`firstKeyfrom` 和 `latestKeyfrom` 复用主进程现有渠道归因服务，并通过只读 IPC 暴露给 Renderer 日志模块。上述参数读取失败时不会阻断日志请求，只会省略对应字段。
 
-日志请求失败时只记录警告并返回 `false`，不会向调用方抛出异常，也不会阻断原业务流程。
+日志请求失败时只记录警告并返回 `false`，不会向调用方抛出异常，也不会阻断原业务流程。主进程请求设置 10 秒超时、20 个并发上限且不重试，避免网络长期无响应或 IM 短时高流量时积累未完成请求。
 
 Renderer 调试日志只记录事件 `action` 和请求结果，不记录完整请求地址或事件参数。主进程的通用 API 请求日志会移除 URL query 和 fragment 后再写入本地日志，避免 `log_Usid` 和事件参数进入本地日志文件。
+
+主进程事件不经过 Renderer 或 `api:fetch` IPC，流程如下：
+
+```text
+主进程业务模块
+  -> MainLogReporter.report(params)
+  -> 校验 action 和 usageAnalyticsEnabled
+  -> 补充通用参数、安装 ID、渠道归因、用户 ID、时间戳和基础环境参数
+  -> Electron session.fetch(GET)
+  -> 返回 true 或 false
+```
+
+主进程调试日志同样只记录事件 `action` 和请求结果，不记录完整请求地址、业务参数或用户标识。
 
 ### 2.6 设置开关
 
@@ -1081,7 +1126,7 @@ Renderer 调试日志只记录事件 `action` 和请求结果，不记录完整�
 
 配置字段为 `usageAnalyticsEnabled`，存储在现有 `app_config` 中，默认值为 `true`。老用户本地配置中没有该字段时，按开启处理，不需要新增数据库表或迁移脚本。
 
-用户关闭后，`reportYdAnalyzer()` 在发送请求前直接跳过并返回 `false`，不会访问日志服务。该跳过行为只写入一条 Renderer debug 日志，不影响业务流程。
+用户关闭后，`reportYdAnalyzer()` 和 `MainLogReporter.report()` 都会在发送请求前直接跳过并返回 `false`，不会访问日志服务。该跳过行为只写入 debug 日志，不影响业务流程。
 
 用户可见文案应避免使用“日志上报”，避免误解为上传本地日志文件。当前中文文案为：
 
