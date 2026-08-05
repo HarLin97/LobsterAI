@@ -37,6 +37,17 @@ test('large markdown preview can be disabled for full document renderers', () =>
   expect(fullHtml).toContain('Full file');
 });
 
+test('large markdown preview can be temporarily expanded by a controlled caller', () => {
+  const content = `# Search target\n\n${'x'.repeat(8 * 1024 + 1)}\nneedle`;
+  const html = renderToStaticMarkup(React.createElement(MarkdownContent, {
+    content,
+    forceExpanded: true,
+  }));
+
+  expect(html).not.toMatch(/内容较大|Large content/);
+  expect(html).toContain('needle');
+});
+
 test('compact spacing reduces list margins for user message rendering', () => {
   const content = '内容包含：\n\n1. 项目介绍和解决方案\n2. 核心功能';
   const defaultHtml = renderToStaticMarkup(React.createElement(MarkdownContent, { content }));

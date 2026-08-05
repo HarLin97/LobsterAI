@@ -182,3 +182,64 @@ describe('coworkService.loadSession', () => {
     expect(store.getState().cowork.currentSession?.messages).toHaveLength(40);
   });
 });
+
+describe('coworkService.loadNewerMessages', () => {
+  test('appends the page after the current message window', async () => {
+    const allMessages = makeMessages(120);
+    store.dispatch(setCurrentSession(makeSession(allMessages.slice(20, 70), 20, 120)));
+    const getSessionMessages = vi.fn(async () => ({
+      success: true,
+      messages: allMessages.slice(70, 120),
+      offset: 70,
+      total: 120,
+    }));
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: { getSessionMessages },
+      },
+    });
+
+    await expect(coworkService.loadNewerMessages('session-1')).resolves.toBe(true);
+
+    expect(getSessionMessages).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      offset: 70,
+      limit: 50,
+    });
+    expect(store.getState().cowork.currentSession?.messages).toHaveLength(100);
+    expect(store.getState().cowork.currentSession?.messagesOffset).toBe(20);
+    const loadedMessages = store.getState().cowork.currentSession?.messages ?? [];
+    expect(loadedMessages[loadedMessages.length - 1]?.id).toBe('message-119');
+  });
+
+  test('ignores a newer page when navigation replaced the active window while loading', async () => {
+    const allMessages = makeMessages(120);
+    store.dispatch(setCurrentSession(makeSession(allMessages.slice(20, 70), 20, 120)));
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSessionMessages: vi.fn(async () => {
+            store.dispatch(setMessageWindow({
+              sessionId: 'session-1',
+              messages: allMessages.slice(0, 50),
+              messagesOffset: 0,
+              totalMessages: 120,
+            }));
+            return {
+              success: true,
+              messages: allMessages.slice(70, 120),
+              offset: 70,
+              total: 120,
+            };
+          }),
+        },
+      },
+    });
+
+    await expect(coworkService.loadNewerMessages('session-1')).resolves.toBe(false);
+    expect(store.getState().cowork.currentSession?.messagesOffset).toBe(0);
+    expect(store.getState().cowork.currentSession?.messages).toHaveLength(50);
+    const loadedMessages = store.getState().cowork.currentSession?.messages ?? [];
+    expect(loadedMessages[loadedMessages.length - 1]?.id).toBe('message-49');
+  });
+});
