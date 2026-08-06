@@ -1,3 +1,5 @@
+import { LOBSTERAI_REQUEST_OPTIONS_VERSION } from './requestOptionsProtocol';
+
 export const LobsterAIThinkingLevel = {
   Off: 'off',
   Minimal: 'minimal',
@@ -14,6 +16,7 @@ export type LobsterAIThinkingLevel =
 export type LobsterAIThinkingProfile = {
   levels: LobsterAIThinkingLevel[];
   defaultLevel: LobsterAIThinkingLevel;
+  requestOptionsVersion?: typeof LOBSTERAI_REQUEST_OPTIONS_VERSION;
 };
 
 export type LobsterAIThinkingProfileMap = Record<string, LobsterAIThinkingProfile>;
@@ -53,6 +56,9 @@ const parseThinkingProfile = (value: unknown): LobsterAIThinkingProfile | undefi
   return {
     levels,
     defaultLevel: value.defaultLevel as LobsterAIThinkingLevel,
+    ...(value.requestOptionsVersion === LOBSTERAI_REQUEST_OPTIONS_VERSION
+      ? { requestOptionsVersion: LOBSTERAI_REQUEST_OPTIONS_VERSION }
+      : {}),
   };
 };
 

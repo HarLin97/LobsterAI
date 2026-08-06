@@ -1795,6 +1795,7 @@ interface IElectronAPI {
         supportsVideo?: boolean;
         supportsThinking?: boolean;
         thinkingConfig?: import('../../shared/providers/modelThinking').ModelThinkingConfig;
+        requestCapabilities?: import('../../shared/providers/lobsterAIRequestOptions').LobsterAIRequestCapability[];
         supportsToolCalling?: boolean;
         agenticReady?: boolean;
         contextWindow?: number;

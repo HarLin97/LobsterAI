@@ -4616,6 +4616,7 @@ if (!gotTheLock) {
         supportsVideo: metadata?.supportsVideo,
         supportsThinking: metadata?.supportsThinking,
         thinkingConfig: metadata?.thinkingConfig,
+        requestCapabilities: metadata?.requestCapabilities,
         supportsToolCalling: metadata?.supportsToolCalling,
         agenticReady: metadata?.agenticReady,
         contextWindow: metadata?.contextWindow,

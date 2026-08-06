@@ -1,5 +1,9 @@
 import { type ApiFormat,type ProviderConfig, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import {
+  type LobsterAIRequestCapability,
+  parseLobsterAIRequestCapabilities,
+} from '../../shared/providers/lobsterAIRequestOptions';
+import {
   applyModelRuntimeProfileMetadata,
   ModelRuntimeProfile,
   type ModelRuntimeProfile as ModelRuntimeProfileType,
@@ -74,6 +78,7 @@ export type ServerModelMetadata = {
   supportsVideo?: boolean;
   supportsThinking?: boolean;
   thinkingConfig?: ModelThinkingConfig;
+  requestCapabilities?: LobsterAIRequestCapability[];
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
@@ -86,8 +91,8 @@ type CachedServerModelMetadata = Omit<ServerModelMetadata, 'modelId'> & {
 };
 
 export type ServerModelMetadataInput =
-  Omit<ServerModelMetadata, 'runtimeProfile' | 'thinkingConfig'>
-  & { runtimeProfile?: unknown; thinkingConfig?: unknown };
+  Omit<ServerModelMetadata, 'runtimeProfile' | 'thinkingConfig' | 'requestCapabilities'>
+  & { runtimeProfile?: unknown; thinkingConfig?: unknown; requestCapabilities?: unknown };
 
 export const ServerModelRunGateReason = {
   MetadataMissing: 'metadata_missing',
@@ -136,6 +141,7 @@ export type ApiConfigResolution = {
     supportsVideo?: boolean;
     supportsThinking?: boolean;
     thinkingConfig?: ModelThinkingConfig;
+    requestCapabilities?: LobsterAIRequestCapability[];
     modelName?: string;
     contextWindow?: number;
     maxTokens?: number;
@@ -185,6 +191,7 @@ const serializeServerModelMetadata = (
       supportsVideo: model.supportsVideo,
       supportsThinking: model.supportsThinking,
       thinkingConfig: model.thinkingConfig,
+      requestCapabilities: model.requestCapabilities,
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
       contextWindow: model.contextWindow,
@@ -206,6 +213,7 @@ const getComparableServerModelMetadata = (
   supportsVideo: meta.supportsVideo,
   supportsThinking: meta.supportsThinking,
   thinkingConfig: meta.thinkingConfig,
+  requestCapabilities: meta.requestCapabilities,
   supportsToolCalling: meta.supportsToolCalling,
   agenticReady: meta.agenticReady,
   contextWindow: meta.contextWindow,
@@ -242,6 +250,7 @@ export function updateServerModelMetadata(models: ServerModelMetadataInput[]): b
     const thinkingConfig = runtimeMetadata.supportsThinking === true
       ? parseModelThinkingConfig(model.thinkingConfig)
       : undefined;
+    const requestCapabilities = parseLobsterAIRequestCapabilities(model.requestCapabilities);
 
     nextCache.set(modelId, {
       modelName: model.modelName,
@@ -255,6 +264,7 @@ export function updateServerModelMetadata(models: ServerModelMetadataInput[]): b
       supportsVideo: runtimeMetadata.supportsVideo,
       supportsThinking: runtimeMetadata.supportsThinking,
       thinkingConfig,
+      requestCapabilities,
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
       contextWindow: runtimeMetadata.contextWindow,
@@ -282,6 +292,7 @@ export function getAllServerModelMetadata(): ServerModelMetadata[] {
     supportsVideo: meta.supportsVideo,
     supportsThinking: meta.supportsThinking,
     thinkingConfig: meta.thinkingConfig,
+    requestCapabilities: meta.requestCapabilities,
     supportsToolCalling: meta.supportsToolCalling,
     agenticReady: meta.agenticReady,
     contextWindow: meta.contextWindow,
@@ -305,6 +316,7 @@ export function getServerModelMetadata(modelId: string): ServerModelMetadata | n
     supportsVideo: metadata.supportsVideo,
     supportsThinking: metadata.supportsThinking,
     thinkingConfig: metadata.thinkingConfig,
+    requestCapabilities: metadata.requestCapabilities,
     supportsToolCalling: metadata.supportsToolCalling,
     agenticReady: metadata.agenticReady,
     contextWindow: metadata.contextWindow,
@@ -444,6 +456,7 @@ type MatchedProvider = {
   supportsVideo?: boolean;
   supportsThinking?: boolean;
   thinkingConfig?: ModelThinkingConfig;
+  requestCapabilities?: LobsterAIRequestCapability[];
   modelName?: string;
   contextWindow?: number;
   maxTokens?: number;
@@ -516,6 +529,8 @@ function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
     supportsImage: cachedMeta?.supportsImage,
     supportsVideo: cachedMeta?.supportsVideo,
     supportsThinking: cachedMeta?.supportsThinking,
+    thinkingConfig: cachedMeta?.thinkingConfig,
+    requestCapabilities: cachedMeta?.requestCapabilities,
     modelName: cachedMeta?.modelName,
     contextWindow: cachedMeta?.contextWindow,
     maxTokens: cachedMeta?.maxTokens,
@@ -722,6 +737,7 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
         supportsVideo: matched.supportsVideo,
         supportsThinking: matched.supportsThinking,
         thinkingConfig: matched.thinkingConfig,
+        requestCapabilities: matched.requestCapabilities,
         modelName: matched.modelName,
         contextWindow: matched.contextWindow,
         maxTokens: matched.maxTokens,
@@ -767,6 +783,7 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
       supportsVideo: matched.supportsVideo,
       supportsThinking: matched.supportsThinking,
       thinkingConfig: matched.thinkingConfig,
+      requestCapabilities: matched.requestCapabilities,
       modelName: matched.modelName,
       contextWindow: matched.contextWindow,
       maxTokens: matched.maxTokens,
@@ -852,6 +869,7 @@ export function resolveRawApiConfig(): ApiConfigResolution {
       supportsVideo: matched.supportsVideo,
       supportsThinking: matched.supportsThinking,
       thinkingConfig: matched.thinkingConfig,
+      requestCapabilities: matched.requestCapabilities,
       modelName: matched.modelName,
       contextWindow: matched.contextWindow,
       maxTokens: matched.maxTokens,

@@ -64,8 +64,42 @@ describe('OpenClaw extension manifests', () => {
             enum: ['moonshot-kimi-k3'],
           },
         },
+        thinkingProfiles: {
+          type: 'object',
+          minProperties: 1,
+          propertyNames: {
+            pattern: '^[^/\\s]+/[^\\s]+$',
+          },
+          additionalProperties: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              levels: {
+                type: 'array',
+                minItems: 1,
+                uniqueItems: true,
+                items: {
+                  type: 'string',
+                  enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+                },
+              },
+              defaultLevel: {
+                type: 'string',
+                enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+              },
+              requestOptionsVersion: {
+                type: 'integer',
+                enum: [1],
+              },
+            },
+            required: ['levels', 'defaultLevel'],
+          },
+        },
       },
-      required: ['modelProfiles'],
+      anyOf: [
+        { required: ['modelProfiles'] },
+        { required: ['thinkingProfiles'] },
+      ],
     });
   });
 });

@@ -40,6 +40,10 @@
             "defaultLevel": {
               "type": "string",
               "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+            },
+            "requestOptionsVersion": {
+              "type": "integer",
+              "enum": [1]
             }
           },
           "required": ["levels", "defaultLevel"]

@@ -30,7 +30,8 @@
   "thinkingConfig": {
     "levels": ["off", "high", "max"],
     "defaultLevel": "high"
-  }
+  },
+  "requestCapabilities": ["lobsterai-options-v1"]
 }
 ```
 
@@ -40,7 +41,22 @@
 X-LobsterAI-Client-Capabilities: kimi-k3-agentic-v1,thinking-level-control-v1
 ```
 
-服务端只有在客户端声明 `thinking-level-control-v1`、模型存在合法配置且请求值属于允许列表时，才接受用户选择。`off` 会关闭 thinking 并移除 effort；其他值会开启 thinking 并写入对应 effort。
+`requestCapabilities` 是模型请求协议能力的附加元数据。客户端只有在当前模型同时存在合法 `thinkingConfig`，并且该数组包含 `lobsterai-options-v1` 时，才在 `POST /api/proxy/v1/chat/completions` 中增加：
+
+```json
+{
+  "lobsterai_options": {
+    "version": 1,
+    "thinking": {
+      "level": "off"
+    }
+  }
+}
+```
+
+该参数表达用户的最终语义选择，不直接复用某个供应商的字段格式。服务端验证后消费并删除整个 `lobsterai_options`，不会将其转发上游。参数优先级为 `lobsterai_options.thinking.level` > OpenClaw 生成的 `thinking/reasoning_effort` > 旧客户端兼容规则。
+
+服务端只有在客户端声明 `thinking-level-control-v1`、模型存在合法配置且请求值属于允许列表时，才接受显式选择。`off` 会关闭 thinking，并移除顶层及历史消息中的 reasoning 字段；其他值会开启 thinking 并覆盖对应 effort。参数存在但版本、结构或等级非法时返回参数错误，不回落到默认值。
 
 ## 管理端写入语义
 
@@ -54,27 +70,30 @@ X-LobsterAI-Client-Capabilities: kimi-k3-agentic-v1,thinking-level-control-v1
 
 LobsterAI 按服务端列表动态渲染思考强度入口，不硬编码 DeepSeek 型号。模型悬浮详情展示当前或默认强度，并打开相邻的二级选择页。受套餐限制的模型继续走原登录/订阅拦截。
 
-会话本地新增 `thinking_level`。切换模型时，模型 ID 与思考强度作为同一次会话更新提交；新会话使用模型 `defaultLevel`，旧会话或空值在运行时解析为当前模型默认值。OpenClaw 配置同步将 `thinkingConfig` 转换为 `thinkingProfiles`，模型兼容插件在每轮请求前恢复对应 thinking 设置，防止运行时会话状态漂移。
+会话和 Agent 本地均保存 `thinking_level`。切换模型或思考强度时，模型 ID 与思考强度走同一套持久化路径；新会话使用 Agent 已保存的有效强度，旧会话或空值在运行时解析为当前模型默认值。
+
+OpenClaw 配置同步将 `thinkingConfig` 转换为 `thinkingProfiles`。只有 server 为该完整模型 ID 下发 `lobsterai-options-v1` 时，profile 才额外包含 `requestOptionsVersion: 1`。模型兼容插件从 exact `provider/modelId` profile 和当前 `thinkingLevel` 生成最终请求参数，不删除 `YoudaoInner` 后缀，也不硬编码 DeepSeek 型号；未声明协议能力的旧 server 继续使用原 OpenClaw 请求格式。
 
 ## 版本兼容矩阵
 
 | 客户端 | 服务端数据 | 行为 |
 | --- | --- | --- |
-| 旧客户端 | 新服务端新增字段 | JSON 未知字段被忽略，既有模型选择与 `supportsThinking` 行为不变 |
-| 新客户端 | 旧服务端无字段 | 不显示强度入口，按既有固定思考行为运行 |
-| 新客户端 | 新服务端合法配置 | 动态显示并仅允许选择下发列表中的值 |
+| 旧客户端 | 新服务端新增字段 | JSON 未知字段被忽略，不发送 `lobsterai_options`，既有行为不变 |
+| 新客户端 | 旧服务端有 `thinkingConfig`、无请求 capability | 可按既有 UI/运行时逻辑选择，但不发送未知内部参数 |
+| 新客户端 | 新服务端合法配置和 capability | 动态显示允许值，并发送明确的 `lobsterai_options.thinking.level` |
 | 新客户端 | 新服务端非法/未知值 | 客户端忽略配置，不显示入口；代理端也不接受该值 |
 | 旧管理端 | 新服务端 | 更新请求不带字段时保留原配置 |
 
 DeepSeek 兼容策略：
 
-- `deepseek-v4-pro` 在原生 `api.deepseek.com` 路由上，对未声明新能力的旧客户端保持强制 `max`。
+- `deepseek-v4-pro` 在原生 `api.deepseek.com` 和 `YoudaoInner` 路由上，对未声明新能力的旧客户端保持强制 `max`。
 - 历史别名 `deepseek-v4-pro-thinking` 在原生 DeepSeek 路由上继续映射到 Pro 并强制 `max`，不作为新的可配置模型暴露；同名第三方路由保持旧请求不变。
-- `deepseek-v4-flash` 对旧客户端维持既有请求体；只有新客户端声明能力后才使用可选强度。
+- 带 `YoudaoInner` 后缀的 Flash/Pro 使用完整模型元数据匹配同一协议，不依赖后缀归一化。
+- `deepseek-v4-flash` 对旧客户端维持既有请求体；只有客户端与 server 双向确认能力后才使用 v1 参数。
 
 ## 数据库与发布顺序
 
-先执行 `lobsterai-server/sql/V65__model_thinking_config.sql`。该脚本新增 `model_pricing.thinking_config JSON NULL`，并为 LobsterAI 渠道中的 `deepseek-v4-flash`、`deepseek-v4-pro` 初始化：
+先执行 `lobsterai-server/sql/V65__model_thinking_config.sql`。该脚本新增 `model_pricing.thinking_config JSON NULL`，并为 LobsterAI 渠道中的 `deepseek-v4-flash`、`deepseek-v4-pro`，以及 `YoudaoInner` 渠道中的对应后缀模型初始化：
 
 ```json
 {"levels":["off","high","max"],"defaultLevel":"high"}
@@ -82,10 +101,10 @@ DeepSeek 兼容策略：
 
 推荐发布顺序：
 
-1. 执行 V65 并核验 JSON 列和两条 DeepSeek 配置。
-2. 发布 server；此时旧客户端和旧 admin 可继续工作。
+1. 执行 V65 并核验 JSON 列和两组 DeepSeek 配置。
+2. 发布 server；此时旧客户端和旧 admin 可继续工作，模型目录开始下发 `lobsterai-options-v1`。
 3. 发布 admin，用于后续模型级配置维护。
-4. 发布 LobsterAI 客户端，逐步启用 `thinking-level-control-v1`。
+4. 发布 LobsterAI 客户端；客户端只对已声明 v1 capability 的模型注入内部参数。
 
 数据库核验：
 
@@ -94,14 +113,17 @@ SHOW COLUMNS FROM model_pricing LIKE 'thinking_config';
 
 SELECT provider, model_id, supports_thinking, thinking_config
 FROM model_pricing
-WHERE provider = 'LobsterAI'
-  AND model_id IN ('deepseek-v4-flash', 'deepseek-v4-pro');
+WHERE (provider = 'LobsterAI'
+       AND model_id IN ('deepseek-v4-flash', 'deepseek-v4-pro'))
+   OR (provider = 'YoudaoInner'
+       AND model_id IN ('deepseek-v4-flash-YoudaoInner', 'deepseek-v4-pro-YoudaoInner'));
 ```
 
 ## 回滚与卡点
 
 - 客户端回滚无需回滚数据库；旧客户端会忽略新增字段。
-- server 回滚前不必删除列，但旧 server 不会读取或维护该配置。
+- server 回滚前不必删除列；旧 server 不会下发 `lobsterai-options-v1`，客户端下一次模型同步后停止注入内部参数。
+- 发布顺序必须 server 在前。能力协商用于避免新客户端把未知 `lobsterai_options` 发送给尚未支持剥离该字段的旧 server。
 - 如需关闭入口，优先由 admin 显式清空单模型 `thinkingConfig`，不必回滚客户端。
 - 模型元数据变化会使 OpenClaw 配置指纹变化并触发网关重启；批量修改模型时应合并发布，避免连续重启。
 - 不同上游 provider 对 effort 枚举的支持可能不同。新模型上线前必须在 server allowlist、下发配置和实际 provider 三处联合验证，不能仅依赖 UI 可选项。
@@ -117,7 +139,7 @@ WHERE provider = 'LobsterAI'
 
 ## 验收清单
 
-- server：配置校验、管理端字段省略/清空、旧客户端 Pro 强制 max、新客户端 off/high/max 和非法值回退均有测试。
+- server：配置校验、管理端字段省略/清空、能力下发、旧客户端 Pro 强制 max、v1 off/high/max、参数剥离和非法值拒绝均有测试。
 - admin：类型检查和生产构建通过；编辑、关闭与默认值校验可正常提交。
-- LobsterAI：共享解析器、模型缓存、能力头、SQLite、OpenClaw 配置同步及运行时请求 patch 测试通过；生产构建和 touched-file ESLint 通过。
+- LobsterAI：共享解析器、模型缓存、能力协商、SQLite、OpenClaw 配置同步及最终 payload 注入测试通过；生产构建和 touched-file ESLint 通过。
 - 本地联调：server 使用 `test` profile 连接测试 MySQL，admin API 指向本地 server；两项服务启动后分别检查 HTTP 页面/API 和数据库回读。

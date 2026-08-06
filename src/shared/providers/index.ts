@@ -9,6 +9,13 @@ export {
   ProviderName,
   ProviderRegistry,
 } from './constants';
+export {
+  LOBSTERAI_REQUEST_OPTIONS_FIELD,
+  LOBSTERAI_REQUEST_OPTIONS_VERSION,
+  LobsterAIRequestCapability,
+  parseLobsterAIRequestCapabilities,
+  supportsLobsterAIRequestOptionsV1,
+} from './lobsterAIRequestOptions';
 export type {
   ModelRuntimeProfileDefinition,
   ModelRuntimeProfileMetadata,

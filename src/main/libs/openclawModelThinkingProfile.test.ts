@@ -8,6 +8,7 @@ describe('parseThinkingProfileMap', () => {
       'lobsterai-server/deepseek-v4-flash': {
         levels: ['off', 'high', 'max'],
         defaultLevel: 'high',
+        requestOptionsVersion: 1,
       },
       'missing-separator': {
         levels: ['high'],
@@ -21,6 +22,7 @@ describe('parseThinkingProfileMap', () => {
       'lobsterai-server/deepseek-v4-flash': {
         levels: ['off', 'high', 'max'],
         defaultLevel: 'high',
+        requestOptionsVersion: 1,
       },
     });
   });

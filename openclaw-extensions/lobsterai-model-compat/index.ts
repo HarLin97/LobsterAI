@@ -13,6 +13,11 @@ import {
   parseModelProfileMap,
   resolveModelProfileTransportDecision,
 } from './profileMapping';
+import {
+  createLobsterAIRequestOptionsWrapper,
+  resolveLobsterAIRequestThinkingLevel,
+} from './requestOptions';
+import { LOBSTERAI_REQUEST_OPTIONS_VERSION } from './requestOptionsProtocol';
 import { parseThinkingProfileMap } from './thinkingProfileMapping';
 
 const PLUGIN_ID = 'lobsterai-model-compat';
@@ -90,10 +95,17 @@ const register = (api: OpenClawPluginApi): void => {
     },
     wrapStreamFn: (ctx) => {
       const decision = assertSupportedTransport(ctx.provider, ctx.modelId, ctx.model?.api);
-      if (decision.kind === ModelProfileTransportDecision.Passthrough) {
-        return ctx.streamFn;
+      const baseStreamFn = decision.kind === ModelProfileTransportDecision.Passthrough
+        ? ctx.streamFn
+        : createMoonshotKimiK3Wrapper(ctx.streamFn);
+      const thinkingProfile = thinkingProfiles[`${ctx.provider}/${ctx.modelId}`];
+      if (thinkingProfile?.requestOptionsVersion === LOBSTERAI_REQUEST_OPTIONS_VERSION) {
+        return createLobsterAIRequestOptionsWrapper(
+          baseStreamFn,
+          resolveLobsterAIRequestThinkingLevel(thinkingProfile, ctx.thinkingLevel),
+        );
       }
-      return createMoonshotKimiK3Wrapper(ctx.streamFn);
+      return baseStreamFn;
     },
     resolveThinkingProfile: ({ provider, modelId }) => {
       if (isKimiK3Profile(provider, modelId)) {

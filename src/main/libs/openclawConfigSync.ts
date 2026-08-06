@@ -31,6 +31,11 @@ import {
   ProviderRegistry,
   resolveModelRuntimeProfile,
 } from '../../shared/providers';
+import {
+  LOBSTERAI_REQUEST_OPTIONS_VERSION,
+  type LobsterAIRequestCapability,
+  supportsLobsterAIRequestOptionsV1,
+} from '../../shared/providers/lobsterAIRequestOptions';
 import type { ModelThinkingConfig } from '../../shared/providers/modelThinking';
 import type { Agent, CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { DiscordInstanceConfig, IMSettings, TelegramInstanceConfig } from '../im/types';
@@ -1453,15 +1458,23 @@ const collectCompatibilityOwnerProfile = (
   profiles[selection.primaryModel] = selection.compatibilityOwnerProfile;
 };
 
+type OpenClawThinkingProfile = ModelThinkingConfig & {
+  requestOptionsVersion?: typeof LOBSTERAI_REQUEST_OPTIONS_VERSION;
+};
+
 const collectThinkingProfile = (
-  profiles: Record<string, ModelThinkingConfig>,
+  profiles: Record<string, OpenClawThinkingProfile>,
   selection: OpenClawProviderSelection,
   thinkingConfig: ModelThinkingConfig | undefined,
+  requestCapabilities?: readonly LobsterAIRequestCapability[],
 ): void => {
   if (!thinkingConfig) return;
   profiles[selection.primaryModel] = {
     levels: [...thinkingConfig.levels],
     defaultLevel: thinkingConfig.defaultLevel,
+    ...(supportsLobsterAIRequestOptionsV1(requestCapabilities)
+      ? { requestOptionsVersion: LOBSTERAI_REQUEST_OPTIONS_VERSION }
+      : {}),
   };
 };
 
@@ -1943,7 +1956,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
     let allProvidersMap: Record<string, OpenClawProviderSelection['providerConfig']> = {};
     const perModelCustomDefaults: Record<string, OpenClawAgentModelDefault> = {};
     const candidateModelProfiles: Record<string, ModelRuntimeProfileType> = {};
-    const candidateThinkingProfiles: Record<string, ModelThinkingConfig> = {};
+    const candidateThinkingProfiles: Record<string, OpenClawThinkingProfile> = {};
     let primaryModel = '';
     let providerSelection: OpenClawProviderSelection | null = null;
 
@@ -1980,6 +1993,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         candidateThinkingProfiles,
         providerSelection,
         apiResolution.providerMetadata?.thinkingConfig,
+        apiResolution.providerMetadata?.requestCapabilities,
       );
       primaryModel = providerSelection.primaryModel;
       if (providerSelection.providerId === OpenClawProviderId.LobsteraiServer) {
@@ -2082,6 +2096,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
             candidateThinkingProfiles,
             firstServerSel,
             serverModels[0]?.thinkingConfig,
+            serverModels[0]?.requestCapabilities,
           );
           const lobsteraiProviderConfig =
             allProvidersMap[providerId] ?? {
@@ -2110,7 +2125,12 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
                 runtimeProfile: sm.runtimeProfile,
               });
               collectCompatibilityOwnerProfile(candidateModelProfiles, serverSel);
-              collectThinkingProfile(candidateThinkingProfiles, serverSel, sm.thinkingConfig);
+              collectThinkingProfile(
+                candidateThinkingProfiles,
+                serverSel,
+                sm.thinkingConfig,
+                sm.requestCapabilities,
+              );
               addExplicitContextCacheDefault(perModelCustomDefaults, serverSel, {
                 modelId: sm.modelId,
                 provider: sm.provider,
