@@ -126,7 +126,12 @@ import ModelSelector, {
   ModelSelectorGroup,
 } from '../ModelSelector';
 import { ActiveSkillBadge, SkillsPopover } from '../skills';
-import { resolveAgentModelSelection, resolveEffectiveModel, useAgentSelectedModel } from './agentModelSelection';
+import {
+  resolveAgentModelSelection,
+  resolveEffectiveModel,
+  resolveModelThinkingLevel,
+  useAgentSelectedModel,
+} from './agentModelSelection';
 import AttachmentCard from './AttachmentCard';
 import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge';
 import { getClipboardAttachmentFiles } from './clipboardAttachments';
@@ -645,6 +650,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     agentSelectedModel,
     globalSelectedModel: currentAgentSelectedModel,
   });
+  const effectiveThinkingLevel = resolveModelThinkingLevel(
+    effectiveSelectedModel,
+    sessionId && currentSession?.id === sessionId
+      ? currentSession.thinkingLevel
+      : currentAgent?.thinkingLevel,
+  );
   const modelSupportsImage = !!effectiveSelectedModel?.supportsImage;
 
   const resolveSubmitModelAccessPrompt = useCallback((): ModelAccessPromptKind | null => {
@@ -2731,7 +2742,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         portal={showReadOnlyContext}
         triggerMaxWidthClassName={largeModelTriggerMaxWidthClassName}
         disabled={isPatchingModel || isPersistingAgentModel}
-        thinkingLevel={currentSession?.thinkingLevel || null}
+        thinkingLevel={effectiveThinkingLevel ?? null}
         value={agentModelIsInvalid && currentSession?.modelOverride
           ? { id: '__invalid__', name: currentSession.modelOverride.split('/').pop() || currentSession.modelOverride } as Model
           : effectiveSelectedModel}
@@ -2793,7 +2804,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               logPromptModelSelection('debug', `switched session ${sessionId} to ${patchedSession.modelOverride || modelRef}`);
               reportModelSelected(selectedModel, meta.group, 'session', currentAgentId, sessionId);
               if (currentAgent && agentModelIsInvalid) {
-                void agentService.updateAgent(currentAgent.id, { model: modelRef });
+                void agentService.updateAgent(currentAgent.id, {
+                  model: modelRef,
+                  thinkingLevel: nextThinkingLevel,
+                });
               }
               void coworkService.refreshContextUsage(sessionId, { notifyCompaction: false });
             } catch (error) {
@@ -2820,7 +2834,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             'debug',
             `persisting agent ${currentAgentId} model ${modelRef}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
           );
-          await persistAgentModelSelection(selectedModel);
+          await persistAgentModelSelection(selectedModel, nextThinkingLevel);
           reportModelSelected(selectedModel, meta.group, 'agent', currentAgentId);
         }}
       />

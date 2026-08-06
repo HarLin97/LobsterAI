@@ -190,6 +190,7 @@ export class SqliteStore {
         system_prompt TEXT NOT NULL DEFAULT '',
         identity TEXT NOT NULL DEFAULT '',
         model TEXT NOT NULL DEFAULT '',
+        thinking_level TEXT NOT NULL DEFAULT '',
         working_directory TEXT NOT NULL DEFAULT '',
         icon TEXT NOT NULL DEFAULT '',
         skill_ids TEXT NOT NULL DEFAULT '[]',
@@ -459,12 +460,16 @@ export class SqliteStore {
       // Column already exists or migration not needed.
     }
 
-    // Migration: Add working_directory column to agents
+    // Migration: Add model preference and layout columns to agents
     try {
       const agentCols = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
       const agentColNames = agentCols.map(c => c.name);
       if (!agentColNames.includes('working_directory')) {
         this.db.exec("ALTER TABLE agents ADD COLUMN working_directory TEXT NOT NULL DEFAULT '';");
+        this.didRunMigration = true;
+      }
+      if (!agentColNames.includes('thinking_level')) {
+        this.db.exec("ALTER TABLE agents ADD COLUMN thinking_level TEXT NOT NULL DEFAULT '';");
         this.didRunMigration = true;
       }
       if (!agentColNames.includes('pinned')) {

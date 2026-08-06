@@ -93,6 +93,7 @@ function setupDb(): void {
       system_prompt TEXT NOT NULL DEFAULT '',
       identity TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
+      thinking_level TEXT NOT NULL DEFAULT '',
       working_directory TEXT NOT NULL DEFAULT '',
       icon TEXT NOT NULL DEFAULT '',
       skill_ids TEXT NOT NULL DEFAULT '[]',
@@ -903,20 +904,25 @@ test('forkSession prefers a new compaction bridge over an inherited summary', ()
   expect(summaries[0].content).toBe('Newer compacted context.');
 });
 
-test('agent CRUD stores working directory independently', () => {
+test('agent CRUD stores model preferences and working directory independently', () => {
   const agent = store.createAgent({
     name: 'Docs Agent',
     model: 'openai/gpt-4o',
+    thinkingLevel: 'high',
     workingDirectory: '/tmp/docs-project',
   });
 
+  expect(agent.thinkingLevel).toBe('high');
   expect(agent.workingDirectory).toBe('/tmp/docs-project');
 
   const updated = store.updateAgent(agent.id, {
+    thinkingLevel: 'max',
     workingDirectory: '/tmp/docs-next',
   });
 
+  expect(updated?.thinkingLevel).toBe('max');
   expect(updated?.workingDirectory).toBe('/tmp/docs-next');
+  expect(store.getAgent(agent.id)?.thinkingLevel).toBe('max');
   expect(store.getAgent(agent.id)?.workingDirectory).toBe('/tmp/docs-next');
 });
 

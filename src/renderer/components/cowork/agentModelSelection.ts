@@ -1,8 +1,9 @@
+import type { ModelThinkingLevel } from '@shared/providers/modelThinking';
 import { useMemo } from 'react';
 import { useSelector } from 'react-redux';
 
 import type { RootState } from '../../store';
-import { type Model,selectAgentSelectedModel } from '../../store/slices/modelSlice';
+import { type Model, selectAgentSelectedModel } from '../../store/slices/modelSlice';
 import type { CoworkAgentEngine } from '../../types/cowork';
 import { resolveOpenClawModelRef } from '../../utils/openclawModelRef';
 
@@ -19,6 +20,18 @@ type ResolveAgentModelSelectionResult = {
   usesFallback: boolean;
   hasInvalidExplicitModel: boolean;
 };
+
+export function resolveModelThinkingLevel(
+  model: Pick<Model, 'thinkingConfig'> | null | undefined,
+  persistedLevel: ModelThinkingLevel | '' | null | undefined,
+): ModelThinkingLevel | undefined {
+  const config = model?.thinkingConfig;
+  if (!config) return undefined;
+  if (persistedLevel && config.levels.includes(persistedLevel)) {
+    return persistedLevel;
+  }
+  return config.defaultLevel;
+}
 
 /**
  * Determine which Model object the prompt input should use for capability

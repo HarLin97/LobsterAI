@@ -342,6 +342,7 @@ contextBridge.exposeInMainWorld('electron', {
       systemPrompt?: string;
       identity?: string;
       model?: string;
+      thinkingLevel?: string;
       workingDirectory?: string;
       icon?: string;
       skillIds?: string[];
@@ -360,6 +361,7 @@ contextBridge.exposeInMainWorld('electron', {
         systemPrompt?: string;
         identity?: string;
         model?: string;
+        thinkingLevel?: string;
         workingDirectory?: string;
         icon?: string;
         skillIds?: string[];

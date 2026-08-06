@@ -1,4 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import type { ModelThinkingLevel } from '@shared/providers/modelThinking';
 
 interface AgentSummary {
   id: string;
@@ -6,6 +7,7 @@ interface AgentSummary {
   description: string;
   icon: string;
   model: string;
+  thinkingLevel: ModelThinkingLevel | '';
   workingDirectory: string;
   enabled: boolean;
   pinned: boolean;

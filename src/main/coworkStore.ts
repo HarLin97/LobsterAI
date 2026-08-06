@@ -152,6 +152,17 @@ function normalizeStringIdList(values: string[] | undefined): string[] {
   return result;
 }
 
+function normalizeAgentThinkingLevel(
+  value: ModelThinkingLevel | '' | undefined,
+): ModelThinkingLevel | '' {
+  if (!value) return '';
+  const parsed = parseModelThinkingLevel(value);
+  if (!parsed) {
+    throw new Error(`Invalid agent thinking level: ${String(value)}`);
+  }
+  return parsed;
+}
+
 function parseStringIdList(value: string | null | undefined): string[] {
   if (!value) return [];
   try {
@@ -381,6 +392,7 @@ export interface Agent {
   systemPrompt: string;
   identity: string;
   model: string;
+  thinkingLevel: ModelThinkingLevel | '';
   workingDirectory: string;
   icon: string;
   skillIds: string[];
@@ -403,6 +415,7 @@ export interface CreateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;
   skillIds?: string[];
@@ -417,6 +430,7 @@ export interface UpdateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;
   skillIds?: string[];
@@ -2905,6 +2919,7 @@ export class CoworkStore {
       system_prompt: string;
       identity: string;
       model: string;
+      thinking_level?: string | null;
       working_directory?: string | null;
       icon: string;
       skill_ids: string;
@@ -2936,6 +2951,7 @@ export class CoworkStore {
       system_prompt: string;
       identity: string;
       model: string;
+      thinking_level?: string | null;
       working_directory?: string | null;
       icon: string;
       skill_ids: string;
@@ -2980,8 +2996,8 @@ export class CoworkStore {
       this.db
         .prepare(
           `
-        INSERT INTO agents (id, name, description, system_prompt, identity, model, working_directory, icon, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, sort_order, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
+        INSERT INTO agents (id, name, description, system_prompt, identity, model, thinking_level, working_directory, icon, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -2991,6 +3007,7 @@ export class CoworkStore {
           request.systemPrompt || '',
           request.identity || '',
           request.model || '',
+          normalizeAgentThinkingLevel(request.thinkingLevel),
           request.workingDirectory || '',
           normalizeAgentAvatarIcon(request.icon),
           JSON.stringify(normalizeStringIdList(request.skillIds)),
@@ -3048,6 +3065,10 @@ export class CoworkStore {
     if (updates.model !== undefined) {
       setClauses.push('model = ?');
       values.push(updates.model);
+    }
+    if (updates.thinkingLevel !== undefined) {
+      setClauses.push('thinking_level = ?');
+      values.push(normalizeAgentThinkingLevel(updates.thinkingLevel));
     }
     if (updates.workingDirectory !== undefined) {
       setClauses.push('working_directory = ?');
@@ -3145,6 +3166,7 @@ export class CoworkStore {
     system_prompt: string;
     identity: string;
     model: string;
+    thinking_level?: string | null;
     working_directory?: string | null;
     icon: string;
     skill_ids: string;
@@ -3168,6 +3190,7 @@ export class CoworkStore {
       systemPrompt: row.system_prompt,
       identity: row.identity,
       model: row.model,
+      thinkingLevel: parseModelThinkingLevel(row.thinking_level) ?? '',
       workingDirectory: row.working_directory || '',
       icon: row.icon,
       skillIds,

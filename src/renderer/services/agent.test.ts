@@ -18,6 +18,7 @@ const makeAgent = (overrides: Partial<Agent> = {}): Agent => ({
   systemPrompt: '',
   identity: '',
   model: '',
+  thinkingLevel: '',
   workingDirectory: '',
   icon: '',
   skillIds: [],
@@ -50,6 +51,7 @@ describe('agentService.updateAgent', () => {
       description: '',
       icon: '',
       model: '',
+      thinkingLevel: '',
       workingDirectory: '',
       enabled: true,
       pinned: false,
@@ -75,13 +77,14 @@ describe('agentService.updateAgent', () => {
     expect(store.getState().skill.activeSkillIds).toEqual(['docx', 'web-search']);
   });
 
-  test('does not clear active skills when only model is updated', async () => {
+  test('persists model and thinking level together without clearing active skills', async () => {
     store.dispatch(setAgents([{
       id: 'agent-1',
       name: 'Agent 1',
       description: '',
       icon: '',
       model: '',
+      thinkingLevel: '',
       workingDirectory: '',
       enabled: true,
       pinned: false,
@@ -97,14 +100,22 @@ describe('agentService.updateAgent', () => {
     (globalThis as { window?: unknown }).window = {
       electron: {
         agents: {
-          update: vi.fn().mockResolvedValue(makeAgent({ model: 'new-model', skillIds: [] })),
+          update: vi.fn().mockResolvedValue(makeAgent({
+            model: 'new-model',
+            thinkingLevel: 'max',
+            skillIds: [],
+          })),
         },
       },
     };
 
-    await agentService.updateAgent('agent-1', { model: 'new-model' });
+    await agentService.updateAgent('agent-1', {
+      model: 'new-model',
+      thinkingLevel: 'max',
+    });
 
     // Active skills should remain untouched since skillIds was not in the update
+    expect(store.getState().agent.agents[0].thinkingLevel).toBe('max');
     expect(store.getState().skill.activeSkillIds).toEqual(['user-selected-skill']);
   });
 
@@ -115,6 +126,7 @@ describe('agentService.updateAgent', () => {
       description: '',
       icon: '',
       model: '',
+      thinkingLevel: '',
       workingDirectory: '',
       enabled: true,
       pinned: false,

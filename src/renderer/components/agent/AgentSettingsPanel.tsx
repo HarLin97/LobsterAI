@@ -372,12 +372,16 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     });
     setSaving(true);
     try {
+      const modelRef = model ? toOpenClawModelRef(model) : '';
       const result = await agentService.updateAgent(agentId, {
         name: name.trim(),
         description: description.trim(),
         systemPrompt: systemPrompt.trim(),
         identity: identity.trim(),
-        model: model ? toOpenClawModelRef(model) : '',
+        model: modelRef,
+        ...(modelRef !== initialValuesRef.current.model
+          ? { thinkingLevel: model?.thinkingConfig?.defaultLevel ?? '' }
+          : {}),
         workingDirectory: workingDirectory.trim(),
         icon: icon.trim(),
         skillIds,

@@ -712,6 +712,7 @@ interface IElectronAPI {
       systemPrompt?: string;
       identity?: string;
       model?: string;
+      thinkingLevel?: Agent['thinkingLevel'];
       workingDirectory?: string;
       icon?: string;
       skillIds?: string[];
@@ -727,6 +728,7 @@ interface IElectronAPI {
         systemPrompt?: string;
         identity?: string;
         model?: string;
+        thinkingLevel?: Agent['thinkingLevel'];
         workingDirectory?: string;
         icon?: string;
         skillIds?: string[];

@@ -47,7 +47,7 @@ interface ModelSelectorProps {
   alignDropdownToTriggerEnd?: boolean;
   /** Override the trigger's max width while keeping the default selector behavior. */
   triggerMaxWidthClassName?: string;
-  /** Persisted thinking level for the selected session model. */
+  /** Persisted thinking level for the selected model. Omit to hide the thinking control. */
   thinkingLevel?: ModelThinkingLevelType | null;
 }
 
@@ -248,7 +248,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   portal = false,
   alignDropdownToTriggerEnd = false,
   triggerMaxWidthClassName,
-  thinkingLevel = null,
+  thinkingLevel,
 }) => {
   const dispatch = useDispatch();
   const [isOpen, setIsOpen] = React.useState(false);
@@ -271,6 +271,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const hoverCloseTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const controlled = onChange !== undefined;
+  const thinkingSelectionEnabled = controlled && thinkingLevel !== undefined;
   const globalSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
@@ -458,7 +459,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     return config.defaultLevel;
   };
 
-  const handleModelSelect = (model: Model | null, requestedThinkingLevel?: ModelThinkingLevelType) => {
+  const handleModelSelect = (model: Model | null) => {
     if (disabled) return;
     if (isModelAgenticBlocked(model)) {
       setRestrictedPrompt(ModelAccessPromptKind.AgenticNotReady);
@@ -472,9 +473,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       setIsOpen(false);
       return;
     }
-    const resolvedThinkingLevel = model
-      ? resolveThinkingLevel(model, requestedThinkingLevel)
-      : undefined;
+    const resolvedThinkingLevel = model ? resolveThinkingLevel(model) : undefined;
     if (controlled) {
       onChange(model, {
         group: getModelGroup(model) ?? visibleGroup,
@@ -487,6 +486,21 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     setIsThinkingMenuOpen(false);
     setHoveredModel(null);
     setIsOpen(false);
+  };
+
+  const handleThinkingLevelSelect = (
+    model: Model,
+    requestedThinkingLevel: ModelThinkingLevelType,
+  ) => {
+    if (disabled || !thinkingSelectionEnabled || !canConfigureModelThinking(model)) return;
+    const resolvedThinkingLevel = resolveThinkingLevel(model, requestedThinkingLevel);
+    if (!resolvedThinkingLevel) return;
+
+    onChange(model, {
+      group: getModelGroup(model) ?? visibleGroup,
+      thinkingLevel: resolvedThinkingLevel,
+    });
+    setRestrictedPrompt(null);
   };
 
   React.useEffect(() => {
@@ -646,7 +660,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   const openThinkingMenu = () => {
-    if (!canConfigureModelThinking(hoveredModel)) {
+    if (!thinkingSelectionEnabled || !canConfigureModelThinking(hoveredModel)) {
       setIsThinkingMenuOpen(false);
       return;
     }
@@ -685,7 +699,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         onFocus={(event) => handleModelHover(model, event.currentTarget, 0)}
         onBlur={handleModelHoverEnd}
         aria-disabled={blocked}
-        aria-haspopup={model.thinkingConfig ? 'menu' : undefined}
+        aria-haspopup={thinkingSelectionEnabled && model.thinkingConfig ? 'menu' : undefined}
         className={`w-full px-3 py-2 text-left dark:text-claude-darkText text-claude-text flex items-center gap-2.5 transition-colors ${
           blocked
             ? 'cursor-pointer opacity-60 dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'
@@ -734,7 +748,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const renderHoverCard = () => {
     if (!hoveredModel) return null;
-    const thinkingConfigurable = canConfigureModelThinking(hoveredModel);
+    const thinkingConfigurable = thinkingSelectionEnabled && canConfigureModelThinking(hoveredModel);
     const card = (
       <div
         ref={hoverCardRef}
@@ -775,7 +789,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             )}
           </div>
         )}
-        {hoveredModel.thinkingConfig && (
+        {thinkingSelectionEnabled && hoveredModel.thinkingConfig && (
           <button
             type="button"
             disabled={!thinkingConfigurable}
@@ -809,7 +823,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const renderThinkingMenu = () => {
     const config = hoveredModel?.thinkingConfig;
-    if (!hoveredModel || !config || !isThinkingMenuOpen
+    if (!thinkingSelectionEnabled || !hoveredModel || !config || !isThinkingMenuOpen
       || !canConfigureModelThinking(hoveredModel)) return null;
     const selectedLevel = resolveThinkingLevel(hoveredModel) ?? config.defaultLevel;
     return createPortal(
@@ -824,7 +838,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         <ModelThinkingMenu
           config={config}
           selectedLevel={selectedLevel}
-          onSelect={(level) => handleModelSelect(hoveredModel, level)}
+          onSelect={(level) => handleThinkingLevelSelect(hoveredModel, level)}
           onEscape={() => setIsThinkingMenuOpen(false)}
         />
       </div>,
