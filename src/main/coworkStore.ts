@@ -33,6 +33,10 @@ import type {
   ResolvedKitCapabilities,
 } from '../shared/kit/constants';
 import {
+  type ModelThinkingLevel,
+  parseModelThinkingLevel,
+} from '../shared/providers/modelThinking';
+import {
   ContinuityCapsuleSource,
   type CoworkContinuityCapsule,
 } from './libs/agentEngine/coworkContinuityCapsule';
@@ -487,6 +491,7 @@ export interface CoworkSession {
   cwd: string;
   systemPrompt: string;
   modelOverride: string;
+  thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
   agentId: string;
@@ -841,7 +846,8 @@ export class CoworkStore {
     executionMode: CoworkExecutionMode = 'local',
     activeSkillIds: string[] = [],
     agentId: string = 'main',
-    modelOverride: string = ''
+    modelOverride: string = '',
+    thinkingLevel: ModelThinkingLevel | '' = '',
   ): CoworkSession {
     const id = uuidv4();
     const now = Date.now();
@@ -849,8 +855,8 @@ export class CoworkStore {
     this.db
       .prepare(
         `
-      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, model_override, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
-      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, model_override, thinking_level, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
+      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
     `,
       )
       .run(
@@ -859,6 +865,7 @@ export class CoworkStore {
         cwd,
         systemPrompt,
         modelOverride,
+        thinkingLevel,
         executionMode,
         JSON.stringify(activeSkillIds),
         agentId,
@@ -876,6 +883,7 @@ export class CoworkStore {
       cwd,
       systemPrompt,
       modelOverride,
+      thinkingLevel,
       executionMode,
       activeSkillIds,
       agentId,
@@ -905,6 +913,7 @@ export class CoworkStore {
       cwd: string;
       system_prompt: string;
       model_override?: string | null;
+      thinking_level?: string | null;
       execution_mode?: string | null;
       active_skill_ids?: string | null;
       agent_id?: string | null;
@@ -915,7 +924,7 @@ export class CoworkStore {
 
     const row = this.getOne<SessionRow>(
       `
-      SELECT id, title, claude_session_id, status, pinned, pin_order, cwd, system_prompt, model_override, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
+      SELECT id, title, claude_session_id, status, pinned, pin_order, cwd, system_prompt, model_override, thinking_level, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `,
@@ -951,6 +960,7 @@ export class CoworkStore {
       cwd: row.cwd,
       systemPrompt: row.system_prompt,
       modelOverride: row.model_override || '',
+      thinkingLevel: parseModelThinkingLevel(row.thinking_level) ?? '',
       executionMode: (row.execution_mode as CoworkExecutionMode) || 'local',
       activeSkillIds,
       agentId: row.agent_id || 'main',
@@ -1132,13 +1142,13 @@ export class CoworkStore {
     const insertSession = this.db.prepare(
       `
       INSERT INTO cowork_sessions (
-        id, title, claude_session_id, status, cwd, system_prompt, model_override,
+        id, title, claude_session_id, status, cwd, system_prompt, model_override, thinking_level,
         execution_mode, active_skill_ids, agent_id, pinned, pin_order,
         parent_session_id, forked_from_message_id, forked_at, fork_mode,
         fork_workspace_path, fork_git_branch, fork_git_base_ref,
         created_at, updated_at
       )
-      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     );
     const insertMessage = this.db.prepare(
@@ -1155,6 +1165,7 @@ export class CoworkStore {
         cwd,
         source.systemPrompt,
         source.modelOverride,
+        source.thinkingLevel ?? '',
         source.executionMode,
         JSON.stringify(source.activeSkillIds),
         source.agentId,
@@ -1352,7 +1363,7 @@ export class CoworkStore {
     updates: Partial<
       Pick<
         CoworkSession,
-        'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'modelOverride' | 'executionMode' | 'goal'
+        'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'modelOverride' | 'thinkingLevel' | 'executionMode' | 'goal'
       >
     >,
     options: { touchUpdatedAt?: boolean } = {},
@@ -1399,6 +1410,10 @@ export class CoworkStore {
     if (updates.modelOverride !== undefined) {
       setClauses.push('model_override = ?');
       values.push(updates.modelOverride);
+    }
+    if (updates.thinkingLevel !== undefined) {
+      setClauses.push('thinking_level = ?');
+      values.push(updates.thinkingLevel);
     }
     if (updates.executionMode !== undefined) {
       setClauses.push('execution_mode = ?');

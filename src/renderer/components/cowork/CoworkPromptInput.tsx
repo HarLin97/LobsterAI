@@ -2731,6 +2731,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         portal={showReadOnlyContext}
         triggerMaxWidthClassName={largeModelTriggerMaxWidthClassName}
         disabled={isPatchingModel || isPersistingAgentModel}
+        thinkingLevel={currentSession?.thinkingLevel || null}
         value={agentModelIsInvalid && currentSession?.modelOverride
           ? { id: '__invalid__', name: currentSession.modelOverride.split('/').pop() || currentSession.modelOverride } as Model
           : effectiveSelectedModel}
@@ -2745,28 +2746,42 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             )) ?? nextModel
             : nextModel;
           const modelRef = toOpenClawModelRef(selectedModel);
+          const nextThinkingLevel = selectedModel.thinkingConfig
+            ? meta.thinkingLevel ?? selectedModel.thinkingConfig.defaultLevel
+            : '';
           if (sessionId) {
             const requestId = modelPatchRequestIdRef.current + 1;
             modelPatchRequestIdRef.current = requestId;
             const previousModelOverride = currentSession?.id === sessionId
               ? currentSession.modelOverride
               : '';
+            const previousThinkingLevel = currentSession?.id === sessionId
+              ? currentSession.thinkingLevel ?? ''
+              : '';
 
             setIsPatchingModel(true);
             logPromptModelSelection(
               'debug',
-              `switching session ${sessionId} to ${modelRef}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
+              `switching session ${sessionId} to ${modelRef}; thinking level is ${nextThinkingLevel || 'default'}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
             );
-            dispatch(updateCurrentSessionModelOverride({ sessionId, modelOverride: modelRef }));
+            dispatch(updateCurrentSessionModelOverride({
+              sessionId,
+              modelOverride: modelRef,
+              thinkingLevel: nextThinkingLevel,
+            }));
 
             try {
-              const patchedSession = await coworkService.patchSession(sessionId, { model: modelRef });
+              const patchedSession = await coworkService.patchSession(sessionId, {
+                model: modelRef,
+                thinkingLevel: nextThinkingLevel || null,
+              });
               if (requestId !== modelPatchRequestIdRef.current) return;
 
               if (!patchedSession) {
                 dispatch(updateCurrentSessionModelOverride({
                   sessionId,
                   modelOverride: previousModelOverride,
+                  thinkingLevel: previousThinkingLevel,
                 }));
                 logPromptModelSelection('warn', `model switch for session ${sessionId} returned no session`);
                 window.dispatchEvent(new CustomEvent('app:showToast', {
@@ -2786,6 +2801,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 dispatch(updateCurrentSessionModelOverride({
                   sessionId,
                   modelOverride: previousModelOverride,
+                  thinkingLevel: previousThinkingLevel,
                 }));
                 console.warn(`[CoworkPromptInput] model switch for session ${sessionId} failed:`, error);
                 window.electron?.log?.fromRenderer?.('warn', 'CoworkPromptInput', `model switch for session ${sessionId} failed`);

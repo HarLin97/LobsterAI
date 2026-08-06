@@ -6,6 +6,10 @@ import {
   normalizeModelIdForComparison,
   parseModelRuntimeProfile,
 } from '../../shared/providers/modelRuntimeProfiles';
+import {
+  type ModelThinkingConfig,
+  parseModelThinkingConfig,
+} from '../../shared/providers/modelThinking';
 import type { SqliteStore } from '../sqliteStore';
 import type { CoworkApiConfig } from './coworkConfigStore';
 import { type AnthropicApiFormat,normalizeProviderApiFormat } from './coworkFormatTransform';
@@ -69,6 +73,7 @@ export type ServerModelMetadata = {
   supportsImage?: boolean;
   supportsVideo?: boolean;
   supportsThinking?: boolean;
+  thinkingConfig?: ModelThinkingConfig;
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
@@ -81,8 +86,8 @@ type CachedServerModelMetadata = Omit<ServerModelMetadata, 'modelId'> & {
 };
 
 export type ServerModelMetadataInput =
-  Omit<ServerModelMetadata, 'runtimeProfile'>
-  & { runtimeProfile?: unknown };
+  Omit<ServerModelMetadata, 'runtimeProfile' | 'thinkingConfig'>
+  & { runtimeProfile?: unknown; thinkingConfig?: unknown };
 
 export const ServerModelRunGateReason = {
   MetadataMissing: 'metadata_missing',
@@ -130,6 +135,7 @@ export type ApiConfigResolution = {
     supportsImage?: boolean;
     supportsVideo?: boolean;
     supportsThinking?: boolean;
+    thinkingConfig?: ModelThinkingConfig;
     modelName?: string;
     contextWindow?: number;
     maxTokens?: number;
@@ -178,6 +184,7 @@ const serializeServerModelMetadata = (
       supportsImage: model.supportsImage,
       supportsVideo: model.supportsVideo,
       supportsThinking: model.supportsThinking,
+      thinkingConfig: model.thinkingConfig,
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
       contextWindow: model.contextWindow,
@@ -198,6 +205,7 @@ const getComparableServerModelMetadata = (
   supportsImage: meta.supportsImage,
   supportsVideo: meta.supportsVideo,
   supportsThinking: meta.supportsThinking,
+  thinkingConfig: meta.thinkingConfig,
   supportsToolCalling: meta.supportsToolCalling,
   agenticReady: meta.agenticReady,
   contextWindow: meta.contextWindow,
@@ -231,6 +239,9 @@ export function updateServerModelMetadata(models: ServerModelMetadataInput[]): b
       contextWindow: model.contextWindow,
       maxTokens: model.maxTokens,
     }, runtimeProfile);
+    const thinkingConfig = runtimeMetadata.supportsThinking === true
+      ? parseModelThinkingConfig(model.thinkingConfig)
+      : undefined;
 
     nextCache.set(modelId, {
       modelName: model.modelName,
@@ -243,6 +254,7 @@ export function updateServerModelMetadata(models: ServerModelMetadataInput[]): b
       supportsImage: runtimeMetadata.supportsImage,
       supportsVideo: runtimeMetadata.supportsVideo,
       supportsThinking: runtimeMetadata.supportsThinking,
+      thinkingConfig,
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
       contextWindow: runtimeMetadata.contextWindow,
@@ -269,6 +281,7 @@ export function getAllServerModelMetadata(): ServerModelMetadata[] {
     supportsImage: meta.supportsImage,
     supportsVideo: meta.supportsVideo,
     supportsThinking: meta.supportsThinking,
+    thinkingConfig: meta.thinkingConfig,
     supportsToolCalling: meta.supportsToolCalling,
     agenticReady: meta.agenticReady,
     contextWindow: meta.contextWindow,
@@ -291,6 +304,7 @@ export function getServerModelMetadata(modelId: string): ServerModelMetadata | n
     supportsImage: metadata.supportsImage,
     supportsVideo: metadata.supportsVideo,
     supportsThinking: metadata.supportsThinking,
+    thinkingConfig: metadata.thinkingConfig,
     supportsToolCalling: metadata.supportsToolCalling,
     agenticReady: metadata.agenticReady,
     contextWindow: metadata.contextWindow,
@@ -429,6 +443,7 @@ type MatchedProvider = {
   supportsImage?: boolean;
   supportsVideo?: boolean;
   supportsThinking?: boolean;
+  thinkingConfig?: ModelThinkingConfig;
   modelName?: string;
   contextWindow?: number;
   maxTokens?: number;
@@ -489,6 +504,7 @@ function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
     apiFormat: effectiveApiFormat,
     supportsImage: cachedMeta?.supportsImage,
     supportsThinking: cachedMeta?.supportsThinking,
+    thinkingConfig: cachedMeta?.thinkingConfig,
   });
   return {
     providerName: ProviderName.LobsteraiServer,
@@ -705,6 +721,7 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
         supportsImage: matched.supportsImage,
         supportsVideo: matched.supportsVideo,
         supportsThinking: matched.supportsThinking,
+        thinkingConfig: matched.thinkingConfig,
         modelName: matched.modelName,
         contextWindow: matched.contextWindow,
         maxTokens: matched.maxTokens,
@@ -749,6 +766,7 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
       supportsImage: matched.supportsImage,
       supportsVideo: matched.supportsVideo,
       supportsThinking: matched.supportsThinking,
+      thinkingConfig: matched.thinkingConfig,
       modelName: matched.modelName,
       contextWindow: matched.contextWindow,
       maxTokens: matched.maxTokens,
@@ -833,6 +851,7 @@ export function resolveRawApiConfig(): ApiConfigResolution {
       supportsImage: matched.supportsImage,
       supportsVideo: matched.supportsVideo,
       supportsThinking: matched.supportsThinking,
+      thinkingConfig: matched.thinkingConfig,
       modelName: matched.modelName,
       contextWindow: matched.contextWindow,
       maxTokens: matched.maxTokens,

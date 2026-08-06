@@ -1386,6 +1386,25 @@ describe('OpenClawConfigSync runtime config output', () => {
         },
       },
     })).toBe(false);
+    expect(modelCompatConfigChangeRequiresRestart(compatConfig, {
+      ...compatConfig,
+      plugins: {
+        entries: {
+          'lobsterai-model-compat': {
+            enabled: true,
+            config: {
+              modelProfiles: compatConfig.plugins.entries['lobsterai-model-compat'].config.modelProfiles,
+              thinkingProfiles: {
+                'lobsterai-server/deepseek-v4-flash': {
+                  levels: ['off', 'high', 'max'],
+                  defaultLevel: 'high',
+                },
+              },
+            },
+          },
+        },
+      },
+    })).toBe(true);
   });
 
   test('assigns mixed-provider compatibility ownership independently of model order', async () => {
@@ -1472,6 +1491,38 @@ describe('OpenClawConfigSync runtime config output', () => {
         api: 'openai-completions',
       }),
     );
+  });
+
+  test('writes server thinking profiles without taking over the provider transport', async () => {
+    mockRuntimeState.proxyPort = 56646;
+    mockRuntimeState.serverModels = [{
+      modelId: 'deepseek-v4-flash',
+      modelName: 'DeepSeek V4 Flash',
+      apiFormat: 'openai',
+      supportsThinking: true,
+      thinkingConfig: {
+        levels: ['off', 'high', 'max'],
+        defaultLevel: 'high',
+      },
+    }];
+
+    const sync = await createSync();
+    expect(sync.sync('server-thinking-profile')).toMatchObject({ ok: true });
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.models.providers['lobsterai-server'].api).toBe('openai-completions');
+    expect(config.plugins.entries['lobsterai-model-compat']).toEqual({
+      enabled: true,
+      config: {
+        thinkingProfiles: {
+          'lobsterai-server/deepseek-v4-flash': {
+            levels: ['off', 'high', 'max'],
+            defaultLevel: 'high',
+          },
+        },
+      },
+    });
+    expect(config.plugins.allow).toContain('lobsterai-model-compat');
   });
 
   test('fails closed when the Kimi K3 compatibility extension is unavailable', async () => {

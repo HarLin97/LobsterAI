@@ -403,6 +403,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         resolvedKitCapabilities: displayKitIds.length > 0 ? resolvedKitCapabilities : undefined,
         agentId: currentAgentId,
         modelOverride: sessionModelOverride,
+        thinkingLevel: currentAgentSelectedModel?.thinkingConfig?.defaultLevel,
         imageAttachments,
         mediaSelection: mediaSelection && mediaSelection.mode !== 'none' ? mediaSelection : undefined,
         mediaReferences,

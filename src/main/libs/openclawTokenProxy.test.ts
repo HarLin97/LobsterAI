@@ -304,7 +304,7 @@ test('adds fixed capability and client version headers without trusting incoming
     Authorization: 'Bearer access-token',
     Accept: 'text/event-stream',
     'Content-Type': 'application/json',
-    'X-LobsterAI-Client-Capabilities': 'kimi-k3-agentic-v1',
+    'X-LobsterAI-Client-Capabilities': 'kimi-k3-agentic-v1,thinking-level-control-v1',
     'X-LobsterAI-Client-Version': '2026.7.23',
   });
 });

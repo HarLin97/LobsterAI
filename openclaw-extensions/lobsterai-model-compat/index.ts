@@ -13,6 +13,7 @@ import {
   parseModelProfileMap,
   resolveModelProfileTransportDecision,
 } from './profileMapping';
+import { parseThinkingProfileMap } from './thinkingProfileMapping';
 
 const PLUGIN_ID = 'lobsterai-model-compat';
 const OPENAI_COMPLETIONS_API = 'openai-completions';
@@ -24,6 +25,7 @@ const OPENAI_COMPATIBLE_APIS = new Set([
 
 const register = (api: OpenClawPluginApi): void => {
   const modelProfiles = parseModelProfileMap(api.pluginConfig?.modelProfiles);
+  const thinkingProfiles = parseThinkingProfileMap(api.pluginConfig?.thinkingProfiles);
   const isKimiK3Profile = (provider: string, modelId: string): boolean => (
     hasModelRuntimeProfile(
       modelProfiles,
@@ -93,15 +95,22 @@ const register = (api: OpenClawPluginApi): void => {
       }
       return createMoonshotKimiK3Wrapper(ctx.streamFn);
     },
-    resolveThinkingProfile: ({ provider, modelId }) => (
-      isKimiK3Profile(provider, modelId)
-        ? {
-            levels: [{ id: 'max', label: 'max' }],
-            defaultLevel: 'max',
-            preserveWhenCatalogReasoningFalse: true,
-          }
-        : undefined
-    ),
+    resolveThinkingProfile: ({ provider, modelId }) => {
+      if (isKimiK3Profile(provider, modelId)) {
+        return {
+          levels: [{ id: 'max', label: 'max' }],
+          defaultLevel: 'max',
+          preserveWhenCatalogReasoningFalse: true,
+        };
+      }
+      const profile = thinkingProfiles[`${provider}/${modelId}`];
+      if (!profile) return undefined;
+      return {
+        levels: profile.levels.map(level => ({ id: level, label: level })),
+        defaultLevel: profile.defaultLevel,
+        preserveWhenCatalogReasoningFalse: true,
+      };
+    },
     isModernModelRef: ({ provider, modelId }) => (
       isKimiK3Profile(provider, modelId) || undefined
     ),

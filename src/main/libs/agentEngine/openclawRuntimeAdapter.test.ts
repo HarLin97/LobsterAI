@@ -1909,6 +1909,31 @@ test('patchSession uses the persisted IM channel session key after runtime cache
   ]);
 });
 
+test('patchSession sends model and thinking level atomically', async () => {
+  const { adapter, requests } = createPatchAdapter({
+    isChannelSession: false,
+    persistedSessionKey: null,
+  });
+
+  const result = await adapter.patchSession('session-1', {
+    model: 'lobsterai-server/deepseek-v4-flash',
+    thinkingLevel: 'max',
+  });
+
+  expect(requests[0]).toEqual({
+    method: 'sessions.patch',
+    params: {
+      key: 'agent:main:lobsterai:session-1',
+      model: 'lobsterai-server/deepseek-v4-flash',
+      thinkingLevel: 'max',
+    },
+  });
+  expect(result).toEqual({
+    modelOverride: 'lobsterai-server/deepseek-v4-flash',
+    thinkingLevel: 'max',
+  });
+});
+
 test('patchSession rejects IM channel sessions when the real OpenClaw key is missing', async () => {
   const { adapter, requests } = createPatchAdapter({
     isChannelSession: true,

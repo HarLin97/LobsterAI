@@ -1075,10 +1075,17 @@ const coworkSlice = createSlice({
       }
     },
 
-    updateCurrentSessionModelOverride(state, action: PayloadAction<{ sessionId: string; modelOverride: string }>) {
-      const { sessionId, modelOverride } = action.payload;
+    updateCurrentSessionModelOverride(state, action: PayloadAction<{
+      sessionId: string;
+      modelOverride: string;
+      thinkingLevel?: CoworkSession['thinkingLevel'];
+    }>) {
+      const { sessionId, modelOverride, thinkingLevel } = action.payload;
       if (state.currentSession?.id !== sessionId) return;
       state.currentSession.modelOverride = modelOverride;
+      if (thinkingLevel !== undefined) {
+        state.currentSession.thinkingLevel = thinkingLevel;
+      }
     },
 
     enqueuePendingPermission(state, action: PayloadAction<CoworkPermissionRequest>) {

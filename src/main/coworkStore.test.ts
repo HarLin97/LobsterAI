@@ -48,6 +48,7 @@ function setupDb(): void {
       cwd TEXT NOT NULL,
       system_prompt TEXT NOT NULL DEFAULT '',
       model_override TEXT NOT NULL DEFAULT '',
+      thinking_level TEXT NOT NULL DEFAULT '',
       execution_mode TEXT NOT NULL DEFAULT 'local',
       active_skill_ids TEXT,
       agent_id TEXT DEFAULT 'main',
@@ -634,6 +635,24 @@ test('updateSession can patch model override without refreshing the session upda
   const session = store.getSession(sid);
   expect(session?.modelOverride).toBe('lobsterai-server/qwen3.6-plus-YoudaoInner');
   expect(session?.updatedAt).toBe(1000);
+});
+
+test('create and update session persist the selected thinking level', () => {
+  const session = store.createSession(
+    'Thinking session',
+    '/tmp',
+    '',
+    'local',
+    [],
+    'main',
+    'lobsterai-server/deepseek-v4-flash',
+    'high',
+  );
+
+  expect(store.getSession(session.id)?.thinkingLevel).toBe('high');
+
+  store.updateSession(session.id, { thinkingLevel: 'max' }, { touchUpdatedAt: false });
+  expect(store.getSession(session.id)?.thinkingLevel).toBe('max');
 });
 
 test('updateSession can rename without refreshing the session updated time', () => {

@@ -4761,6 +4761,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         ? { model: patch.model ? this.normalizeModelRef(patch.model) : patch.model }
         : {}),
     };
+    const patchedThinkingLevel = normalizedPatch.thinkingLevel !== undefined
+      ? normalizedPatch.thinkingLevel ?? ''
+      : undefined;
 
     const sendPatch = async (): Promise<OpenClawSessionPatchGatewayResult | undefined> => {
       try {
@@ -4799,11 +4802,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       } else {
         this.sessionModelPatchStateBySession.delete(sessionId);
       }
-      return { modelOverride: modelOverride ?? '' };
+      return {
+        modelOverride: modelOverride ?? '',
+        ...(patchedThinkingLevel !== undefined ? { thinkingLevel: patchedThinkingLevel } : {}),
+      };
     }
 
     await sendPatch();
-    return {};
+    return patchedThinkingLevel !== undefined
+      ? { thinkingLevel: patchedThinkingLevel }
+      : {};
   }
 
   stopSession(sessionId: string): void {
@@ -4900,9 +4908,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     sessionId: string;
     sessionKey: string;
     model: string;
+    thinkingLevel?: string;
     source: SessionModelPatchSource;
   }): Promise<void> {
-    const { sessionId, sessionKey, model, source } = options;
+    const { sessionId, sessionKey, model, thinkingLevel, source } = options;
     if (!model) {
       this.sessionModelPatchStateBySession.delete(sessionId);
       return;
@@ -4957,6 +4966,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           sessionKey,
           patch: {
             model,
+            ...(thinkingLevel ? { thinkingLevel } : {}),
             ...(isManagedSessionKey(sessionKey)
               ? { reasoningLevel: OpenClawSessionReasoningLevel.Stream }
               : {}),
@@ -5186,6 +5196,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         sessionId,
         sessionKey,
         model: currentModel,
+        thinkingLevel: session.thinkingLevel || undefined,
         source: session.modelOverride
           ? SessionModelPatchSource.SessionOverride
           : SessionModelPatchSource.AgentModel,

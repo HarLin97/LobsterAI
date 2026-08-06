@@ -149,8 +149,6 @@ function createHarness() {
 
   registerActivityIpcHandlers({
     ipcMain: { handle } as unknown as IpcMain,
-    isDev: false,
-    isPackaged: true,
     getMainWindow: () => mainWindow,
     getServerBaseUrl: () => 'https://server.example',
     getClientVersion: () => '2026.7.30',

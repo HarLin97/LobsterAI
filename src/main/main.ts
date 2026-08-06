@@ -139,6 +139,7 @@ import { PlatformRegistry } from '../shared/platform';
 import {
   ModelRuntimeProfile,
   OpenClawProviderId,
+  parseModelThinkingLevel,
   ProviderName,
 } from '../shared/providers';
 import {
@@ -1301,7 +1302,12 @@ function sanitizeOpenClawSessionPatch(input: unknown): OpenClawSessionPatch {
   if (model !== undefined) patch.model = model;
 
   const thinkingLevel = sanitizeOptionalPatchValue(source.thinkingLevel);
-  if (thinkingLevel !== undefined) patch.thinkingLevel = thinkingLevel;
+  if (thinkingLevel !== undefined) {
+    if (thinkingLevel !== null && thinkingLevel !== '' && !parseModelThinkingLevel(thinkingLevel)) {
+      throw new Error('Unsupported session thinking level.');
+    }
+    patch.thinkingLevel = thinkingLevel;
+  }
 
   const reasoningLevel = sanitizeOptionalPatchValue(source.reasoningLevel);
   if (reasoningLevel !== undefined) patch.reasoningLevel = reasoningLevel;
@@ -4609,6 +4615,7 @@ if (!gotTheLock) {
         supportsImage: metadata?.supportsImage,
         supportsVideo: metadata?.supportsVideo,
         supportsThinking: metadata?.supportsThinking,
+        thinkingConfig: metadata?.thinkingConfig,
         supportsToolCalling: metadata?.supportsToolCalling,
         agenticReady: metadata?.agenticReady,
         contextWindow: metadata?.contextWindow,
@@ -5793,8 +5800,6 @@ if (!gotTheLock) {
 
   registerActivityIpcHandlers({
     ipcMain,
-    isDev,
-    isPackaged: app.isPackaged,
     getMainWindow: () => mainWindow,
     getServerBaseUrl: getServerApiBaseUrl,
     getClientVersion: () => app.getVersion(),
@@ -5802,7 +5807,6 @@ if (!gotTheLock) {
     hasAuthTokens: () => getAuthTokens() !== null,
     fetchPublic: (url, options) => net.fetch(url, options),
     fetchWithAuth,
-    developmentServerBaseUrl: process.env.LOBSTER_ACTIVITY_SERVER_BASE_URL,
   });
 
   ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
@@ -7243,6 +7247,7 @@ if (!gotTheLock) {
         imageAttachments?: CoworkImageAttachmentMain[];
         agentId?: string;
         modelOverride?: string;
+        thinkingLevel?: string;
         mediaSelection?: {
           mode: 'auto' | 'image' | 'video' | 'none';
           modelId?: string;
@@ -7314,6 +7319,12 @@ if (!gotTheLock) {
         const runtimeSkillIds = options.runtimeSkillIds ?? options.activeSkillIds;
         const selectedTextSnippets = normalizeSelectedTextSnippetsForIpc(options.selectedTextSnippets);
         const browserAnnotations = normalizeBrowserAnnotationBatches(options.browserAnnotations);
+        const thinkingLevel = options.thinkingLevel === undefined
+          ? ''
+          : parseModelThinkingLevel(options.thinkingLevel);
+        if (options.thinkingLevel !== undefined && !thinkingLevel) {
+          return { success: false, error: 'Unsupported session thinking level.' };
+        }
         if (selectedTextSnippets.length > 0) {
           console.log(
             `[CoworkSelectedText] accepted ${selectedTextSnippets.length} excerpts with `
@@ -7329,6 +7340,7 @@ if (!gotTheLock) {
           runtimeSkillIds || [],
           options.agentId || 'main',
           options.modelOverride || '',
+          thinkingLevel || '',
         );
 
         if (options.modelOverride) {
@@ -8562,18 +8574,23 @@ if (!gotTheLock) {
       const runtime = getCoworkEngineRouter();
       const patchResult = await runtime.patchSession(sessionId, patch);
 
-      if (patch.model !== undefined) {
-        const modelOverride =
-          patchResult && typeof patchResult.modelOverride === 'string'
-            ? patchResult.modelOverride
-            : patch.model ?? '';
-        getCoworkStore().updateSession(
-          sessionId,
-          {
-            modelOverride,
-          },
-          { touchUpdatedAt: false },
-        );
+      if (patch.model !== undefined || patch.thinkingLevel !== undefined) {
+        const sessionUpdates: {
+          modelOverride?: string;
+          thinkingLevel?: ReturnType<typeof parseModelThinkingLevel> | '';
+        } = {};
+        if (patch.model !== undefined) {
+          sessionUpdates.modelOverride =
+            patchResult && typeof patchResult.modelOverride === 'string'
+              ? patchResult.modelOverride
+              : patch.model ?? '';
+        }
+        if (patch.thinkingLevel !== undefined) {
+          sessionUpdates.thinkingLevel = patch.thinkingLevel
+            ? parseModelThinkingLevel(patch.thinkingLevel) ?? ''
+            : '';
+        }
+        getCoworkStore().updateSession(sessionId, sessionUpdates, { touchUpdatedAt: false });
       }
 
       const session = getCoworkStore().getSession(sessionId);

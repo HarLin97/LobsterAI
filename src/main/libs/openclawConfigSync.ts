@@ -31,6 +31,7 @@ import {
   ProviderRegistry,
   resolveModelRuntimeProfile,
 } from '../../shared/providers';
+import type { ModelThinkingConfig } from '../../shared/providers/modelThinking';
 import type { Agent, CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { DiscordInstanceConfig, IMSettings, TelegramInstanceConfig } from '../im/types';
 import type { DingTalkInstanceConfig, EmailMultiInstanceConfig, FeishuInstanceConfig, NeteaseBeeChanConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, WecomInstanceConfig, WeixinOpenClawConfig } from '../im/types';
@@ -132,11 +133,16 @@ const buildModelCompatRestartFingerprint = (config: unknown): string => {
   const sortedModelProfiles = Object.fromEntries(
     Object.entries(modelProfiles ?? {}).sort(([left], [right]) => left.localeCompare(right)),
   );
+  const thinkingProfiles = asConfigRecord(compatConfig?.thinkingProfiles);
+  const sortedThinkingProfiles = Object.fromEntries(
+    Object.entries(thinkingProfiles ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+  );
 
   return JSON.stringify({
     ownerProviderIds,
     pluginEnabled: compatEntry?.enabled === true,
     modelProfiles: sortedModelProfiles,
+    thinkingProfiles: sortedThinkingProfiles,
   });
 };
 
@@ -1447,6 +1453,18 @@ const collectCompatibilityOwnerProfile = (
   profiles[selection.primaryModel] = selection.compatibilityOwnerProfile;
 };
 
+const collectThinkingProfile = (
+  profiles: Record<string, ModelThinkingConfig>,
+  selection: OpenClawProviderSelection,
+  thinkingConfig: ModelThinkingConfig | undefined,
+): void => {
+  if (!thinkingConfig) return;
+  profiles[selection.primaryModel] = {
+    levels: [...thinkingConfig.levels],
+    defaultLevel: thinkingConfig.defaultLevel,
+  };
+};
+
 type ServerModelTransportMetadata = {
   modelId: string;
   apiFormat?: string;
@@ -1925,6 +1943,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
     let allProvidersMap: Record<string, OpenClawProviderSelection['providerConfig']> = {};
     const perModelCustomDefaults: Record<string, OpenClawAgentModelDefault> = {};
     const candidateModelProfiles: Record<string, ModelRuntimeProfileType> = {};
+    const candidateThinkingProfiles: Record<string, ModelThinkingConfig> = {};
     let primaryModel = '';
     let providerSelection: OpenClawProviderSelection | null = null;
 
@@ -1957,6 +1976,11 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         runtimeProfile: apiResolution.providerMetadata?.runtimeProfile,
       });
       collectCompatibilityOwnerProfile(candidateModelProfiles, providerSelection);
+      collectThinkingProfile(
+        candidateThinkingProfiles,
+        providerSelection,
+        apiResolution.providerMetadata?.thinkingConfig,
+      );
       primaryModel = providerSelection.primaryModel;
       if (providerSelection.providerId === OpenClawProviderId.LobsteraiServer) {
         addExplicitContextCacheDefault(perModelCustomDefaults, providerSelection, {
@@ -2054,6 +2078,11 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
             runtimeProfile: serverModels[0]?.runtimeProfile,
           });
           collectCompatibilityOwnerProfile(candidateModelProfiles, firstServerSel);
+          collectThinkingProfile(
+            candidateThinkingProfiles,
+            firstServerSel,
+            serverModels[0]?.thinkingConfig,
+          );
           const lobsteraiProviderConfig =
             allProvidersMap[providerId] ?? {
               ...firstServerSel.providerConfig,
@@ -2081,6 +2110,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
                 runtimeProfile: sm.runtimeProfile,
               });
               collectCompatibilityOwnerProfile(candidateModelProfiles, serverSel);
+              collectThinkingProfile(candidateThinkingProfiles, serverSel, sm.thinkingConfig);
               addExplicitContextCacheDefault(perModelCustomDefaults, serverSel, {
                 modelId: sm.modelId,
                 provider: sm.provider,
@@ -2095,12 +2125,17 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
 
     const hasModelCompatPlugin = isBundledPluginAvailable(OPENCLAW_MODEL_COMPAT_PLUGIN_ID);
     const candidateModelRefs = Object.keys(candidateModelProfiles).sort();
-    if (candidateModelRefs.length > 0 && !hasModelCompatPlugin) {
+    const candidateThinkingRefs = Object.keys(candidateThinkingProfiles).sort();
+    const requiredCompatRefs = Array.from(new Set([
+      ...candidateModelRefs,
+      ...candidateThinkingRefs,
+    ])).sort();
+    if (requiredCompatRefs.length > 0 && !hasModelCompatPlugin) {
       return {
         ok: false,
         changed: false,
         configPath,
-        error: `OpenClaw config sync failed: required ${OPENCLAW_MODEL_COMPAT_PLUGIN_ID} extension is unavailable for ${candidateModelRefs.join(', ')}.`,
+        error: `OpenClaw config sync failed: required ${OPENCLAW_MODEL_COMPAT_PLUGIN_ID} extension is unavailable for ${requiredCompatRefs.join(', ')}.`,
       };
     }
     const finalizedCompatibility = finalizeModelCompatibilityOwners(
@@ -2115,6 +2150,11 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         error: `OpenClaw config sync failed: invalid Kimi K3 compatibility ownership for ${finalizedCompatibility.rejectedModelRefs.join(', ')}.`,
       };
     }
+    const finalizedThinkingProfiles = Object.fromEntries(
+      Object.entries(candidateThinkingProfiles).sort(([left], [right]) => left.localeCompare(right)),
+    );
+    const hasModelCompatConfig = Object.keys(finalizedCompatibility.modelProfiles).length > 0
+      || Object.keys(finalizedThinkingProfiles).length > 0;
 
     const sandboxMode = mapExecutionModeToSandboxMode(
       coworkConfig.executionMode || 'local',
@@ -2388,12 +2428,17 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
             : {}),
           ...(hasAskUserPlugin ? { 'ask-user-question': { enabled: true } } : {}),
           ...(hasMediaGenPlugin ? { 'lobster-media-generation': { enabled: true } } : {}),
-          ...(Object.keys(finalizedCompatibility.modelProfiles).length > 0
+          ...(hasModelCompatConfig
             ? {
                 [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]: {
                   enabled: true,
                   config: {
-                    modelProfiles: finalizedCompatibility.modelProfiles,
+                    ...(Object.keys(finalizedCompatibility.modelProfiles).length > 0
+                      ? { modelProfiles: finalizedCompatibility.modelProfiles }
+                      : {}),
+                    ...(Object.keys(finalizedThinkingProfiles).length > 0
+                      ? { thinkingProfiles: finalizedThinkingProfiles }
+                      : {}),
                   },
                 },
               }
@@ -2429,7 +2474,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
           // plugins we rely on must be listed here explicitly or they never
           // load — entries.enabled alone is not enough.
           ...(hasXaiPlugin ? ['xai'] : []),
-          ...(Object.keys(finalizedCompatibility.modelProfiles).length > 0
+          ...(hasModelCompatConfig
             ? [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]
             : []),
           ...preinstalledPlugins.map(plugin => plugin.pluginId),

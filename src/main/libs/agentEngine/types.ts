@@ -143,6 +143,7 @@ export type CoworkContinueOptions = {
 
 export interface CoworkSessionPatchResult {
   modelOverride?: string;
+  thinkingLevel?: string;
 }
 
 export interface CoworkRuntime {
