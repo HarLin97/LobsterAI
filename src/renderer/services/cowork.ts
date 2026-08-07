@@ -185,7 +185,15 @@ class CoworkService {
     const persistedMessage = error === undefined
       ? message
       : `${message} error=${error instanceof Error ? error.message : String(error)}`;
-    window.electron?.log?.fromRenderer?.(level, 'CoworkService', persistedMessage);
+    try {
+      window.electron?.log?.fromRenderer?.(
+        level,
+        'CoworkService',
+        persistedMessage.replace(/\s+/g, ' ').trim().slice(0, 500),
+      );
+    } catch {
+      // Diagnostics must never interrupt session or queued-follow-up handling.
+    }
   }
 
   private setCurrentSessionStreaming(sessionId: string, isStreaming: boolean, reason: string): void {

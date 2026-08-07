@@ -488,6 +488,25 @@ test('node stream: complete SSE response ends the proxied response cleanly', asy
   expect(res.destroy).not.toHaveBeenCalled();
 });
 
+test('bounds an unterminated SSE packet to avoid unbounded scan memory', () => {
+  const oversizedPacket = `data: ${'x'.repeat(1_048_576 + 128)}`;
+
+  const remaining = testUtils.scanProxySSEBufferForQuotaError(oversizedPacket);
+
+  expect(remaining).toHaveLength(1_048_576);
+  expect(remaining.endsWith('x'.repeat(128))).toBe(true);
+});
+
+test('accepts token retries only while the authenticated session key is unchanged', () => {
+  expect(testUtils.isProxySessionKeyCurrent('enterprise:6:1001:4', () => (
+    'enterprise:6:1001:4'
+  ))).toBe(true);
+  expect(testUtils.isProxySessionKeyCurrent('enterprise:6:1001:4', () => (
+    'personal:6:5'
+  ))).toBe(false);
+  expect(testUtils.isProxySessionKeyCurrent(null, null)).toBe(true);
+});
+
 test('node stream: SSE response truncated by a clean upstream end is aborted', async () => {
   const upstream = new PassThrough();
   const res = createMockProxyResponse();

@@ -112,6 +112,17 @@ export const rememberMediaTaskOwnerAliases = (
   }
 };
 
+export const clearMediaTaskOwnerAliasesForOwner = (
+  registry: Map<string, string>,
+  ownerAccountKey: string,
+): void => {
+  for (const [taskId, trackedOwnerAccountKey] of registry) {
+    if (trackedOwnerAccountKey === ownerAccountKey) {
+      registry.delete(taskId);
+    }
+  }
+};
+
 export const shouldRemoveMediaTaskAfterPoll = (
   responseScope: MediaAccountScope,
   currentScope: MediaAccountScope | null,

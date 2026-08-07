@@ -238,7 +238,8 @@ export const EnterpriseAccountMenu = ({
 
   useEffect(() => () => {
     clearEnterpriseFlyoutCloseTimer();
-  }, [clearEnterpriseFlyoutCloseTimer]);
+    cancelEnterpriseFlyoutPositionFrame();
+  }, [cancelEnterpriseFlyoutPositionFrame, clearEnterpriseFlyoutCloseTimer]);
 
   const openPortalUrl = async (url: string, action: string) => {
     logEnterpriseAccountDiagnostic('debug', action);

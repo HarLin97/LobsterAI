@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from 'vitest';
 import {
   bindAccountValue,
   canAccessTrackedMediaTask,
+  clearMediaTaskOwnerAliasesForOwner,
   createAccountScopedFetch,
   isAuthExchangeIntentCurrent,
   isAuthStateSnapshotCurrent,
@@ -114,6 +115,20 @@ describe('canAccessTrackedMediaTask', () => {
     expect(registry.get('123')).toBe(enterpriseScope.ownerAccountKey);
     expect(registry.get('upstream-task-123')).toBe(enterpriseScope.ownerAccountKey);
     expect(registry.get('unknown-task')).toBeUndefined();
+  });
+
+  test('removes only aliases owned by the account being cleared', () => {
+    const registry = new Map([
+      ['task-a', enterpriseScope.ownerAccountKey],
+      ['task-b', 'enterprise:6:1002'],
+      ['task-c', enterpriseScope.ownerAccountKey],
+    ]);
+
+    clearMediaTaskOwnerAliasesForOwner(registry, enterpriseScope.ownerAccountKey);
+
+    expect([...registry.entries()]).toEqual([
+      ['task-b', 'enterprise:6:1002'],
+    ]);
   });
 });
 

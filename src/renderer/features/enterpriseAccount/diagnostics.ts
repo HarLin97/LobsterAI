@@ -19,5 +19,9 @@ export const logEnterpriseAccountDiagnostic = (
   } else {
     console.debug(`[EnterpriseAccount] ${resolvedMessage}`);
   }
-  window.electron?.log?.fromRenderer?.(level, 'EnterpriseAccount', resolvedMessage);
+  try {
+    window.electron?.log?.fromRenderer?.(level, 'EnterpriseAccount', resolvedMessage);
+  } catch {
+    // Diagnostics must never interrupt the user action they are reporting.
+  }
 };

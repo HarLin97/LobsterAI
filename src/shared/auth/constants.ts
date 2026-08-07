@@ -21,6 +21,12 @@ export const AuthIpcChannel = {
 
 export type AuthIpcChannel = typeof AuthIpcChannel[keyof typeof AuthIpcChannel];
 
+export interface AuthLoginResult {
+  success: boolean;
+  redirectUrl?: string;
+  error?: string;
+}
+
 export const AuthSessionStatus = {
   Authenticated: 'authenticated',
   Expired: 'expired',

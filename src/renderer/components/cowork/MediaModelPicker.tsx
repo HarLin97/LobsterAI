@@ -39,6 +39,27 @@ const EMPTY_MEDIA_MODELS: { image: MediaModel[]; video: MediaModel[] } = {
   video: [],
 };
 
+const logMediaModelPickerDiagnostic = (
+  level: 'debug' | 'warn',
+  message: string,
+  error?: unknown,
+): void => {
+  const errorMessage = error === undefined
+    ? ''
+    : `: ${error instanceof Error ? error.message : String(error)}`;
+  const resolvedMessage = `${message}${errorMessage}`.replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (level === 'warn') {
+    console.warn(`[MediaModelPicker] ${resolvedMessage}`);
+  } else {
+    console.debug(`[MediaModelPicker] ${resolvedMessage}`);
+  }
+  try {
+    window.electron?.log?.fromRenderer?.(level, 'MediaModelPicker', resolvedMessage);
+  } catch {
+    // Diagnostics must not interrupt model selection or local persistence.
+  }
+};
+
 type MediaIconKey = ProviderName | ProviderIconId;
 
 const normalizeMediaModel = (model: MediaModel): MediaModel => {
@@ -107,9 +128,9 @@ const loadSavedMediaSelection = (
     try {
       await localStore.setItem(selectionStoreKey, normalizedSelection);
       await localStore.removeItem(MEDIA_SELECTION_KV_KEY);
-      console.log('[MediaModelPicker] migrated legacy media selection to the current account');
+      logMediaModelPickerDiagnostic('debug', 'migrated legacy media selection to the current account');
     } catch (error) {
-      console.warn('[MediaModelPicker] failed to persist account-scoped media selection:', error);
+      logMediaModelPickerDiagnostic('warn', 'failed to persist account-scoped media selection', error);
     }
     return normalizedSelection;
   })().finally(() => {
@@ -664,6 +685,8 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
   const mediaModels = ownerAccountKey === mediaModelsOwnerAccountKey
     ? cachedMediaModels
     : EMPTY_MEDIA_MODELS;
+  const mediaModelsRef = useRef(mediaModels);
+  mediaModelsRef.current = mediaModels;
   const selection = useSelector((state: RootState) => state.cowork.mediaSelection[draftKey]);
 
   const selectionRef = useRef(selection);
@@ -685,7 +708,9 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     const requestGeneration = accountGeneration;
     const requestId = ++fetchRequestIdRef.current;
     const selectionStoreKey = getMediaSelectionStoreKey(requestOwnerAccountKey);
-    const hasCachedModels = mediaModels.image.length > 0 || mediaModels.video.length > 0;
+    const currentMediaModels = mediaModelsRef.current;
+    const hasCachedModels = currentMediaModels.image.length > 0
+      || currentMediaModels.video.length > 0;
     if (!hasCachedModels) {
       setIsLoading(true);
     }
@@ -694,9 +719,16 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
         window.electron.media.getModels('image'),
         window.electron.media.getModels('video'),
       ]);
-      if (!isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)) return;
-      if (!imageResult.success) console.warn('[MediaModelPicker] image models fetch failed:', imageResult.error);
-      if (!videoResult.success) console.warn('[MediaModelPicker] video models fetch failed:', videoResult.error);
+      if (
+        fetchRequestIdRef.current !== requestId
+        || !isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)
+      ) return;
+      if (!imageResult.success) {
+        logMediaModelPickerDiagnostic('warn', 'image models fetch failed', imageResult.error);
+      }
+      if (!videoResult.success) {
+        logMediaModelPickerDiagnostic('warn', 'video models fetch failed', videoResult.error);
+      }
       const imageModels = ((imageResult.models || []) as MediaModel[]).map(normalizeMediaModel);
       const videoModels = ((videoResult.models || []) as MediaModel[]).map(normalizeMediaModel);
       dispatch(setMediaModels({
@@ -707,7 +739,10 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
       const currentSelection = selectionRef.current;
       if (!currentSelection || currentSelection.mode === 'none') {
         const rawSaved = await loadSavedMediaSelection(requestOwnerAccountKey);
-        if (!isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)) return;
+        if (
+          fetchRequestIdRef.current !== requestId
+          || !isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)
+        ) return;
         const saved = normalizeSavedMediaSelection(rawSaved);
         if (!isSameSavedMediaSelection(rawSaved, saved)) {
           await localStore.setItem(selectionStoreKey, saved);
@@ -742,7 +777,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
         }
       }
     } catch (err) {
-      console.error('[MediaModelPicker] Failed to fetch models:', err);
+      logMediaModelPickerDiagnostic('warn', 'failed to fetch models', err);
     } finally {
       if (
         fetchRequestIdRef.current === requestId
@@ -756,10 +791,13 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     dispatch,
     draftKey,
     isAccountScopeCurrent,
-    mediaModels.image.length,
-    mediaModels.video.length,
     ownerAccountKey,
   ]);
+
+  useEffect(() => {
+    fetchRequestIdRef.current += 1;
+    setIsLoading(false);
+  }, [accountGeneration, ownerAccountKey]);
 
   useEffect(() => {
     if (isOpen && canUseMediaGeneration) {
@@ -832,7 +870,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
           setActiveTab('video');
         }
       } catch (error) {
-        console.warn('[MediaModelPicker] failed to restore saved media selection:', error);
+        logMediaModelPickerDiagnostic('warn', 'failed to restore saved media selection', error);
       }
     })();
     return () => { cancelled = true; };
@@ -851,9 +889,15 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     const selectionOwnerAccountKey = ownerAccountKey;
     const selectionGeneration = accountGeneration;
     const selectionStoreKey = getMediaSelectionStoreKey(selectionOwnerAccountKey);
-    const saved = normalizeSavedMediaSelection(
-      await loadSavedMediaSelection(selectionOwnerAccountKey),
-    );
+    let saved: SavedMediaSelection;
+    try {
+      saved = normalizeSavedMediaSelection(
+        await loadSavedMediaSelection(selectionOwnerAccountKey),
+      );
+    } catch (error) {
+      logMediaModelPickerDiagnostic('warn', 'failed to load saved media selection', error);
+      saved = {};
+    }
     if (!isAccountScopeCurrent(selectionOwnerAccountKey, selectionGeneration)) return;
     const currentModelId = mode === 'image'
       ? canonicalizeMediaModelId(selection?.imageModelId ?? (selection?.mode === 'image' ? selection?.modelId : undefined))
@@ -868,8 +912,9 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     try {
       await localStore.setItem(selectionStoreKey, saved);
     } catch (error) {
-      console.warn('[MediaModelPicker] failed to save media selection:', error);
+      logMediaModelPickerDiagnostic('warn', 'failed to save media selection', error);
     }
+    if (!isAccountScopeCurrent(selectionOwnerAccountKey, selectionGeneration)) return;
 
     const hasImage = !!saved.image;
     const hasVideo = !!saved.video;
@@ -964,6 +1009,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
 
   useEffect(() => {
     return () => {
+      fetchRequestIdRef.current += 1;
       if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     };
   }, []);

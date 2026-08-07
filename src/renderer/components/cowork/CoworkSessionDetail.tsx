@@ -31,6 +31,7 @@ import {
   normalizeCoworkSelectedTextSnippets,
 } from '../../../shared/cowork/selectedText';
 import { ShareDeploymentCandidateSource } from '../../../shared/shareDeployment/constants';
+import { resolveArtifactAutoPreviewEnabled } from '../../config';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
 import {
   findCurrentEnterpriseQuotaSignal,
@@ -45,6 +46,7 @@ import {
   normalizeProjectDirectoryForDedup,
   parseMediaTokensFromText,
 } from '../../services/artifactParser';
+import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { getInstalledKitSkillIds } from '../../services/kitCapability';
@@ -252,6 +254,7 @@ const AutoScrollDetachSource = {
 } as const;
 type AutoScrollDetachSource = typeof AutoScrollDetachSource[keyof typeof AutoScrollDetachSource];
 const AUTO_PREVIEW_ARTIFACT_SETTLE_MS = 600;
+const MAX_AUTO_PREVIEW_HANDLED_TURNS = 128;
 const LOCAL_SERVICE_PROCESS_DIRECTORY_RETRY_DELAY_MS = 900;
 const ARTIFACT_PANEL_TRANSITION_MS = 200;
 const ARTIFACT_PANEL_RESIZE_HANDLE_WIDTH = 4;
@@ -2114,6 +2117,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const previousAutoPreviewMessagesLengthRef = useRef(messagesLength);
   const previousAutoPreviewLatestTurnIdRef = useRef<string | null>(null);
   const [autoPreviewPendingTurnId, setAutoPreviewPendingTurnId] = useState<string | null>(null);
+  const [artifactAutoPreviewEnabled, setArtifactAutoPreviewEnabled] = useState(
+    () => resolveArtifactAutoPreviewEnabled(
+      configService.getConfig().artifactAutoPreviewEnabled,
+    ),
+  );
 
   const getAutoPreviewHandledTurnIds = useCallback((targetSessionId: string): Set<string> => {
     let handled = autoPreviewHandledTurnIdsRef.current[targetSessionId];
@@ -2125,7 +2133,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   }, []);
 
   const clearAutoPreviewArtifactSettleTimer = useCallback(() => {
-    if (autoPreviewArtifactSettleTimerRef.current) {
+    if (autoPreviewArtifactSettleTimerRef.current !== null) {
       window.clearTimeout(autoPreviewArtifactSettleTimerRef.current);
       autoPreviewArtifactSettleTimerRef.current = null;
     }
@@ -2137,7 +2145,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   const markAutoPreviewTurnHandled = useCallback((targetSessionId: string, turnId: string) => {
     clearAutoPreviewArtifactSettleTimer();
-    getAutoPreviewHandledTurnIds(targetSessionId).add(turnId);
+    const handledTurnIds = getAutoPreviewHandledTurnIds(targetSessionId);
+    handledTurnIds.add(turnId);
+    while (handledTurnIds.size > MAX_AUTO_PREVIEW_HANDLED_TURNS) {
+      const oldestTurnId = handledTurnIds.values().next().value;
+      if (!oldestTurnId) break;
+      handledTurnIds.delete(oldestTurnId);
+    }
     if (targetSessionId === sessionId && autoPreviewPendingTurnId === turnId) {
       setAutoPreviewPendingTurnId(null);
     }
@@ -2147,6 +2161,27 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     getAutoPreviewHandledTurnIds,
     sessionId,
   ]);
+
+  useEffect(() => {
+    const syncArtifactAutoPreviewSetting = () => {
+      const enabled = resolveArtifactAutoPreviewEnabled(
+        configService.getConfig().artifactAutoPreviewEnabled,
+      );
+      if (!enabled) {
+        const canceledPendingPreview = autoPreviewArtifactSettleTimerRef.current !== null;
+        clearAutoPreviewArtifactSettleTimer();
+        setAutoPreviewPendingTurnId(null);
+        if (canceledPendingPreview) {
+          console.debug('[ArtifactPreview] canceled pending automatic preview: preference disabled.');
+        }
+      }
+      setArtifactAutoPreviewEnabled(enabled);
+    };
+    window.addEventListener(ConfigServiceEvent.Updated, syncArtifactAutoPreviewSetting);
+    return () => {
+      window.removeEventListener(ConfigServiceEvent.Updated, syncArtifactAutoPreviewSetting);
+    };
+  }, [clearAutoPreviewArtifactSettleTimer]);
 
   useEffect(() => {
     let animationFrame: number | undefined;
@@ -4342,8 +4377,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (!completedStreamingTurn && !appendedCompletedTurn) return;
 
     if (getAutoPreviewHandledTurnIds(sessionId).has(latestAssistantTurn.id)) return;
+    if (!artifactAutoPreviewEnabled) {
+      clearAutoPreviewArtifactSettleTimer();
+      setCurrentAutoPreviewPendingTurnId(null);
+      return;
+    }
     setCurrentAutoPreviewPendingTurnId(latestAssistantTurn.id);
   }, [
+    artifactAutoPreviewEnabled,
     clearAutoPreviewArtifactSettleTimer,
     getAutoPreviewHandledTurnIds,
     isStreaming,
@@ -4356,6 +4397,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   useEffect(() => {
     if (!sessionId || !autoPreviewPendingTurnId || !currentSession) return;
     if (getAutoPreviewHandledTurnIds(sessionId).has(autoPreviewPendingTurnId)) {
+      clearAutoPreviewArtifactSettleTimer();
+      setCurrentAutoPreviewPendingTurnId(null);
+      return;
+    }
+
+    if (!artifactAutoPreviewEnabled) {
       clearAutoPreviewArtifactSettleTimer();
       setCurrentAutoPreviewPendingTurnId(null);
       return;
@@ -4383,6 +4430,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     autoPreviewArtifactSettleTimerRef.current = window.setTimeout(() => {
       autoPreviewArtifactSettleTimerRef.current = null;
       if (getAutoPreviewHandledTurnIds(sessionId).has(autoPreviewPendingTurnId)) return;
+      if (!resolveArtifactAutoPreviewEnabled(
+        configService.getConfig().artifactAutoPreviewEnabled,
+      )) {
+        setCurrentAutoPreviewPendingTurnId(null);
+        console.debug('[ArtifactPreview] skipped automatic preview: preference disabled.');
+        return;
+      }
 
       switch (getAutoPreviewOpenTarget(artifact)) {
         case ArtifactAutoPreviewOpenTarget.LocalServiceBrowser:
@@ -4403,6 +4457,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
     return clearAutoPreviewArtifactSettleTimer;
   }, [
+    artifactAutoPreviewEnabled,
     autoPreviewPendingTurnId,
     clearAutoPreviewArtifactSettleTimer,
     currentSession,

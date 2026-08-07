@@ -39,9 +39,16 @@ export const EnterpriseQuotaPrompt = ({
   const [isCheckingQuota, setIsCheckingQuota] = useState(false);
   const quotaCheckInFlightRef = useRef(false);
   const autoCheckedSignalKeyRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
   const quotaReason = signal?.reason ?? reason;
   const enterpriseId = context?.enterpriseId;
+  const enterpriseIdRef = useRef(enterpriseId);
+  enterpriseIdRef.current = enterpriseId;
   const signalMessageId = signal?.messageId;
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
 
   useEffect(() => {
     setRequestState('idle');
@@ -61,7 +68,7 @@ export const EnterpriseQuotaPrompt = ({
         'debug',
         `quota check completed (success: ${result.success}, available: ${result.enterpriseQuotaAvailable})`,
       );
-      if (showResultToast) {
+      if (mountedRef.current && showResultToast) {
         const toastKey = !result.success
           ? 'enterpriseQuotaCheckFailed'
           : result.enterpriseQuotaAvailable
@@ -73,14 +80,16 @@ export const EnterpriseQuotaPrompt = ({
       }
     } catch (error) {
       logEnterpriseAccountDiagnostic('warn', 'quota check failed unexpectedly', error);
-      if (showResultToast) {
+      if (mountedRef.current && showResultToast) {
         window.dispatchEvent(new CustomEvent('app:showToast', {
           detail: i18nService.t('enterpriseQuotaCheckFailed'),
         }));
       }
     } finally {
       quotaCheckInFlightRef.current = false;
-      setIsCheckingQuota(false);
+      if (mountedRef.current) {
+        setIsCheckingQuota(false);
+      }
     }
   }, []);
 
@@ -151,6 +160,7 @@ export const EnterpriseQuotaPrompt = ({
   const isSuperAdmin = context.role === EnterpriseMemberRole.SuperAdmin;
 
   const handleAction = async () => {
+    const actionEnterpriseId = context.enterpriseId;
     if (presentation.portalUrl) {
       logEnterpriseAccountDiagnostic('debug', `opening quota action for ${quotaReason}`);
       try {
@@ -169,9 +179,13 @@ export const EnterpriseQuotaPrompt = ({
     );
     try {
       const result = await window.electron.enterpriseAccount.requestQuotaIncrease(
-        context.enterpriseId,
+        actionEnterpriseId,
         presentation.requestType,
       );
+      if (!mountedRef.current || enterpriseIdRef.current !== actionEnterpriseId) {
+        logEnterpriseAccountDiagnostic('debug', 'discarded quota request response after account changed');
+        return;
+      }
       if (!result.success) {
         logEnterpriseAccountDiagnostic('warn', 'quota request returned an error', result.error);
         setRequestState('idle');
@@ -192,6 +206,7 @@ export const EnterpriseQuotaPrompt = ({
       }));
     } catch (error) {
       logEnterpriseAccountDiagnostic('warn', 'quota request IPC failed', error);
+      if (!mountedRef.current || enterpriseIdRef.current !== actionEnterpriseId) return;
       setRequestState('idle');
       window.dispatchEvent(new CustomEvent('app:showToast', {
         detail: i18nService.t('enterpriseQuotaRequestFailed'),

@@ -2,6 +2,7 @@ import { createAccountOwnerKey } from '@shared/auth/accountOwner';
 import {
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
+  type AuthLoginResult,
   type AuthSessionChangedEvent,
   AuthSessionChangeReason,
   AuthSessionStatus,
@@ -121,20 +122,24 @@ const writeAuthRendererLog = (
   message: string,
   error?: unknown,
 ): void => {
+  const errorMessage = error === undefined
+    ? ''
+    : `: ${error instanceof Error ? error.message : String(error)}`;
+  const resolvedMessage = `${message}${errorMessage}`.replace(/\s+/g, ' ').trim().slice(0, 500);
   if (level === 'warn') {
     if (error === undefined) {
-      console.warn(`[Auth] ${message}`);
+      console.warn(`[Auth] ${resolvedMessage}`);
     } else {
       console.warn(`[Auth] ${message}:`, error);
     }
   } else if (level === 'debug') {
-    console.debug(`[Auth] ${message}`);
+    console.debug(`[Auth] ${resolvedMessage}`);
   } else {
-    console.log(`[Auth] ${message}`);
+    console.log(`[Auth] ${resolvedMessage}`);
   }
 
   try {
-    window.electron?.log?.fromRenderer?.(level, 'AuthService', message);
+    window.electron?.log?.fromRenderer?.(level, 'AuthService', resolvedMessage);
   } catch {
     // Logging is best-effort and must never interrupt authentication.
   }
@@ -225,7 +230,10 @@ class AuthService {
   private unsubSessionChanged: (() => void) | null = null;
   private unsubEnterpriseContextInvalidated: (() => void) | null = null;
   private unsubWindowState: (() => void) | null = null;
-  private pendingQuotaCheck: Promise<AuthQuotaCheckResult> | null = null;
+  private pendingQuotaCheck: {
+    requestSnapshot: AuthAccountRequestSnapshot;
+    promise: Promise<AuthQuotaCheckResult>;
+  } | null = null;
   private lastRefreshTime = 0;
   private loginAttemptSequence = 0;
 
@@ -344,7 +352,7 @@ class AuthService {
   /**
    * Initiate login (opens system browser).
    */
-  async login() {
+  async login(): Promise<AuthLoginResult> {
     const attemptId = ++this.loginAttemptSequence;
     writeAuthRendererLog('info', `login attempt ${attemptId} started`);
 
@@ -356,6 +364,7 @@ class AuthService {
       } else {
         writeAuthRendererLog('warn', `login attempt ${attemptId} could not open the system browser`);
       }
+      return result;
     } catch (error) {
       writeAuthRendererLog('warn', `login attempt ${attemptId} failed before browser handoff`, error);
       throw error;
@@ -552,9 +561,7 @@ class AuthService {
         || currentAuthState.ownerAccountKey !== authStateAtStart.ownerAccountKey
         || currentAuthState.accountGeneration !== authStateAtStart.accountGeneration
       ) {
-        const message = 'Discarded stale quota response after auth state changed';
-        console.debug(`[Auth] ${message}`);
-        window.electron?.log?.fromRenderer?.('debug', 'Auth', message);
+        writeAuthRendererLog('debug', 'discarded stale quota response after auth state changed');
         return false;
       }
       if (result.success) {
@@ -568,35 +575,38 @@ class AuthService {
       }
       return false;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn('[Auth] quota refresh failed:', error);
-      window.electron?.log?.fromRenderer?.(
-        'warn',
-        'Auth',
-        `Quota refresh failed: ${message.replace(/\s+/g, ' ').slice(0, 500)}`,
-      );
+      writeAuthRendererLog('warn', 'quota refresh failed', error);
       return false;
     }
   }
 
   async checkQuota(): Promise<AuthQuotaCheckResult> {
-    if (this.pendingQuotaCheck) {
+    const requestSnapshot = store.getState().auth;
+    if (
+      this.pendingQuotaCheck
+      && isAuthAccountRequestCurrent(
+        this.pendingQuotaCheck.requestSnapshot,
+        requestSnapshot,
+      )
+    ) {
       writeAuthRendererLog('debug', 'joining the in-flight quota check');
-      return this.pendingQuotaCheck;
+      return this.pendingQuotaCheck.promise;
     }
 
-    const check = this.performQuotaCheck();
-    this.pendingQuotaCheck = check;
+    const check = this.performQuotaCheck(requestSnapshot);
+    this.pendingQuotaCheck = { requestSnapshot, promise: check };
     try {
       return await check;
     } finally {
-      if (this.pendingQuotaCheck === check) {
+      if (this.pendingQuotaCheck?.promise === check) {
         this.pendingQuotaCheck = null;
       }
     }
   }
 
-  private async performQuotaCheck(): Promise<AuthQuotaCheckResult> {
+  private async performQuotaCheck(
+    requestSnapshot: AuthAccountRequestSnapshot,
+  ): Promise<AuthQuotaCheckResult> {
     writeAuthRendererLog('debug', 'quota check started');
     try {
       const refreshed = await this.refreshQuota();
@@ -611,6 +621,13 @@ class AuthService {
         this.fetchProfileSummary(),
         this.loadServerModels(),
       ]);
+      if (!isAuthAccountRequestCurrent(requestSnapshot, store.getState().auth)) {
+        writeAuthRendererLog('debug', 'discarded quota check result after auth state changed');
+        return {
+          success: false,
+          enterpriseQuotaAvailable: false,
+        };
+      }
       const enterpriseContext = store.getState().enterpriseAccount.context;
       const enterpriseQuotaAvailable = (
         !enterpriseContext
@@ -687,6 +704,7 @@ class AuthService {
   }
 
   destroy() {
+    this.pendingQuotaCheck = null;
     this.unsubCallback?.();
     this.unsubCallback = null;
     this.unsubLifecycleEvent?.();

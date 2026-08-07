@@ -40,7 +40,7 @@ import {
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
 import { agentService } from '../../services/agent';
-import { configService } from '../../services/config';
+import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
 import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
 import {
@@ -172,7 +172,11 @@ const logPromptModelSelection = (
   } else {
     console.debug(`[CoworkPromptInput] ${message}`);
   }
-  window.electron?.log?.fromRenderer?.(level, 'CoworkPromptInput', message);
+  try {
+    window.electron?.log?.fromRenderer?.(level, 'CoworkPromptInput', message.slice(0, 500));
+  } catch {
+    // Diagnostics must never interrupt model selection.
+  }
 };
 
 const logCoworkSteer = (
@@ -192,7 +196,15 @@ const logCoworkSteer = (
   const persistedMessage = error === undefined
     ? message
     : `${message} error=${error instanceof Error ? error.message : String(error)}`;
-  window.electron?.log?.fromRenderer?.(level, 'CoworkSteer', persistedMessage);
+  try {
+    window.electron?.log?.fromRenderer?.(
+      level,
+      'CoworkSteer',
+      persistedMessage.replace(/\s+/g, ' ').trim().slice(0, 500),
+    );
+  } catch {
+    // Diagnostics must never interrupt queued follow-up handling.
+  }
 };
 
 const summarizePromptShape = (prompt: string): string => {
@@ -2734,8 +2746,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       const latest = configService.getConfig().shortcuts?.sendMessage ?? 'Enter';
       setCurrentSendShortcut(latest);
     };
-    window.addEventListener('config-updated', syncFromConfig);
-    return () => window.removeEventListener('config-updated', syncFromConfig);
+    window.addEventListener(ConfigServiceEvent.Updated, syncFromConfig);
+    return () => window.removeEventListener(ConfigServiceEvent.Updated, syncFromConfig);
   }, []);
 
   const largeModelSelector = showModelSelector ? (

@@ -191,7 +191,11 @@ describe('auth-scoped renderer requests', () => {
 describe('login diagnostics', () => {
   test('persists renderer lifecycle logs without including the login URL', async () => {
     const fromRenderer = vi.fn();
-    const login = vi.fn().mockResolvedValue({ success: true });
+    const loginResult = {
+      success: true,
+      redirectUrl: 'https://lobsterai.youdao.com/portal#/login?source=electron',
+    };
+    const login = vi.fn().mockResolvedValue(loginResult);
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'debug').mockImplementation(() => {});
     vi.stubGlobal('window', {
@@ -207,7 +211,7 @@ describe('login diagnostics', () => {
       },
     });
 
-    await authService.login();
+    await expect(authService.login()).resolves.toEqual(loginResult);
 
     expect(login).toHaveBeenCalledWith('https://lobsterai.youdao.com/portal#/login');
     expect(fromRenderer).toHaveBeenCalledWith(
@@ -223,7 +227,7 @@ describe('login diagnostics', () => {
     expect(fromRenderer.mock.calls.flat().join(' ')).not.toContain('lobsterai.youdao.com');
   });
 
-  test('records a warning while preserving the existing non-throwing IPC failure behavior', async () => {
+  test('returns the IPC failure result without throwing and records a warning', async () => {
     const fromRenderer = vi.fn();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'debug').mockImplementation(() => {});
@@ -241,7 +245,10 @@ describe('login diagnostics', () => {
       },
     });
 
-    await expect(authService.login()).resolves.toBeUndefined();
+    await expect(authService.login()).resolves.toEqual({
+      success: false,
+      error: 'open failed',
+    });
 
     expect(fromRenderer).toHaveBeenCalledWith(
       'warn',
@@ -388,6 +395,63 @@ describe('quota checks', () => {
     expect(getQuota).toHaveBeenCalledOnce();
     expect(getProfileSummary).toHaveBeenCalledOnce();
     expect(getModels).toHaveBeenCalledOnce();
+  });
+
+  test('does not join a quota check started by a previous account', async () => {
+    let resolveFirstQuota!: (value: {
+      success: boolean;
+      quota: null;
+      enterpriseContext: null;
+    }) => void;
+    const firstQuotaResponse = new Promise<{
+      success: boolean;
+      quota: null;
+      enterpriseContext: null;
+    }>(resolve => {
+      resolveFirstQuota = resolve;
+    });
+    const getQuota = vi.fn()
+      .mockReturnValueOnce(firstQuotaResponse)
+      .mockResolvedValueOnce({
+        success: true,
+        quota: null,
+        enterpriseContext: null,
+      });
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          getQuota,
+          getProfileSummary: vi.fn().mockResolvedValue({ success: true, data: null }),
+          getModels: vi.fn().mockResolvedValue({ success: true, models: [] }),
+        },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    store.dispatch(setLoggedIn({
+      user: { yid: 'first', nickname: 'First', avatarUrl: null },
+      quota: null,
+      ownerAccountKey: 'personal:first',
+    }));
+
+    const firstCheck = authService.checkQuota();
+    store.dispatch(setLoggedIn({
+      user: { yid: 'second', nickname: 'Second', avatarUrl: null },
+      quota: null,
+      ownerAccountKey: 'personal:second',
+    }));
+    const secondCheck = authService.checkQuota();
+
+    await expect(secondCheck).resolves.toEqual({
+      success: true,
+      enterpriseQuotaAvailable: true,
+    });
+    expect(getQuota).toHaveBeenCalledTimes(2);
+
+    resolveFirstQuota({ success: true, quota: null, enterpriseContext: null });
+    await expect(firstCheck).resolves.toEqual({
+      success: false,
+      enterpriseQuotaAvailable: false,
+    });
   });
 
   test('reports the refreshed enterprise quota as unavailable', async () => {

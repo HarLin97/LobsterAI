@@ -279,7 +279,17 @@ async function updateShareFile(
 }
 
 function logShare(level: 'debug' | 'warn', message: string): void {
-  window.electron?.log?.fromRenderer?.(level, 'ArtifactFileShare', message);
+  const boundedMessage = message.replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (level === 'warn') {
+    console.warn(`[ArtifactFileShare] ${boundedMessage}`);
+  } else {
+    console.debug(`[ArtifactFileShare] ${boundedMessage}`);
+  }
+  try {
+    window.electron?.log?.fromRenderer?.(level, 'ArtifactFileShare', boundedMessage);
+  } catch {
+    // Diagnostics must never change the result of a share operation.
+  }
 }
 
 export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileShareProviderProps) {

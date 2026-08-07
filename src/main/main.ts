@@ -212,6 +212,7 @@ import type {
   TelegramInstanceConfig,
   WecomInstanceConfig,
 } from './im/types';
+import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
@@ -431,6 +432,7 @@ import {
   type AuthStateSnapshot,
   bindAccountValue,
   canAccessTrackedMediaTask,
+  clearMediaTaskOwnerAliasesForOwner,
   createAccountScopedFetch,
   isAuthExchangeIntentCurrent,
   isAuthStateSnapshotCurrent,
@@ -3588,6 +3590,7 @@ const mediaTaskOwnerById = new Map<string, string>();
 const mediaStatusPollCounts = new Map<string, number>();
 const mediaTasksHandledByStatusPolling = new Set<string>();
 let mediaTaskPollTimer: ReturnType<typeof setInterval> | null = null;
+let mediaTaskPollInFlight = false;
 const MEDIA_POLL_FAST_MS = 10_000;
 const MEDIA_POLL_SLOW_MS = 30_000;
 const MEDIA_POLL_MEDIUM_MS = 120_000;
@@ -3942,6 +3945,7 @@ const clearMediaPollingStateForOwner = (ownerAccountKey: string): void => {
       mediaTasksHandledByStatusPolling.delete(key);
     }
   }
+  clearMediaTaskOwnerAliasesForOwner(mediaTaskOwnerById, ownerAccountKey);
 };
 
 const emitMediaStatusPollUpdate = (update: MediaStatusPollUpdate): void => {
@@ -4706,13 +4710,15 @@ if (!gotTheLock) {
     }
   };
 
+  const getAuthSessionKey = (): string | null => {
+    if (!getAuthTokens()) return null;
+    const scope = getCurrentMediaAccountScope();
+    return `${scope?.ownerAccountKey ?? 'unresolved'}:${authAccountGeneration}`;
+  };
+
   const authSessionManager = new AuthSessionManager({
     getTokens: getAuthTokens,
-    getSessionKey: () => {
-      if (!getAuthTokens()) return null;
-      const scope = getCurrentMediaAccountScope();
-      return `${scope?.ownerAccountKey ?? 'unresolved'}:${authAccountGeneration}`;
-    },
+    getSessionKey: getAuthSessionKey,
     saveTokens: tokens => saveAuthTokens(tokens.accessToken, tokens.refreshToken),
     fetch: (url, options) => {
       const headers = new Headers(options?.headers);
@@ -5129,6 +5135,14 @@ if (!gotTheLock) {
       });
     },
     requestQuotaIncrease: (enterpriseId, requestType) => {
+      const currentContext = getPersistedEnterpriseAccountContext(getStore());
+      if (!currentContext || currentContext.enterpriseId !== enterpriseId) {
+        console.warn('[EnterpriseAccount] rejected quota request outside the current enterprise context');
+        return Promise.resolve({
+          success: false,
+          error: 'Enterprise account context changed before the quota request',
+        });
+      }
       const generation = authAccountGeneration;
       return requestEnterpriseQuotaIncrease({
         getServerBaseUrl: getServerApiBaseUrl,
@@ -5867,7 +5881,13 @@ if (!gotTheLock) {
   const ensureMediaPollTimerRunning = () => {
     if (mediaTaskPollTimer) return;
     mediaTaskPollTimer = setInterval(() => {
-      void pollPendingMediaTasks();
+      if (mediaTaskPollInFlight) return;
+      mediaTaskPollInFlight = true;
+      void pollPendingMediaTasks().catch(error => {
+        console.warn('[MediaGeneration] pending task polling cycle failed:', error);
+      }).finally(() => {
+        mediaTaskPollInFlight = false;
+      });
     }, MEDIA_POLL_FAST_MS);
   };
 
@@ -6066,8 +6086,15 @@ if (!gotTheLock) {
           tasksToRemove.set(taskId, tracker);
           notifyAuthQuotaChanged();
         }
-      } catch {
-        // Network error, retry on next poll
+      } catch (error) {
+        // Keep retries quiet during transient failures while retaining enough
+        // sampled context to diagnose a task that remains stuck for hours.
+        if (tracker.pollCount === 1 || tracker.pollCount % 10 === 0) {
+          console.warn(
+            `[MediaGeneration] pending ${tracker.mediaType} task ${taskId} poll failed; retrying`,
+            error,
+          );
+        }
       }
     }
 
@@ -6220,7 +6247,10 @@ if (!gotTheLock) {
 
   const syncOpenClawConfigIfAuthQuotaGateChanged = (previous: ReturnType<typeof getAuthQuotaGateState>) => {
     if (hasAuthQuotaGateStateChanged(previous)) {
-      syncOpenClawConfig({ reason: MEDIA_ENTITLEMENT_SYNC_REASON, restartGatewayIfRunning: true }).catch((error) => {
+      // The auth quota gate is enforced in the main process. Let config sync
+      // decide whether its rendered changes require a restart instead of
+      // forcing one before the post-login server-model metadata sync.
+      syncOpenClawConfig({ reason: MEDIA_ENTITLEMENT_SYNC_REASON, restartGatewayIfRunning: false }).catch((error) => {
         console.warn('[Auth] failed to sync OpenClaw config after quota gate changed:', error);
       });
       return true;
@@ -6325,13 +6355,13 @@ if (!gotTheLock) {
       });
       console.log('[Auth] opening portal login with local callback redirect');
       await shell.openExternal(finalUrl);
-      return { success: true };
+      return { success: true, redirectUrl: finalUrl };
     } catch (error) {
       // The callback may be shared by another login page and will clean itself up on timeout.
       console.warn('[Auth] local callback login failed, falling back to deep link login:', error);
       try {
         await shell.openExternal(fallbackUrl);
-        return { success: true };
+        return { success: true, redirectUrl: fallbackUrl };
       } catch (fallbackError) {
         console.error('[Auth] login failed:', fallbackError);
         return {
@@ -6340,6 +6370,20 @@ if (!gotTheLock) {
         };
       }
     }
+  });
+
+  registerActivityIpcHandlers({
+    ipcMain,
+    isDev,
+    isPackaged: app.isPackaged,
+    getMainWindow: () => mainWindow,
+    getServerBaseUrl: getServerApiBaseUrl,
+    getClientVersion: () => app.getVersion(),
+    platform: process.platform,
+    hasAuthTokens: () => getAuthTokens() !== null,
+    fetchPublic: (url, options) => net.fetch(url, options),
+    fetchWithAuth,
+    developmentServerBaseUrl: process.env.LOBSTER_ACTIVITY_SERVER_BASE_URL,
   });
 
   ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
@@ -7461,6 +7505,10 @@ if (!gotTheLock) {
   // Media generation IPC handlers
   ipcMain.handle(CoworkIpcChannel.GetMediaModels, async (_event, type: 'image' | 'video') => {
     try {
+      if (type !== 'image' && type !== 'video') {
+        console.warn('[Media:getModels] rejected invalid media type');
+        return { success: false, error: 'Invalid media type' };
+      }
       const tokens = getAuthTokens();
       const requestAccountScope = getCurrentMediaAccountScope();
       if (!tokens || requestAccountScope === null) {
@@ -7497,6 +7545,10 @@ if (!gotTheLock) {
 
   ipcMain.handle('media:getTaskStatus', async (_event, taskId: number, type: 'image' | 'video') => {
     try {
+      if (type !== 'image' && type !== 'video') {
+        console.warn('[Media:getTaskStatus] rejected invalid media type');
+        return { success: false, error: 'Invalid media type' };
+      }
       const tokens = getAuthTokens();
       const requestAccountScope = getCurrentMediaAccountScope();
       if (!tokens || requestAccountScope === null) {
@@ -7509,11 +7561,15 @@ if (!gotTheLock) {
       const serverBaseUrl = getServerApiBaseUrl();
       const mediaPath = type === 'image' ? 'images' : 'videos';
       const taskUrl = `${serverBaseUrl}/api/media/${mediaPath}/tasks/${taskId}`;
-      console.log('[Media:getTaskStatus] Fetching:', taskUrl);
+      console.debug(`[Media:getTaskStatus] requesting ${type} task ${taskId}`);
       const resp = await fetchWithAuth(taskUrl);
-      console.log('[Media:getTaskStatus] Response status:', resp.status);
       const body = await resp.json() as { code: number; data?: unknown; message?: string };
-      console.log('[Media:getTaskStatus] Response body:', JSON.stringify(body));
+      const responseTask = body.data && typeof body.data === 'object'
+        ? body.data as Record<string, unknown>
+        : null;
+      console.debug(
+        `[Media:getTaskStatus] response HTTP ${resp.status}; code=${body.code}; status=${String(responseTask?.status ?? 'unknown')}`,
+      );
       if (!isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
         return { success: false, error: t('authAccountChanged') };
       }
@@ -11675,7 +11731,10 @@ if (!gotTheLock) {
   });
 
   registerSiteIpcHandlers({
-    fetchWithAuth,
+    fetchWithAuth: (url, options) => {
+      const { scopedFetch } = capturePublishingRequest();
+      return scopedFetch(url, options);
+    },
     getServerApiBaseUrl,
   });
 
@@ -12881,6 +12940,7 @@ if (!gotTheLock) {
         refreshToken: reason => authSessionManager.refresh(reason),
         getServerBaseUrl: getServerApiBaseUrl,
         getAccountContextHeaders: getEnterpriseAccountHeaders,
+        getSessionKey: getAuthSessionKey,
         getClientVersion: () => app.getVersion(),
         getEnterpriseAuthSessionSnapshot: captureEnterpriseAuthSessionSnapshot,
         onEnterpriseMembershipRevoked: event => {

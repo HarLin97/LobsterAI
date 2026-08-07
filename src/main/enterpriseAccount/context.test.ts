@@ -197,6 +197,31 @@ describe('enterprise account context refresh', () => {
     expect(getPersistedEnterpriseAccountContext(store)).toEqual(currentContext);
   });
 
+  test('preserves the cached context when an enterprise response is incomplete', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = createStore();
+    const cachedContext = createContext();
+    persistEnterpriseAccountContext(store, cachedContext);
+    const result = await fetchEnterpriseAccountContext({
+      getServerBaseUrl: () => 'https://example.test',
+      fetchWithAuth: async () => jsonResponse({
+        code: 0,
+        data: {
+          accountMode: EnterpriseAccountMode.Enterprise,
+          enterpriseId: cachedContext.enterpriseId,
+        },
+      }),
+      store,
+    });
+
+    expect(result).toEqual({
+      success: false,
+      context: cachedContext,
+      error: 'Enterprise account context response was incomplete',
+    });
+    expect(getPersistedEnterpriseAccountContext(store)).toEqual(cachedContext);
+  });
+
   test('times out without discarding the last valid cached context', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const store = createStore();

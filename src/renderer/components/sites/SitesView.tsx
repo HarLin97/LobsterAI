@@ -15,6 +15,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 
 import { HtmlShareAccessMode, HtmlShareStatus } from '../../../shared/htmlShare/constants';
 import {
@@ -33,6 +34,7 @@ import {
 } from '../../../shared/site/constants';
 import { copyTextToClipboard } from '../../services/clipboard';
 import { i18nService } from '../../services/i18n';
+import type { RootState } from '../../store';
 import Modal from '../common/Modal';
 import Cog6ToothIcon from '../icons/Cog6ToothIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
@@ -227,6 +229,11 @@ const SitesView: React.FC<SitesViewProps> = ({
   updateBadge,
   readOnly = false,
 }) => {
+  const ownerAccountKey = useSelector((state: RootState) => state.auth.ownerAccountKey);
+  const accountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
+  const accountScopeKey = ownerAccountKey
+    ? `${ownerAccountKey}:${accountGeneration}`
+    : null;
   const [keywordInput, setKeywordInput] = useState('');
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState<SiteFilterStatusValue | undefined>();
@@ -271,6 +278,8 @@ const SitesView: React.FC<SitesViewProps> = ({
   const analyticsRequestRef = useRef(0);
   const shareRequestRef = useRef(0);
   const mountedRef = useRef(true);
+  const accountScopeKeyRef = useRef(accountScopeKey);
+  accountScopeKeyRef.current = accountScopeKey;
   const siteActionMenuRef = useRef<HTMLDivElement>(null);
   const requestedAnalyticsDates = useMemo(
     () => analyticsDateValues(analyticsRange),
@@ -287,6 +296,37 @@ const SitesView: React.FC<SitesViewProps> = ({
       shareRequestRef.current += 1;
     };
   }, []);
+
+  const isRequestScopeCurrent = useCallback((requestAccountScope: string | null): boolean => (
+    mountedRef.current && accountScopeKeyRef.current === requestAccountScope
+  ), []);
+
+  useEffect(() => {
+    listRequestRef.current += 1;
+    detailRequestRef.current += 1;
+    analyticsRequestRef.current += 1;
+    shareRequestRef.current += 1;
+    setListData({ list: [], total: 0, page: 1, pageSize: PAGE_SIZE });
+    setListLoading(false);
+    setListError(null);
+    setSelectedSite(null);
+    setDetailLoading(false);
+    setAnalytics(null);
+    setAnalyticsLoading(false);
+    setActionLoading(false);
+    setActionError(null);
+    setConfirmAction(null);
+    setDeleteConfirmOpen(false);
+    setDeleteConfirmText('');
+    setLeaveConfirmOpen(false);
+    setSiteActionMenu(null);
+    setShareSite(null);
+    setShareSiteDetail(null);
+    setShareDialogLoading(false);
+    setShareActionLoading(false);
+    setShareError(null);
+    setShareLinkCopied(false);
+  }, [accountScopeKey]);
 
   useEffect(() => {
     if (!siteActionMenu) return undefined;
@@ -320,7 +360,8 @@ const SitesView: React.FC<SitesViewProps> = ({
 
   const loadSites = useCallback(
     async (background = false) => {
-      if (!isAuthenticated) return;
+      if (!isAuthenticated || !accountScopeKey) return;
+      const requestAccountScope = accountScopeKey;
       // Deployment polling must not stack IPC/network work when a prior list
       // request is still pending on a slow or disconnected network.
       if (background && listRequestsInFlightRef.current > 0) return;
@@ -335,7 +376,7 @@ const SitesView: React.FC<SitesViewProps> = ({
           keyword: keyword || undefined,
           siteStatus: statusFilter,
         });
-        if (!mountedRef.current || requestId !== listRequestRef.current) return;
+        if (!isRequestScopeCurrent(requestAccountScope) || requestId !== listRequestRef.current) return;
         if (result.success && result.data) {
           setListData(result.data);
         } else {
@@ -349,19 +390,19 @@ const SitesView: React.FC<SitesViewProps> = ({
           }
         }
       } catch (error) {
-        if (!mountedRef.current || requestId !== listRequestRef.current) return;
+        if (!isRequestScopeCurrent(requestAccountScope) || requestId !== listRequestRef.current) return;
         setListError(resolveUnexpectedSiteError(error, i18nService.t('sitesLoadFailed')));
         if (!background) {
           logSitesDiagnostic('warn', `site list IPC failed; page=${page}`, error);
         }
       } finally {
         listRequestsInFlightRef.current = Math.max(0, listRequestsInFlightRef.current - 1);
-        if (mountedRef.current && requestId === listRequestRef.current) {
+        if (isRequestScopeCurrent(requestAccountScope) && requestId === listRequestRef.current) {
           setListLoading(false);
         }
       }
     },
-    [isAuthenticated, keyword, page, statusFilter],
+    [accountScopeKey, isAuthenticated, isRequestScopeCurrent, keyword, page, statusFilter],
   );
 
   useEffect(() => {
@@ -387,6 +428,8 @@ const SitesView: React.FC<SitesViewProps> = ({
   }, [hasDeployingSite, loadSites, selectedSite]);
 
   const openSiteDetail = useCallback(async (site: SiteListItem, tab: DetailTab = 'analytics') => {
+    const requestAccountScope = accountScopeKeyRef.current;
+    if (!requestAccountScope) return;
     setSiteActionMenu(null);
     const requestId = ++detailRequestRef.current;
     setDetailLoading(true);
@@ -395,7 +438,7 @@ const SitesView: React.FC<SitesViewProps> = ({
     logSitesDiagnostic('debug', `opening site detail; shareId=${site.shareId}; tab=${tab}`);
     try {
       const result = await window.electron.sites.get(site.shareId);
-      if (!mountedRef.current || requestId !== detailRequestRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope) || requestId !== detailRequestRef.current) return;
       if (result.success && result.data) {
         setSelectedSite(result.data);
         setTitleDraft(result.data.title);
@@ -409,15 +452,15 @@ const SitesView: React.FC<SitesViewProps> = ({
         );
       }
     } catch (error) {
-      if (!mountedRef.current || requestId !== detailRequestRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope) || requestId !== detailRequestRef.current) return;
       setListError(resolveUnexpectedSiteError(error, i18nService.t('sitesLoadFailed')));
       logSitesDiagnostic('warn', `site detail IPC failed; shareId=${site.shareId}`, error);
     } finally {
-      if (mountedRef.current && requestId === detailRequestRef.current) {
+      if (isRequestScopeCurrent(requestAccountScope) && requestId === detailRequestRef.current) {
         setDetailLoading(false);
       }
     }
-  }, []);
+  }, [isRequestScopeCurrent]);
 
   const closeShareDialog = useCallback(() => {
     shareRequestRef.current += 1;
@@ -430,6 +473,8 @@ const SitesView: React.FC<SitesViewProps> = ({
   }, []);
 
   const openShareDialog = useCallback(async (site: SiteListItem) => {
+    const requestAccountScope = accountScopeKeyRef.current;
+    if (!requestAccountScope) return;
     setSiteActionMenu(null);
     setShareSite(site);
     setShareSiteDetail(null);
@@ -441,7 +486,7 @@ const SitesView: React.FC<SitesViewProps> = ({
     const requestId = ++shareRequestRef.current;
     try {
       const result = await window.electron.sites.get(site.shareId);
-      if (!mountedRef.current || requestId !== shareRequestRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope) || requestId !== shareRequestRef.current) return;
       if (result.success && result.data) {
         setShareSiteDetail(result.data);
         setShareAccessModeDraft(result.data.accessMode);
@@ -453,18 +498,20 @@ const SitesView: React.FC<SitesViewProps> = ({
         );
       }
     } catch (error) {
-      if (!mountedRef.current || requestId !== shareRequestRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope) || requestId !== shareRequestRef.current) return;
       setShareError(resolveUnexpectedSiteError(error, i18nService.t('sitesShareLoadFailed')));
       logSitesDiagnostic('warn', `share dialog IPC failed; shareId=${site.shareId}`, error);
     } finally {
-      if (mountedRef.current && requestId === shareRequestRef.current) {
+      if (isRequestScopeCurrent(requestAccountScope) && requestId === shareRequestRef.current) {
         setShareDialogLoading(false);
       }
     }
-  }, []);
+  }, [isRequestScopeCurrent]);
 
   const loadAnalytics = useCallback(async () => {
     if (!selectedSite) return;
+    const requestAccountScope = accountScopeKeyRef.current;
+    if (!requestAccountScope) return;
     const requestId = ++analyticsRequestRef.current;
     setAnalyticsLoading(true);
     setActionError(null);
@@ -474,7 +521,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         ...analyticsDates,
         limit: 10,
       });
-      if (!mountedRef.current || requestId !== analyticsRequestRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope) || requestId !== analyticsRequestRef.current) return;
       if (result.success && result.data) {
         setAnalytics(result.data);
       } else {
@@ -486,7 +533,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         );
       }
     } catch (error) {
-      if (!mountedRef.current || requestId !== analyticsRequestRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope) || requestId !== analyticsRequestRef.current) return;
       setActionError(
         resolveUnexpectedSiteError(error, i18nService.t('sitesAnalyticsLoadFailed')),
       );
@@ -496,11 +543,11 @@ const SitesView: React.FC<SitesViewProps> = ({
         error,
       );
     } finally {
-      if (mountedRef.current && requestId === analyticsRequestRef.current) {
+      if (isRequestScopeCurrent(requestAccountScope) && requestId === analyticsRequestRef.current) {
         setAnalyticsLoading(false);
       }
     }
-  }, [analyticsRange, selectedSite]);
+  }, [analyticsRange, isRequestScopeCurrent, selectedSite]);
 
   useEffect(() => {
     analyticsRequestRef.current += 1;
@@ -526,6 +573,8 @@ const SitesView: React.FC<SitesViewProps> = ({
   const saveTitle = async () => {
     if (readOnly || !selectedSite || !titleDraft.trim() || titleDraft.trim() === selectedSite.title)
       return;
+    const requestAccountScope = accountScopeKeyRef.current;
+    if (!requestAccountScope) return;
     setActionLoading(true);
     setActionError(null);
     try {
@@ -533,7 +582,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         shareId: selectedSite.shareId,
         title: titleDraft.trim(),
       });
-      if (!mountedRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope)) return;
       if (result.success && result.data) {
         applyUpdatedSite(result.data);
         logSitesDiagnostic('info', `site title updated; shareId=${selectedSite.shareId}`);
@@ -546,16 +595,18 @@ const SitesView: React.FC<SitesViewProps> = ({
         );
       }
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope)) return;
       setActionError(resolveUnexpectedSiteError(error, i18nService.t('sitesUpdateFailed')));
       logSitesDiagnostic('warn', `site title IPC failed; shareId=${selectedSite.shareId}`, error);
     } finally {
-      if (mountedRef.current) setActionLoading(false);
+      if (isRequestScopeCurrent(requestAccountScope)) setActionLoading(false);
     }
   };
 
   const saveAccessMode = async () => {
     if (readOnly || !selectedSite || accessModeDraft === selectedSite.accessMode) return;
+    const requestAccountScope = accountScopeKeyRef.current;
+    if (!requestAccountScope) return;
     setActionLoading(true);
     setActionError(null);
     try {
@@ -563,7 +614,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         shareId: selectedSite.shareId,
         accessMode: accessModeDraft,
       });
-      if (!mountedRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope)) return;
       if (result.success && result.data) {
         applyUpdatedSite(result.data);
         logSitesDiagnostic(
@@ -579,7 +630,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         );
       }
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope)) return;
       setActionError(resolveUnexpectedSiteError(error, i18nService.t('sitesUpdateFailed')));
       logSitesDiagnostic(
         'warn',
@@ -587,7 +638,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         error,
       );
     } finally {
-      if (mountedRef.current) setActionLoading(false);
+      if (isRequestScopeCurrent(requestAccountScope)) setActionLoading(false);
     }
   };
 
@@ -599,6 +650,8 @@ const SitesView: React.FC<SitesViewProps> = ({
       shareAccessModeDraft === shareSiteDetail.accessMode
     )
       return;
+    const requestAccountScope = accountScopeKeyRef.current;
+    if (!requestAccountScope) return;
     setShareActionLoading(true);
     setShareError(null);
     setShareLinkCopied(false);
@@ -608,7 +661,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         shareId: shareSite.shareId,
         accessMode: shareAccessModeDraft,
       });
-      if (!mountedRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope)) return;
       if (!result.success || !result.data) {
         setShareError(result.error || i18nService.t('sitesUpdateFailed'));
         logSitesDiagnostic(
@@ -626,7 +679,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         `share access mode updated; shareId=${shareSite.shareId}; mode=${shareAccessModeDraft}`,
       );
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope)) return;
       setShareError(resolveUnexpectedSiteError(error, i18nService.t('sitesUpdateFailed')));
       logSitesDiagnostic(
         'warn',
@@ -634,12 +687,14 @@ const SitesView: React.FC<SitesViewProps> = ({
         error,
       );
     } finally {
-      if (mountedRef.current) setShareActionLoading(false);
+      if (isRequestScopeCurrent(requestAccountScope)) setShareActionLoading(false);
     }
   };
 
   const copyShareLink = async () => {
     if (!shareSite || shareActionLoading) return;
+    const requestAccountScope = accountScopeKeyRef.current;
+    if (!requestAccountScope) return;
     setShareActionLoading(true);
     setShareError(null);
     setShareLinkCopied(false);
@@ -656,6 +711,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         ? `${i18nService.t('htmlShareClipboardLinkLabel')}: ${siteToShare.url}\n${i18nService.t('sitesShareCode')}: ${shareCode}`
         : siteToShare.url;
     const copied = await copyTextToClipboard(clipboardText);
+    if (!isRequestScopeCurrent(requestAccountScope)) return;
     if (copied) setShareLinkCopied(true);
     else setShareError(i18nService.t('copyFailed'));
     setShareActionLoading(false);
@@ -663,6 +719,8 @@ const SitesView: React.FC<SitesViewProps> = ({
 
   const updateAccessStatus = async () => {
     if (readOnly || !selectedSite || !confirmAction) return;
+    const requestAccountScope = accountScopeKeyRef.current;
+    if (!requestAccountScope) return;
     setActionLoading(true);
     setActionError(null);
     const action = confirmAction;
@@ -671,7 +729,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         shareId: selectedSite.shareId,
         status: action === 'stop' ? HtmlShareStatus.Disabled : HtmlShareStatus.Live,
       });
-      if (!mountedRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope)) return;
       if (result.success && result.data) {
         applyUpdatedSite(result.data);
         setConfirmAction(null);
@@ -688,7 +746,7 @@ const SitesView: React.FC<SitesViewProps> = ({
         );
       }
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope)) return;
       setActionError(resolveUnexpectedSiteError(error, i18nService.t('sitesUpdateFailed')));
       logSitesDiagnostic(
         'warn',
@@ -696,18 +754,20 @@ const SitesView: React.FC<SitesViewProps> = ({
         error,
       );
     } finally {
-      if (mountedRef.current) setActionLoading(false);
+      if (isRequestScopeCurrent(requestAccountScope)) setActionLoading(false);
     }
   };
 
   const deleteSelectedSite = async () => {
     if (readOnly || !selectedSite || deleteConfirmText !== selectedSite.title || actionLoading)
       return;
+    const requestAccountScope = accountScopeKeyRef.current;
+    if (!requestAccountScope) return;
     setActionLoading(true);
     setActionError(null);
     try {
       const result = await window.electron.sites.delete(selectedSite.shareId);
-      if (!mountedRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope)) return;
       if (result.success) {
         logSitesDiagnostic('info', `site deleted; shareId=${selectedSite.shareId}`);
         setDeleteConfirmOpen(false);
@@ -729,11 +789,11 @@ const SitesView: React.FC<SitesViewProps> = ({
         );
       }
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!isRequestScopeCurrent(requestAccountScope)) return;
       setActionError(resolveUnexpectedSiteError(error, i18nService.t('sitesDeleteFailed')));
       logSitesDiagnostic('warn', `site deletion IPC failed; shareId=${selectedSite.shareId}`, error);
     } finally {
-      if (mountedRef.current) setActionLoading(false);
+      if (isRequestScopeCurrent(requestAccountScope)) setActionLoading(false);
     }
   };
 

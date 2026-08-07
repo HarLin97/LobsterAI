@@ -313,6 +313,13 @@ export async function fetchEnterpriseAccountContext(
     if (context) {
       persistEnterpriseAccountContext(deps.store, context);
       console.debug(`[EnterpriseAccount] refreshed context for enterprise ${context.enterpriseId} with role ${context.role}`);
+    } else if (readAccountMode(body.data) === EnterpriseAccountMode.Enterprise) {
+      console.warn('[EnterpriseAccount] rejected incomplete enterprise account context; preserving the last valid context');
+      return {
+        success: false,
+        context: getPersistedEnterpriseAccountContext(deps.store),
+        error: 'Enterprise account context response was incomplete',
+      };
     } else {
       clearEnterpriseAccountContext(deps.store);
       console.debug('[EnterpriseAccount] refreshed personal account context');
