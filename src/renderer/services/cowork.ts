@@ -31,6 +31,7 @@ import {
   addPendingSteer,
   addSession,
   appendBtwEntry,
+  appendNewerMessages,
   appendSessions,
   clearCurrentSession,
   clearPendingPermissions,
@@ -1736,6 +1737,65 @@ class CoworkService {
       this.logDiagnostic('info', `older message page for session ${sessionId} was empty at offset ${newOffset}.`);
     } else {
       this.logDiagnostic('warn', `failed to load older messages for session ${sessionId}: ${result.error ?? 'unknown error'}`);
+    }
+    return false;
+  }
+
+  /** Load the page immediately after the active message window. */
+  async loadNewerMessages(sessionId: string): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.getSessionMessages) return false;
+
+    const state = store.getState().cowork;
+    if (state.currentSession?.id !== sessionId) return false;
+
+    const currentOffset = state.currentSession.messagesOffset;
+    const currentMessageCount = state.currentSession.messages.length;
+    const totalMessages = state.currentSession.totalMessages;
+    const nextOffset = currentOffset + currentMessageCount;
+    if (nextOffset >= totalMessages) return false;
+
+    const limit = Math.min(50, totalMessages - nextOffset);
+    const expectedLastMessageId = state.currentSession.messages[currentMessageCount - 1]?.id ?? null;
+    this.logDiagnostic(
+      'info',
+      `loading newer messages for session ${sessionId}; current view has ${currentMessageCount} of ${totalMessages} messages from offset ${currentOffset}.`,
+    );
+
+    const result = await cowork.getSessionMessages({ sessionId, limit, offset: nextOffset });
+    if (result.success && result.messages && result.messages.length > 0) {
+      const latestSession = store.getState().cowork.currentSession;
+      const latestLastMessageId = latestSession
+        ? latestSession.messages[latestSession.messages.length - 1]?.id ?? null
+        : null;
+      if (
+        latestSession?.id !== sessionId
+        || latestSession.messagesOffset !== currentOffset
+        || latestSession.messages.length !== currentMessageCount
+        || latestLastMessageId !== expectedLastMessageId
+      ) {
+        this.logDiagnostic(
+          'debug',
+          `ignored stale newer message page for session ${sessionId}; requested offset=${nextOffset}.`,
+        );
+        return false;
+      }
+      store.dispatch(appendNewerMessages({
+        sessionId,
+        messages: result.messages,
+        totalMessages: result.total ?? totalMessages,
+      }));
+      const nextCount = store.getState().cowork.currentSession?.messages.length ?? currentMessageCount;
+      this.logDiagnostic(
+        'info',
+        `appended newer messages for session ${sessionId}; added ${result.messages.length} messages from offset ${nextOffset}, and the view now has ${nextCount} of ${result.total ?? totalMessages} messages.`,
+      );
+      return true;
+    }
+    if (result.success) {
+      this.logDiagnostic('info', `newer message page for session ${sessionId} was empty at offset ${nextOffset}.`);
+    } else {
+      this.logDiagnostic('warn', `failed to load newer messages for session ${sessionId}: ${result.error ?? 'unknown error'}`);
     }
     return false;
   }

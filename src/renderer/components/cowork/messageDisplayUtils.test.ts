@@ -2,10 +2,13 @@ import { expect, test } from 'vitest';
 
 import type { CoworkMessage } from '../../types/cowork';
 import {
+  buildConversationTurns,
+  buildDisplayItems,
   formatStructuredText,
   getStreamingActivityStatusText,
   getToolResultCollapsedDisplay,
   getToolResultDisplay,
+  getTurnMessageIds,
   STRUCTURED_TEXT_FORMAT_MAX_CHARS,
   TOOL_RESULT_COLLAPSED_FULL_DISPLAY_MAX_CHARS,
 } from './messageDisplayUtils';
@@ -15,6 +18,43 @@ const createToolResultMessage = (content: string): CoworkMessage => ({
   type: 'tool_result',
   content,
   timestamp: 0,
+});
+
+test('turn message IDs include both the user and assistant messages', () => {
+  const messages: CoworkMessage[] = [{
+    id: 'user-1',
+    type: 'user',
+    content: 'question',
+    timestamp: 1,
+  }, {
+    id: 'assistant-1',
+    type: 'assistant',
+    content: 'answer',
+    timestamp: 2,
+  }];
+
+  const [turn] = buildConversationTurns(buildDisplayItems(messages));
+
+  expect([...getTurnMessageIds(turn)]).toEqual(['user-1', 'assistant-1']);
+});
+
+test('orphan turn IDs stay unique across paged windows', () => {
+  const firstWindow = buildConversationTurns(buildDisplayItems([{
+    id: 'assistant-window-one',
+    type: 'assistant',
+    content: 'first window',
+    timestamp: 1,
+  }]));
+  const secondWindow = buildConversationTurns(buildDisplayItems([{
+    id: 'assistant-window-two',
+    type: 'assistant',
+    content: 'second window',
+    timestamp: 2,
+  }]));
+
+  expect(firstWindow[0].id).toBe('orphan-assistant-window-one');
+  expect(secondWindow[0].id).toBe('orphan-assistant-window-two');
+  expect(secondWindow[0].id).not.toBe(firstWindow[0].id);
 });
 
 test('tool result display still formats small JSON output', () => {
