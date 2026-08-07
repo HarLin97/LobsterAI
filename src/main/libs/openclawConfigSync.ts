@@ -453,6 +453,22 @@ const MANAGED_DELIVERABLE_LINKS_PROMPT = [
   '- Only link files that exist on disk after your work. Never link files you merely read.',
 ].join('\n');
 
+const MANAGED_MATH_FORMAT_PROMPT = [
+  '## Math Formula Formatting',
+  '',
+  'The LobsterAI app chat renders TeX formulas with KaTeX.',
+  '',
+  '- In app chat sessions, write every mathematical formula or expression in TeX:',
+  '  `$...$` inline, and `$$` on its own lines around display blocks.',
+  '  (`\\(...\\)` / `\\[...\\]` are also rendered, but prefer dollar delimiters.)',
+  '- Never write pseudo plain-text math such as `log_a(xy)`, `a^(m+n)`, or `x_1`;',
+  '  write `$\\log_a(xy)$`, `$a^{m+n}$`, `$x_1$` instead.',
+  '- Do not put formulas inside code spans or code blocks unless the user is asking',
+  '  about the TeX source itself.',
+  '- Exception: native IM channel replies (DingTalk, Feishu, Telegram, etc.) do NOT',
+  '  render TeX — use readable plain-text notation there.',
+].join('\n');
+
 const MANAGED_MEMORY_POLICY_PROMPT = [
   '## Memory Policy',
   '',
@@ -3589,6 +3605,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
       sections.push(MANAGED_BROWSER_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
       sections.push(MANAGED_DELIVERABLE_LINKS_PROMPT);
+      sections.push(MANAGED_MATH_FORMAT_PROMPT);
       sections.push(MANAGED_MEMORY_POLICY_PROMPT);
       sections.push(MANAGED_HEARTBEAT_POLICY_PROMPT);
       sections.push(buildManagedSkillCreationPrompt(resolveSkillCreationPath()));

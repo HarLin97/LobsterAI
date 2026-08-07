@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, test } from 'vitest';
 
 import MarkdownContent, {
+  convertLatexMathDelimiters,
   getLargeMarkdownPreview,
   isInternalHref,
   safeUrlTransform,
@@ -59,6 +60,47 @@ test('compact spacing reduces list margins for user message rendering', () => {
   expect(defaultHtml).toContain('my-3');
   expect(compactHtml).toContain('text-markdown-body-compact');
   expect(compactHtml).toContain('my-1');
+});
+
+test('latex display delimiters become $$ blocks', () => {
+  const converted = convertLatexMathDelimiters('推导：\n\n\\[\n\\log_a x=m,\\qquad \\log_a y=n\n\\]\n\n结束');
+  expect(converted).toContain('$$\n\\log_a x=m,\\qquad \\log_a y=n\n$$');
+  expect(converted).not.toContain('\\[');
+});
+
+test('latex inline delimiters become single-dollar math', () => {
+  expect(convertLatexMathDelimiters('因为 \\(8\\times4=32\\)，而 \\(\\log_2 32=5\\)。'))
+    .toBe('因为 $8\\times4=32$，而 $\\log_2 32=5$。');
+});
+
+test('latex delimiters inside code are preserved', () => {
+  const fenced = '```tex\n\\[x=1\\]\n```';
+  expect(convertLatexMathDelimiters(fenced)).toBe(fenced);
+
+  const inlineCode = '用 `\\(x\\)` 表示行内公式，普通的 \\(y\\) 仍会转换。';
+  expect(convertLatexMathDelimiters(inlineCode)).toBe('用 `\\(x\\)` 表示行内公式，普通的 $y$ 仍会转换。');
+});
+
+test('latex line breaks with spacing are not treated as display math', () => {
+  const content = '$$\na \\\\[4pt] b\n$$';
+  expect(convertLatexMathDelimiters(content)).toBe(content);
+});
+
+test('latex math renders through katex in markdown output', () => {
+  const content = [
+    '这张图是在解释**对数的乘法公式**：',
+    '',
+    '\\[',
+    '\\log_a(xy)=\\log_a x+\\log_a y',
+    '\\]',
+    '',
+    '注意条件：\\(a>0\\)、\\(a\\neq1\\)。',
+  ].join('\n');
+  const html = renderToStaticMarkup(React.createElement(MarkdownContent, { content }));
+
+  expect(html).toContain('katex-display');
+  expect(html).toContain('class="katex"');
+  expect(html).not.toContain('\\[');
 });
 
 test('kit links are treated as safe internal links', () => {

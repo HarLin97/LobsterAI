@@ -125,6 +125,37 @@ const encodeFileUrlsInMarkdown = (content: string): string => {
 };
 
 /**
+ * Convert LaTeX-style math delimiters into the dollar delimiters that
+ * remark-math understands: `\[...\]` becomes a `$$` display block and
+ * `\(...\)` becomes `$...$` inline math. LLMs frequently emit the LaTeX
+ * delimiters, which remark-math ignores, so the raw markup leaked into the
+ * rendered message. Fenced code blocks and inline code spans are left
+ * untouched, and `\\[...]` (a LaTeX line break with spacing) is not treated
+ * as an opening delimiter.
+ */
+const MARKDOWN_CODE_SEGMENT_PATTERN = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/g;
+
+const convertSegmentLatexDelimiters = (segment: string): string => segment
+  .replace(/(?<!\\)\\\[([\s\S]*?)\\\]/g, (match, inner: string) => {
+    const trimmed = inner.trim();
+    return trimmed ? `\n$$\n${trimmed}\n$$\n` : match;
+  })
+  .replace(/(?<!\\)\\\(([\s\S]*?)\\\)/g, (match, inner: string) => {
+    const trimmed = inner.trim();
+    return trimmed ? `$${trimmed}$` : match;
+  });
+
+export const convertLatexMathDelimiters = (content: string): string => {
+  if (!content.includes('\\[') && !content.includes('\\(')) {
+    return content;
+  }
+  return content
+    .split(MARKDOWN_CODE_SEGMENT_PATTERN)
+    .map((segment, index) => (index % 2 === 1 ? segment : convertSegmentLatexDelimiters(segment)))
+    .join('');
+};
+
+/**
  * Normalize multi-line display math blocks for remark-math compatibility.
  * remark-math treats $$ like code fences: opening $$ must be on its own line,
  * and closing $$ must also be on its own line.
@@ -685,7 +716,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
     if (useLargePreview) {
       return '';
     }
-    return normalizeDisplayMath(encodeFileUrlsInMarkdown(content));
+    return normalizeDisplayMath(convertLatexMathDelimiters(encodeFileUrlsInMarkdown(content)));
   }, [content, useLargePreview]);
 
   if (useLargePreview) {
