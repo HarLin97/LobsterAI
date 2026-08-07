@@ -7,6 +7,7 @@ import { describe, expect, test } from 'vitest';
 const {
   buildGitEnv,
   buildNpmPackEnv,
+  buildPluginInstallEnv,
   copyDirRecursive,
   copyInstalledPluginToCache,
   findInstalledPluginDir,
@@ -119,6 +120,35 @@ describe('ensure-openclaw-plugins', () => {
       kind: 'direct',
       installSpec: '/tmp/local-plugin',
       pinnedDisplaySpec: '/tmp/local-plugin',
+    });
+  });
+
+  test('packs public npm packages before OpenClaw installation', () => {
+    expect(resolvePluginInstallSource({
+      id: 'openclaw-weixin',
+      npm: '@tencent-weixin/openclaw-weixin',
+      version: '2.4.3',
+    })).toEqual({
+      kind: 'packed',
+      packSpec: '@tencent-weixin/openclaw-weixin@2.4.3',
+      pinnedDisplaySpec: '@tencent-weixin/openclaw-weixin@2.4.3',
+    });
+  });
+
+  test('allows transitive Git dependencies only for the NetEase Bee plugin', () => {
+    expect(buildPluginInstallEnv({
+      id: 'netease-bee-alias',
+      npm: 'openclaw-netease-bee',
+    })).toEqual({
+      npm_config_legacy_peer_deps: 'true',
+      npm_config_allow_git: 'all',
+    });
+
+    expect(buildPluginInstallEnv({
+      id: 'openclaw-weixin',
+      npm: '@tencent-weixin/openclaw-weixin',
+    })).toEqual({
+      npm_config_legacy_peer_deps: 'true',
     });
   });
 

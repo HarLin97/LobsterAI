@@ -145,6 +145,11 @@ import {
   logConversationSearchDebug,
   logConversationSearchWarning,
 } from './conversationSearchLogger';
+import {
+  getConversationSearchCenterDelta,
+  isUsableConversationSearchRect,
+  scheduleConversationSearchSettle,
+} from './conversationSearchNavigation';
 import CoworkBtwFloatingPanel from './CoworkBtwFloatingPanel';
 import CoworkConversationSearch from './CoworkConversationSearch';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
@@ -1554,6 +1559,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [conversationSearchLoadVersion, setConversationSearchLoadVersion] = useState(0);
   const forcedRailTurnReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const conversationSearchNavigationRequestRef = useRef(0);
+  const conversationSearchPaginationLockRef = useRef<number | null>(null);
   const conversationSearchLoadingTargetRef = useRef<string | null>(null);
   const conversationSearchFailedTargetRef = useRef<string | null>(null);
   const conversationSearchViewportLockedRef = useRef(false);
@@ -1577,6 +1583,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (conversationSearchManualViewportMatchKeyRef.current === activeMatchKey) return;
     conversationSearchManualViewportMatchKeyRef.current = activeMatchKey;
     conversationSearchNavigationRequestRef.current += 1;
+    conversationSearchPaginationLockRef.current = null;
     const forcedTurnIndex = conversationSearchForcedTurnRef.current;
     if (forcedTurnIndex !== null) {
       conversationSearchForcedTurnRef.current = null;
@@ -3810,8 +3817,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsScrollable((prev) => (prev === scrollable ? prev : scrollable));
     if (!scrollable) return;
 
+    const isSearchNavigationActive = conversationSearchPaginationLockRef.current !== null;
     let requestedNewerMessages = false;
-    if (shouldLoadNewerConversationMessages(
+    if (!isSearchNavigationActive && shouldLoadNewerConversationMessages(
       loadedMessageOffset,
       loadedMessageCount,
       totalMessageCount,
@@ -3839,7 +3847,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
     // Load older messages when scrolled near the top
     if (
-      !requestedNewerMessages
+      !isSearchNavigationActive
+      && !requestedNewerMessages
       && !isLoadingNewerMessagesRef.current
       && container.scrollTop <= 80
       && !isLoadingMoreMessagesRef.current
@@ -3858,7 +3867,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         });
       }
     }
-
 
     // Skip index recalculation during programmatic navigation
     if (isNavigatingRef.current) return;
@@ -4509,6 +4517,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   const clearConversationSearchPresentation = useCallback(() => {
     conversationSearchNavigationRequestRef.current += 1;
+    conversationSearchPaginationLockRef.current = null;
     clearConversationSearchHighlights();
     conversationSearchFallbackElementRef.current?.classList.remove(
       'cowork-conversation-search-fallback',
@@ -4578,6 +4587,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   useEffect(() => () => {
     conversationSearchNavigationRequestRef.current += 1;
+    conversationSearchPaginationLockRef.current = null;
     conversationSearchLoadingTargetRef.current = null;
     conversationSearchFailedTargetRef.current = null;
     conversationSearchActiveMatchKeyRef.current = null;
@@ -4593,6 +4603,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const requestId = ++conversationSearchNavigationRequestRef.current;
     let frameId: number | null = null;
     let secondFrameId: number | null = null;
+    let cancelSettleChecks: (() => void) | null = null;
+
+    const releasePaginationLock = () => {
+      if (conversationSearchPaginationLockRef.current === requestId) {
+        conversationSearchPaginationLockRef.current = null;
+      }
+    };
 
     conversationSearchFallbackElementRef.current?.classList.remove(
       'cowork-conversation-search-fallback',
@@ -4606,6 +4623,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       || !activeConversationSearchMessageId
       || !activeConversationSearchSessionId
     ) {
+      conversationSearchPaginationLockRef.current = null;
       clearConversationSearchHighlights();
       conversationSearchLastNavigatedMatchKeyRef.current = null;
       conversationSearchManualViewportMatchKeyRef.current = null;
@@ -4624,8 +4642,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       conversationSearchManualViewportMatchKeyRef.current = null;
     }
     if (conversationSearchManualViewportMatchKeyRef.current === activeConversationSearchMatchKey) {
+      conversationSearchPaginationLockRef.current = null;
       return undefined;
     }
+
+    conversationSearchPaginationLockRef.current = requestId;
 
     userDetachedFromBottomRef.current = true;
     scrollToBottomIntentRef.current = false;
@@ -4639,6 +4660,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         conversationSearchForcedTurnRef.current = null;
       }
       if (conversationSearchFailedTargetRef.current === activeConversationSearchMatchKey) {
+        releasePaginationLock();
         return undefined;
       }
       if (conversationSearchLoadingTargetRef.current) return undefined;
@@ -4660,6 +4682,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               detail: i18nService.t('coworkConversationSearchTargetUnavailable'),
             }));
           }
+          releasePaginationLock();
           return;
         }
         if (targetIsStillActive) {
@@ -4673,6 +4696,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             detail: i18nService.t('coworkConversationSearchTargetUnavailable'),
           }));
         }
+        releasePaginationLock();
       }).finally(() => {
         if (conversationSearchLoadingTargetRef.current === targetMatchKey) {
           conversationSearchLoadingTargetRef.current = null;
@@ -4686,6 +4710,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     conversationSearchFailedTargetRef.current = null;
     const targetTurnIndex = activeConversationSearchTurnIndex;
     if (targetTurnIndex < 0) {
+      releasePaginationLock();
       logConversationSearchWarning(
         `Loaded search target could not be mapped to a conversation turn; absoluteIndex=${activeConversationSearchAbsoluteIndex}.`,
       );
@@ -4695,10 +4720,81 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     conversationSearchForcedTurnRef.current = targetTurnIndex;
     setForcedRailTurnIndex(targetTurnIndex);
 
+    let settledActiveRange: Range | null = null;
+    const getCurrentTargetRect = (): DOMRect | null => {
+      const container = scrollContainerRef.current;
+      if (!container) return null;
+      if (
+        settledActiveRange
+        && container.contains(settledActiveRange.commonAncestorContainer)
+      ) {
+        const existingRangeRect = settledActiveRange.getBoundingClientRect();
+        if (isUsableConversationSearchRect(existingRangeRect)) {
+          return existingRangeRect;
+        }
+      }
+      const result = applyConversationSearchHighlights(
+        container,
+        conversationSearchQuery,
+        conversationSearchMatches,
+        activeConversationSearchMatchKey,
+      );
+      settledActiveRange = result.activeRange;
+      const rangeRect = result.activeRange?.getBoundingClientRect();
+      if (rangeRect && isUsableConversationSearchRect(rangeRect)) {
+        conversationSearchFallbackElementRef.current?.classList.remove(
+          'cowork-conversation-search-fallback',
+        );
+        conversationSearchFallbackElementRef.current = null;
+        return rangeRect;
+      }
+      const fallbackElement = result.activeElement ?? turnElsCacheRef.current[targetTurnIndex];
+      if (fallbackElement) {
+        conversationSearchFallbackElementRef.current?.classList.remove(
+          'cowork-conversation-search-fallback',
+        );
+        fallbackElement.classList.add('cowork-conversation-search-fallback');
+        conversationSearchFallbackElementRef.current = fallbackElement;
+      }
+      return null;
+    };
+
+    const scheduleSettleChecks = () => {
+      cancelSettleChecks?.();
+      cancelSettleChecks = scheduleConversationSearchSettle({
+        isCurrent: () => (
+          requestId === conversationSearchNavigationRequestRef.current
+          && conversationSearchManualViewportMatchKeyRef.current !== activeConversationSearchMatchKey
+        ),
+        getContainer: () => scrollContainerRef.current,
+        getTargetRect: getCurrentTargetRect,
+        onSettled: ({ correctionCount, observedDelta }) => {
+          logConversationSearchDebug(
+            `Settled active search target; result=${activeConversationSearchMatchIndex + 1}/${conversationSearchMatches.length}; absoluteIndex=${activeConversationSearchAbsoluteIndex}; corrections=${correctionCount}; observedDelta=${Math.round(observedDelta)}.`,
+          );
+        },
+        onTargetUnavailable: () => {
+          logConversationSearchWarning(
+            `Active search target had no visible geometry after settling; absoluteIndex=${activeConversationSearchAbsoluteIndex}.`,
+          );
+        },
+        onError: (error) => {
+          logConversationSearchWarning(
+            `Failed to settle active search target; absoluteIndex=${activeConversationSearchAbsoluteIndex}.`,
+            error,
+          );
+        },
+        onRelease: releasePaginationLock,
+      });
+    };
+
     const locateTarget = (attempt: number) => {
       if (requestId !== conversationSearchNavigationRequestRef.current) return;
       const container = scrollContainerRef.current;
-      if (!container) return;
+      if (!container) {
+        releasePaginationLock();
+        return;
+      }
 
       const result = applyConversationSearchHighlights(
         container,
@@ -4707,14 +4803,22 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         activeConversationSearchMatchKey,
       );
 
-      if (!result.activeElement && attempt < 10) {
+      const rangeRect = result.activeRange?.getBoundingClientRect();
+      const hasUsableRange = Boolean(rangeRect && isUsableConversationSearchRect(rangeRect));
+      if ((!result.activeElement || (result.activeRange && !hasUsableRange)) && attempt < 10) {
         frameId = window.requestAnimationFrame(() => locateTarget(attempt + 1));
         return;
       }
 
       if (!result.activeElement) {
         const fallbackTurn = turnElsCacheRef.current[targetTurnIndex];
-        if (!fallbackTurn) return;
+        if (!fallbackTurn) {
+          releasePaginationLock();
+          logConversationSearchWarning(
+            `Active search target turn was unavailable; absoluteIndex=${activeConversationSearchAbsoluteIndex}.`,
+          );
+          return;
+        }
         fallbackTurn.classList.add('cowork-conversation-search-fallback');
         conversationSearchFallbackElementRef.current = fallbackTurn;
         const shouldScroll = conversationSearchLastNavigatedMatchKeyRef.current
@@ -4727,10 +4831,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             block: 'center',
           });
         }
+        scheduleSettleChecks();
         return;
       }
 
-      if (!result.activeRange) {
+      if (!result.activeRange || !rangeRect || !hasUsableRange) {
+        settledActiveRange = null;
         result.activeElement.classList.add('cowork-conversation-search-fallback');
         conversationSearchFallbackElementRef.current = result.activeElement;
         const shouldScroll = conversationSearchLastNavigatedMatchKeyRef.current
@@ -4743,27 +4849,30 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             block: 'center',
           });
         }
+        scheduleSettleChecks();
         return;
       }
 
+      settledActiveRange = result.activeRange;
       const shouldScroll = conversationSearchLastNavigatedMatchKeyRef.current
         !== activeConversationSearchMatchKey;
       conversationSearchLastNavigatedMatchKeyRef.current = activeConversationSearchMatchKey;
-      if (!shouldScroll) return;
-
-      const rangeRect = result.activeRange.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      const delta = rangeRect.top
-        - containerRect.top
-        - ((container.clientHeight - rangeRect.height) / 2);
-      const shouldReduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const behavior: ScrollBehavior = shouldReduceMotion || Math.abs(delta) > container.clientHeight * 2
-        ? 'auto'
-        : 'smooth';
-      container.scrollTo({ top: container.scrollTop + delta, behavior });
-      logConversationSearchDebug(
-        `Located active search target; absoluteIndex=${activeConversationSearchAbsoluteIndex}; attempt=${attempt}; behavior=${behavior}.`,
-      );
+      if (shouldScroll) {
+        const delta = getConversationSearchCenterDelta(
+          container.getBoundingClientRect(),
+          container.clientHeight,
+          rangeRect,
+        );
+        const shouldReduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const behavior: ScrollBehavior = shouldReduceMotion || Math.abs(delta) > container.clientHeight * 2
+          ? 'auto'
+          : 'smooth';
+        container.scrollTo({ top: container.scrollTop + delta, behavior });
+        logConversationSearchDebug(
+          `Started active search target navigation; result=${activeConversationSearchMatchIndex + 1}/${conversationSearchMatches.length}; absoluteIndex=${activeConversationSearchAbsoluteIndex}; attempt=${attempt}; behavior=${behavior}.`,
+        );
+      }
+      scheduleSettleChecks();
     };
 
     frameId = window.requestAnimationFrame(() => {
@@ -4773,10 +4882,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return () => {
       if (frameId !== null) window.cancelAnimationFrame(frameId);
       if (secondFrameId !== null) window.cancelAnimationFrame(secondFrameId);
+      cancelSettleChecks?.();
+      releasePaginationLock();
     };
   }, [
     activeConversationSearchAbsoluteIndex,
     activeConversationSearchMatchKey,
+    activeConversationSearchMatchIndex,
     activeConversationSearchMessageId,
     activeConversationSearchSessionId,
     activeConversationSearchTurnIndex,
