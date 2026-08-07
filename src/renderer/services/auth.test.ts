@@ -21,6 +21,7 @@ import {
   mapPricingCatalogTextModelsToServerModels,
   mapPricingCatalogToPublicServerModels,
 } from './auth';
+import { i18nService } from './i18n';
 
 afterEach(() => {
   authService.destroy();
@@ -29,6 +30,7 @@ afterEach(() => {
   store.dispatch(setEnterpriseAccountContext(null));
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  i18nService.setLanguage('zh', { persist: false });
 });
 
 describe('pricing catalog model mapping', () => {
@@ -551,6 +553,50 @@ describe('auth state restoration', () => {
     const toastEvent = dispatchEvent.mock.calls[0][0] as CustomEvent<string>;
     expect(toastEvent.type).toBe('app:showToast');
     expect(toastEvent.detail).toContain('登录状态已过期');
+  });
+
+  test('shows the dedicated signed-out toast when enterprise membership is revoked', async () => {
+    const dispatchEvent = vi.fn();
+    store.dispatch(setLoggedIn({
+      user,
+      quota,
+      ownerAccountKey: 'enterprise:user@example.com:1001',
+    }));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('window', {
+      dispatchEvent,
+      electron: {
+        auth: {
+          getPricingCatalog: vi.fn().mockResolvedValue({
+            success: true,
+            textModels: [],
+          }),
+        },
+      },
+    });
+
+    const serviceWithSessionHandler = authService as unknown as {
+      handleSessionChanged: (event: AuthSessionChangedEvent) => Promise<void>;
+    };
+    await serviceWithSessionHandler.handleSessionChanged({
+      status: AuthSessionStatus.Expired,
+      reason: AuthSessionChangeReason.EnterpriseMembershipRevoked,
+    });
+
+    expect(store.getState().auth.sessionStatus).toBe(AuthSessionStatus.Expired);
+    expect(dispatchEvent).toHaveBeenCalledOnce();
+    const toastEvent = dispatchEvent.mock.calls[0][0] as CustomEvent<string>;
+    expect(toastEvent.type).toBe('app:showToast');
+    expect(toastEvent.detail).toBe('你已被移出当前企业，已退出登录。请重新登录并选择可用身份。');
+  });
+
+  test('provides the enterprise membership revocation message in English', () => {
+    i18nService.setLanguage('en', { persist: false });
+
+    expect(i18nService.t('coworkErrorEnterpriseMembershipRevoked')).toBe(
+      'You have been removed from the current enterprise and signed out. '
+      + 'Sign in again to choose an available identity.',
+    );
   });
 
   test('discards a stale restore response after the renderer account changes', async () => {

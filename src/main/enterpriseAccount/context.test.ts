@@ -158,6 +158,29 @@ describe('enterprise account context refresh', () => {
     expect(onAccountModeMismatch).toHaveBeenCalledOnce();
   });
 
+  test('reports membership revocation before clearing the selected enterprise context', async () => {
+    const store = createStore();
+    const onMembershipRevoked = vi.fn(() => {
+      expect(getPersistedEnterpriseAccountContext(store)).toEqual(createContext());
+    });
+    persistEnterpriseAccountContext(store, createContext());
+
+    const result = await fetchEnterpriseAccountContext({
+      getServerBaseUrl: () => 'https://example.test',
+      fetchWithAuth: async () => jsonResponse({
+        code: EnterpriseApiErrorCode.NotMember,
+        message: 'Not an enterprise member',
+      }),
+      store,
+      onMembershipRevoked,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.context).toBeNull();
+    expect(onMembershipRevoked).toHaveBeenCalledOnce();
+    expect(getPersistedEnterpriseAccountContext(store)).toBeNull();
+  });
+
   test('does not overwrite a newer account after auth state changes', async () => {
     const store = createStore();
     const currentContext = createContext(2002);

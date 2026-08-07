@@ -1758,6 +1758,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork 错误消息
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请在设置中检查并更新您的 API 密钥。',
+    coworkErrorEnterpriseMembershipRevoked: '你已被移出当前企业，已退出登录。请重新登录并选择可用身份。',
     coworkErrorLobsterAILoginExpired: '登录状态已过期，请重新登录后继续使用 LobsterAI 套餐模型。',
     coworkErrorOAuthInvalid: 'OAuth 授权已失效或权限不足，请重新授权后重试。',
     coworkErrorModelAccessDenied: '当前账号无权访问该模型，请切换模型或检查服务商账号权限。',
@@ -5110,6 +5111,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Cowork error messages
     coworkErrorAuthInvalid:
       'Invalid or expired API key. Please check and update your API key in settings.',
+    coworkErrorEnterpriseMembershipRevoked:
+      'You have been removed from the current enterprise and signed out. Sign in again to choose an available identity.',
     coworkErrorLobsterAILoginExpired:
       'Your login session has expired. Sign in again to continue using LobsterAI plan models.',
     coworkErrorOAuthInvalid:

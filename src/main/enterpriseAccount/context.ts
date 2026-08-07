@@ -27,6 +27,7 @@ export interface EnterpriseAccountContextApiDeps {
   store: SqliteStore;
   isRequestCurrent?: () => boolean;
   onAccountModeMismatch?: () => void;
+  onMembershipRevoked?: () => void;
   requestTimeoutMs?: number;
 }
 
@@ -292,6 +293,9 @@ export async function fetchEnterpriseAccountContext(
       ) {
         if (code === EnterpriseApiErrorCode.AccountModeMismatch) {
           deps.onAccountModeMismatch?.();
+        }
+        if (code === EnterpriseApiErrorCode.NotMember) {
+          deps.onMembershipRevoked?.();
         }
         clearEnterpriseAccountContext(deps.store);
         console.log(`[EnterpriseAccount] cleared stale account context after server code ${code}`);

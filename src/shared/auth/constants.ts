@@ -31,6 +31,7 @@ export const AuthSessionStatus = {
 export type AuthSessionStatus = typeof AuthSessionStatus[keyof typeof AuthSessionStatus];
 
 export const AuthSessionChangeReason = {
+  EnterpriseMembershipRevoked: 'enterprise_membership_revoked',
   RefreshRejected: 'refresh_rejected',
   UserLogout: 'user_logout',
 } as const;

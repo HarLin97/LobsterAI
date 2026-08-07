@@ -3,6 +3,7 @@ import {
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
   type AuthSessionChangedEvent,
+  AuthSessionChangeReason,
   AuthSessionStatus,
   AuthSubscriptionStatus,
 } from '@shared/auth/constants';
@@ -704,8 +705,11 @@ class AuthService {
     if (event.status !== AuthSessionStatus.Expired) return;
     writeAuthRendererLog('warn', `login session expired (${event.reason})`);
     const cleanup = this.applyLoggedOutState(true);
+    const toastKey = event.reason === AuthSessionChangeReason.EnterpriseMembershipRevoked
+      ? 'coworkErrorEnterpriseMembershipRevoked'
+      : 'coworkErrorLobsterAILoginExpired';
     window.dispatchEvent(new CustomEvent('app:showToast', {
-      detail: i18nService.t('coworkErrorLobsterAILoginExpired'),
+      detail: i18nService.t(toastKey),
     }));
     await cleanup;
   }

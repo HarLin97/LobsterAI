@@ -132,6 +132,29 @@ describe('AuthSessionManager refresh', () => {
     expect(testManager.onTerminalFailure).toHaveBeenCalledOnce();
   });
 
+  test('treats enterprise membership revocation during refresh as terminal', async () => {
+    const testManager = createTestManager({
+      fetch: vi.fn(async () => new Response(JSON.stringify({
+        code: 41602,
+        message: 'Not an enterprise member',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })),
+    });
+
+    const result = await testManager.manager.refresh('proactive');
+
+    expect(result).toMatchObject({
+      outcome: AuthRefreshOutcome.TerminalFailure,
+      failureKind: AuthRefreshFailureKind.Rejected,
+      errorCode: 41602,
+    });
+    expect(testManager.onTerminalFailure).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: 41602,
+    }));
+  });
+
   test('keeps credentials for refresh 5xx responses', async () => {
     const testManager = createTestManager({
       fetch: vi.fn(async () => new Response(JSON.stringify({
@@ -217,7 +240,13 @@ describe('AuthSessionManager refresh', () => {
       accessToken: 'access-new-login',
       refreshToken: 'refresh-new-login',
     });
-    resolveFetch?.(new Response(null, { status: 401 }));
+    resolveFetch?.(new Response(JSON.stringify({
+      code: 41602,
+      message: 'Not an enterprise member',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
 
     await expect(refresh).resolves.toMatchObject({
       outcome: AuthRefreshOutcome.Success,
@@ -243,7 +272,13 @@ describe('AuthSessionManager refresh', () => {
       accessToken: 'access-enterprise-b',
       refreshToken: 'refresh-enterprise-b',
     });
-    resolveFetch?.(new Response(null, { status: 401 }));
+    resolveFetch?.(new Response(JSON.stringify({
+      code: 41602,
+      message: 'Not an enterprise member',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
 
     await expect(refresh).resolves.toMatchObject({
       outcome: AuthRefreshOutcome.Success,
