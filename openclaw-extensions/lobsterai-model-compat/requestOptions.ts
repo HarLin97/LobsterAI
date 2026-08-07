@@ -22,9 +22,8 @@ export const resolveLobsterAIRequestThinkingLevel = (
   profile: LobsterAIThinkingProfile,
   requestedLevel: string | undefined,
 ): LobsterAIThinkingLevel => (
-  requestedLevel && profile.levels.includes(requestedLevel as LobsterAIThinkingLevel)
-    ? requestedLevel as LobsterAIThinkingLevel
-    : profile.defaultLevel
+  profile.options.find(option => option.openclawLevel === requestedLevel)?.level
+    ?? profile.defaultLevel
 );
 
 const applyRequestOptions = (

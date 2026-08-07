@@ -6,21 +6,32 @@ describe('parseThinkingProfileMap', () => {
   test('keeps valid model profiles and drops malformed entries', () => {
     expect(parseThinkingProfileMap({
       'lobsterai-server/deepseek-v4-flash': {
-        levels: ['off', 'high', 'max'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
         defaultLevel: 'high',
         requestOptionsVersion: 1,
       },
       'missing-separator': {
-        levels: ['high'],
+        options: [{ level: 'high', openclawLevel: 'high' }],
         defaultLevel: 'high',
       },
       'lobsterai-server/invalid': {
-        levels: ['off', 'future'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'future', openclawLevel: 'xhigh' },
+        ],
         defaultLevel: 'future',
       },
     })).toEqual({
       'lobsterai-server/deepseek-v4-flash': {
-        levels: ['off', 'high', 'max'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
         defaultLevel: 'high',
         requestOptionsVersion: 1,
       },

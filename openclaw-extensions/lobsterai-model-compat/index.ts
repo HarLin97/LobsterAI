@@ -117,9 +117,16 @@ const register = (api: OpenClawPluginApi): void => {
       }
       const profile = thinkingProfiles[`${provider}/${modelId}`];
       if (!profile) return undefined;
+      const defaultOpenClawLevel = profile.options.find(
+        option => option.level === profile.defaultLevel,
+      )?.openclawLevel;
+      if (!defaultOpenClawLevel) return undefined;
       return {
-        levels: profile.levels.map(level => ({ id: level, label: level })),
-        defaultLevel: profile.defaultLevel,
+        levels: profile.options.map(option => ({
+          id: option.openclawLevel,
+          label: option.level,
+        })),
+        defaultLevel: defaultOpenClawLevel,
         preserveWhenCatalogReasoningFalse: true,
       };
     },

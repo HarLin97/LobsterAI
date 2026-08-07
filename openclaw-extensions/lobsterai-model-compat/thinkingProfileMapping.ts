@@ -13,8 +13,25 @@ export const LobsterAIThinkingLevel = {
 export type LobsterAIThinkingLevel =
   typeof LobsterAIThinkingLevel[keyof typeof LobsterAIThinkingLevel];
 
+export const LobsterAIOpenClawThinkingLevel = {
+  Off: 'off',
+  Minimal: 'minimal',
+  Low: 'low',
+  Medium: 'medium',
+  High: 'high',
+  XHigh: 'xhigh',
+} as const;
+
+export type LobsterAIOpenClawThinkingLevel =
+  typeof LobsterAIOpenClawThinkingLevel[keyof typeof LobsterAIOpenClawThinkingLevel];
+
+export type LobsterAIThinkingOption = {
+  level: LobsterAIThinkingLevel;
+  openclawLevel: LobsterAIOpenClawThinkingLevel;
+};
+
 export type LobsterAIThinkingProfile = {
-  levels: LobsterAIThinkingLevel[];
+  options: LobsterAIThinkingOption[];
   defaultLevel: LobsterAIThinkingLevel;
   requestOptionsVersion?: typeof LOBSTERAI_REQUEST_OPTIONS_VERSION;
 };
@@ -22,6 +39,7 @@ export type LobsterAIThinkingProfile = {
 export type LobsterAIThinkingProfileMap = Record<string, LobsterAIThinkingProfile>;
 
 const LEVELS = new Set<string>(Object.values(LobsterAIThinkingLevel));
+const OPENCLAW_LEVELS = new Set<string>(Object.values(LobsterAIOpenClawThinkingLevel));
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -35,26 +53,44 @@ const isModelRef = (value: string): boolean => {
 };
 
 const parseThinkingProfile = (value: unknown): LobsterAIThinkingProfile | undefined => {
-  if (!isRecord(value) || !Array.isArray(value.levels) || value.levels.length === 0) {
+  if (!isRecord(value) || !Array.isArray(value.options) || value.options.length === 0) {
     return undefined;
   }
-  const levels: LobsterAIThinkingLevel[] = [];
-  const seen = new Set<string>();
-  for (const rawLevel of value.levels) {
-    if (typeof rawLevel !== 'string' || !LEVELS.has(rawLevel) || seen.has(rawLevel)) {
+  const options: LobsterAIThinkingOption[] = [];
+  const seenLevels = new Set<string>();
+  const seenOpenClawLevels = new Set<string>();
+  for (const rawOption of value.options) {
+    if (!isRecord(rawOption)) {
       return undefined;
     }
-    seen.add(rawLevel);
-    levels.push(rawLevel as LobsterAIThinkingLevel);
+    const { level, openclawLevel } = rawOption;
+    if (
+      typeof level !== 'string'
+      || !LEVELS.has(level)
+      || seenLevels.has(level)
+      || typeof openclawLevel !== 'string'
+      || !OPENCLAW_LEVELS.has(openclawLevel)
+      || seenOpenClawLevels.has(openclawLevel)
+      || (level === LobsterAIThinkingLevel.Off)
+        !== (openclawLevel === LobsterAIOpenClawThinkingLevel.Off)
+    ) {
+      return undefined;
+    }
+    seenLevels.add(level);
+    seenOpenClawLevels.add(openclawLevel);
+    options.push({
+      level: level as LobsterAIThinkingLevel,
+      openclawLevel: openclawLevel as LobsterAIOpenClawThinkingLevel,
+    });
   }
-  if (levels.length === 1 && levels[0] === LobsterAIThinkingLevel.Off) {
+  if (options.length === 1 && options[0]?.level === LobsterAIThinkingLevel.Off) {
     return undefined;
   }
-  if (typeof value.defaultLevel !== 'string' || !seen.has(value.defaultLevel)) {
+  if (typeof value.defaultLevel !== 'string' || !seenLevels.has(value.defaultLevel)) {
     return undefined;
   }
   return {
-    levels,
+    options,
     defaultLevel: value.defaultLevel as LobsterAIThinkingLevel,
     ...(value.requestOptionsVersion === LOBSTERAI_REQUEST_OPTIONS_VERSION
       ? { requestOptionsVersion: LOBSTERAI_REQUEST_OPTIONS_VERSION }

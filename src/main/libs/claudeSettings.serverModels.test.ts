@@ -104,7 +104,11 @@ describe('server model metadata cache', () => {
       modelId: 'deepseek-v4-flash',
       supportsThinking: true,
       thinkingConfig: {
-        levels: ['off', 'high', 'max'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
         defaultLevel: 'high',
       },
       requestCapabilities: ['lobsterai-options-v1', 'future-options-v2'],
@@ -127,7 +131,10 @@ describe('server model metadata cache', () => {
       modelId: 'deepseek-v4-flash',
       supportsThinking: true,
       thinkingConfig: {
-        levels: ['off', 'high'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+        ],
         defaultLevel: 'max',
       },
     }]);

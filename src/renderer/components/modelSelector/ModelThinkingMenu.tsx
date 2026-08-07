@@ -1,5 +1,6 @@
 import { CheckIcon } from '@heroicons/react/24/outline';
 import {
+  getModelThinkingLevels,
   type ModelThinkingConfig,
   ModelThinkingLevel,
 } from '@shared/providers/modelThinking';
@@ -34,8 +35,9 @@ const ModelThinkingMenu: React.FC<ModelThinkingMenuProps> = ({
   onSelect,
   onEscape,
 }) => {
-  const supportsOff = config.levels.includes(ModelThinkingLevel.Off);
-  const enabledLevels = config.levels.filter(level => level !== ModelThinkingLevel.Off);
+  const levels = getModelThinkingLevels(config);
+  const supportsOff = levels.includes(ModelThinkingLevel.Off);
+  const enabledLevels = levels.filter(level => level !== ModelThinkingLevel.Off);
   const thinkingEnabled = selectedLevel !== ModelThinkingLevel.Off;
   const enabledFallback = config.defaultLevel !== ModelThinkingLevel.Off
     ? config.defaultLevel

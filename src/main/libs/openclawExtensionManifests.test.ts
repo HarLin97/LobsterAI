@@ -49,6 +49,7 @@ describe('OpenClaw extension manifests', () => {
   test('declares a strict allowlisted model-profile config for LobsterAI compatibility', () => {
     const manifest = readManifest('lobsterai-model-compat');
     expect(manifest.providers).toEqual(['lobsterai-model-compat']);
+    expect(manifest.activation).toBeUndefined();
     expect(manifest.configSchema).toEqual({
       type: 'object',
       additionalProperties: false,
@@ -74,13 +75,23 @@ describe('OpenClaw extension manifests', () => {
             type: 'object',
             additionalProperties: false,
             properties: {
-              levels: {
+              options: {
                 type: 'array',
                 minItems: 1,
-                uniqueItems: true,
                 items: {
-                  type: 'string',
-                  enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    level: {
+                      type: 'string',
+                      enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+                    },
+                    openclawLevel: {
+                      type: 'string',
+                      enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+                    },
+                  },
+                  required: ['level', 'openclawLevel'],
                 },
               },
               defaultLevel: {
@@ -92,7 +103,7 @@ describe('OpenClaw extension manifests', () => {
                 enum: [1],
               },
             },
-            required: ['levels', 'defaultLevel'],
+            required: ['options', 'defaultLevel'],
           },
         },
       },

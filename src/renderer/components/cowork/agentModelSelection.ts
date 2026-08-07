@@ -1,4 +1,7 @@
-import type { ModelThinkingLevel } from '@shared/providers/modelThinking';
+import {
+  getModelThinkingLevels,
+  type ModelThinkingLevel,
+} from '@shared/providers/modelThinking';
 import { useMemo } from 'react';
 import { useSelector } from 'react-redux';
 
@@ -27,7 +30,7 @@ export function resolveModelThinkingLevel(
 ): ModelThinkingLevel | undefined {
   const config = model?.thinkingConfig;
   if (!config) return undefined;
-  if (persistedLevel && config.levels.includes(persistedLevel)) {
+  if (persistedLevel && getModelThinkingLevels(config).includes(persistedLevel)) {
     return persistedLevel;
   }
   return config.defaultLevel;

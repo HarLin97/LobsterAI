@@ -68,25 +68,29 @@ test('blocks only explicitly unready server models from agent selection', () => 
 
 test('allows thinking changes only for accessible and ready models', () => {
   const thinkingConfig = {
-    levels: ['off', 'high', 'max'] as const,
+    options: [
+      { level: 'off' as const, openclawLevel: 'off' as const },
+      { level: 'high' as const, openclawLevel: 'high' as const },
+      { level: 'max' as const, openclawLevel: 'xhigh' as const },
+    ],
     defaultLevel: 'high' as const,
   };
   expect(canConfigureModelThinking({
     accessible: true,
     isServerModel: true,
-    thinkingConfig: { levels: [...thinkingConfig.levels], defaultLevel: thinkingConfig.defaultLevel },
+    thinkingConfig: { options: thinkingConfig.options.map(option => ({ ...option })), defaultLevel: thinkingConfig.defaultLevel },
   })).toBe(true);
   expect(canConfigureModelThinking({
     accessible: false,
     isServerModel: true,
-    thinkingConfig: { levels: [...thinkingConfig.levels], defaultLevel: thinkingConfig.defaultLevel },
+    thinkingConfig: { options: thinkingConfig.options.map(option => ({ ...option })), defaultLevel: thinkingConfig.defaultLevel },
   })).toBe(false);
   expect(canConfigureModelThinking({
     accessible: true,
     isServerModel: true,
     runtimeProfile: 'moonshot-kimi-k3',
     agenticReady: false,
-    thinkingConfig: { levels: [...thinkingConfig.levels], defaultLevel: thinkingConfig.defaultLevel },
+    thinkingConfig: { options: thinkingConfig.options.map(option => ({ ...option })), defaultLevel: thinkingConfig.defaultLevel },
   })).toBe(false);
   expect(canConfigureModelThinking({
     accessible: true,

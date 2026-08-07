@@ -104,6 +104,7 @@ import {
   stripTrailingSilentReplyToken,
 } from '../openclawHistory';
 import { buildOpenClawLocalTimeContextPrompt } from '../openclawLocalTimeContextPrompt';
+import { resolveOpenClawThinkingLevelForModel } from '../openclawModelThinkingLevels';
 import { consumeRecentOpenClawTokenProxyQuotaError } from '../openclawTokenProxy';
 import {
   findRedundantFinalPrefixMessageId,
@@ -4764,13 +4765,29 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const patchedThinkingLevel = normalizedPatch.thinkingLevel !== undefined
       ? normalizedPatch.thinkingLevel ?? ''
       : undefined;
+    const thinkingModelRef = normalizedPatch.model !== undefined
+      ? (normalizedPatch.model || this.resolveAgentDefaultModelRef(session))
+      : (session.modelOverride
+          ? this.normalizeModelRef(session.modelOverride)
+          : this.resolveAgentDefaultModelRef(session));
+    const gatewayPatch: OpenClawSessionPatch = {
+      ...normalizedPatch,
+      ...(typeof normalizedPatch.thinkingLevel === 'string' && normalizedPatch.thinkingLevel
+        ? {
+            thinkingLevel: resolveOpenClawThinkingLevelForModel(
+              thinkingModelRef,
+              normalizedPatch.thinkingLevel,
+            ),
+          }
+        : {}),
+    };
 
     const sendPatch = async (): Promise<OpenClawSessionPatchGatewayResult | undefined> => {
       try {
         const response = await this.requestSessionPatchWithProfile({
           sessionId,
           sessionKey: targetSessionKey,
-          patch: normalizedPatch,
+          patch: gatewayPatch,
           source: 'patchSession',
           reason: 'user-requested session patch',
           timeoutMs: OpenClawRuntimeAdapter.SESSION_PATCH_TIMEOUT_MS,
@@ -4961,12 +4978,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           return;
         }
 
+        const openClawThinkingLevel = thinkingLevel
+          ? resolveOpenClawThinkingLevelForModel(model, thinkingLevel)
+          : undefined;
         await this.requestSessionPatchWithProfile({
           sessionId,
           sessionKey,
           patch: {
             model,
-            ...(thinkingLevel ? { thinkingLevel } : {}),
+            ...(openClawThinkingLevel ? { thinkingLevel: openClawThinkingLevel } : {}),
             ...(isManagedSessionKey(sessionKey)
               ? { reasoningLevel: OpenClawSessionReasoningLevel.Stream }
               : {}),

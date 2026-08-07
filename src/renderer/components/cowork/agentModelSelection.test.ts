@@ -24,7 +24,11 @@ const configurableThinkingModel: Model = {
   name: 'DeepSeek V4 Flash',
   providerKey: 'lobsterai-server',
   thinkingConfig: {
-    levels: [ModelThinkingLevel.Off, ModelThinkingLevel.High, ModelThinkingLevel.Max],
+    options: [
+      { level: ModelThinkingLevel.Off, openclawLevel: 'off' },
+      { level: ModelThinkingLevel.High, openclawLevel: 'high' },
+      { level: ModelThinkingLevel.Max, openclawLevel: 'xhigh' },
+    ],
     defaultLevel: ModelThinkingLevel.High,
   },
 };

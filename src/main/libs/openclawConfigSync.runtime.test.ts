@@ -1396,7 +1396,11 @@ describe('OpenClawConfigSync runtime config output', () => {
               modelProfiles: compatConfig.plugins.entries['lobsterai-model-compat'].config.modelProfiles,
               thinkingProfiles: {
                 'lobsterai-server/deepseek-v4-flash': {
-                  levels: ['off', 'high', 'max'],
+                  options: [
+                    { level: 'off', openclawLevel: 'off' },
+                    { level: 'high', openclawLevel: 'high' },
+                    { level: 'max', openclawLevel: 'xhigh' },
+                  ],
                   defaultLevel: 'high',
                 },
               },
@@ -1501,7 +1505,11 @@ describe('OpenClawConfigSync runtime config output', () => {
       apiFormat: 'openai',
       supportsThinking: true,
       thinkingConfig: {
-        levels: ['off', 'high', 'max'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
         defaultLevel: 'high',
       },
       requestCapabilities: ['lobsterai-options-v1'],
@@ -1512,12 +1520,32 @@ describe('OpenClawConfigSync runtime config output', () => {
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.models.providers['lobsterai-server'].api).toBe('openai-completions');
+    expect(config.models.providers['lobsterai-server'].models[0]).toEqual(
+      expect.objectContaining({
+        thinkingLevelMap: {
+          off: 'off',
+          minimal: null,
+          low: null,
+          medium: null,
+          high: 'high',
+          xhigh: 'xhigh',
+        },
+        compat: expect.objectContaining({
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ['high', 'xhigh'],
+        }),
+      }),
+    );
     expect(config.plugins.entries['lobsterai-model-compat']).toEqual({
       enabled: true,
       config: {
         thinkingProfiles: {
           'lobsterai-server/deepseek-v4-flash': {
-            levels: ['off', 'high', 'max'],
+            options: [
+              { level: 'off', openclawLevel: 'off' },
+              { level: 'high', openclawLevel: 'high' },
+              { level: 'max', openclawLevel: 'xhigh' },
+            ],
             defaultLevel: 'high',
             requestOptionsVersion: 1,
           },
@@ -1535,7 +1563,11 @@ describe('OpenClawConfigSync runtime config output', () => {
       apiFormat: 'openai',
       supportsThinking: true,
       thinkingConfig: {
-        levels: ['off', 'high', 'max'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
         defaultLevel: 'high',
       },
     }];
@@ -1548,7 +1580,11 @@ describe('OpenClawConfigSync runtime config output', () => {
       config.plugins.entries['lobsterai-model-compat']
         .config.thinkingProfiles['lobsterai-server/deepseek-v4-flash'],
     ).toEqual({
-      levels: ['off', 'high', 'max'],
+      options: [
+        { level: 'off', openclawLevel: 'off' },
+        { level: 'high', openclawLevel: 'high' },
+        { level: 'max', openclawLevel: 'xhigh' },
+      ],
       defaultLevel: 'high',
     });
   });

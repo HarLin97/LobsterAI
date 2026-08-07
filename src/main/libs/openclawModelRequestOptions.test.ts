@@ -12,7 +12,11 @@ import {
 import type { LobsterAIThinkingProfile } from '../../../openclaw-extensions/lobsterai-model-compat/thinkingProfileMapping';
 
 const profile: LobsterAIThinkingProfile = {
-  levels: ['off', 'high', 'max'],
+  options: [
+    { level: 'off', openclawLevel: 'off' },
+    { level: 'high', openclawLevel: 'high' },
+    { level: 'max', openclawLevel: 'xhigh' },
+  ],
   defaultLevel: 'high',
   requestOptionsVersion: 1,
 };
@@ -20,6 +24,7 @@ const profile: LobsterAIThinkingProfile = {
 describe('LobsterAI request options', () => {
   test('uses an allowed selected level and falls back to the profile default', () => {
     expect(resolveLobsterAIRequestThinkingLevel(profile, 'off')).toBe('off');
+    expect(resolveLobsterAIRequestThinkingLevel(profile, 'xhigh')).toBe('max');
     expect(resolveLobsterAIRequestThinkingLevel(profile, 'low')).toBe('high');
     expect(resolveLobsterAIRequestThinkingLevel(profile, undefined)).toBe('high');
   });

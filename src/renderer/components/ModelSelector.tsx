@@ -7,6 +7,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import {
+  getModelThinkingLevels,
   ModelRuntimeProfile,
   type ModelThinkingLevel as ModelThinkingLevelType,
   ProviderName,
@@ -450,10 +451,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   ): ModelThinkingLevelType | undefined => {
     const config = model.thinkingConfig;
     if (!config) return undefined;
-    if (requestedLevel && config.levels.includes(requestedLevel)) {
+    const levels = getModelThinkingLevels(config);
+    if (requestedLevel && levels.includes(requestedLevel)) {
       return requestedLevel;
     }
-    if (isSelected(model) && thinkingLevel && config.levels.includes(thinkingLevel)) {
+    if (isSelected(model) && thinkingLevel && levels.includes(thinkingLevel)) {
       return thinkingLevel;
     }
     return config.defaultLevel;

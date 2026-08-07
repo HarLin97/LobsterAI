@@ -7,14 +7,20 @@
 ```json
 {
   "thinkingConfig": {
-    "levels": ["off", "high", "max"],
+    "options": [
+      { "level": "off", "openclawLevel": "off" },
+      { "level": "high", "openclawLevel": "high" },
+      { "level": "max", "openclawLevel": "xhigh" }
+    ],
     "defaultLevel": "high"
   }
 }
 ```
 
-- `supportsThinking` 表示模型具有思考能力，可兼容只认识布尔值的旧客户端。
-- `thinkingConfig` 表示客户端可向用户开放的强度集合；字段缺失或非法时必须按“不支持选择”处理。
+- `supportsThinking` 表示模型具有思考能力。
+- `thinkingConfig.options[].level` 是 UI、SQLite、`lobsterai_options` 和 server 共用的产品语义。
+- `thinkingConfig.options[].openclawLevel` 是该产品语义在 OpenClaw 内部使用的等级；例如 `max` 可通过 `xhigh` 稳定传递。
+- `thinkingConfig` 缺失或非法时必须按“不支持选择”处理。
 - `runtimeProfile` 仍用于 Kimi K3 等非强度型运行时适配，不能用它承载 UI 强度列表。
 - 本期合法强度为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`；具体模型只下发其允许的子集。
 
@@ -28,7 +34,11 @@
   "supportsThinking": true,
   "runtimeProfile": null,
   "thinkingConfig": {
-    "levels": ["off", "high", "max"],
+    "options": [
+      { "level": "off", "openclawLevel": "off" },
+      { "level": "high", "openclawLevel": "high" },
+      { "level": "max", "openclawLevel": "xhigh" }
+    ],
     "defaultLevel": "high"
   },
   "requestCapabilities": ["lobsterai-options-v1"]
@@ -60,10 +70,11 @@ X-LobsterAI-Client-Capabilities: kimi-k3-agentic-v1,thinking-level-control-v1
 
 ## 管理端写入语义
 
-- `thinkingConfig` 未出现在更新请求中：保留数据库原值，兼容旧管理端。
+- `thinkingConfig` 未出现在更新请求中：保留数据库原值。
 - 显式传 `null`：清除用户可选强度配置。
 - `supportsThinking=false`：服务端同步清除 `thinkingConfig`，避免矛盾状态。
-- 配置非空时，`levels` 必须非空、去重且全部合法，`defaultLevel` 必须包含于 `levels`。
+- 配置非空时，`options` 两侧等级均必须唯一，`defaultLevel` 必须引用某个 `option.level`。
+- 产品 `off` 与 OpenClaw `off` 必须双向对应；OpenClaw 侧不接受 `max` 作为运行时传输等级。
 - 管理端先开启“支持思考”，再选择是否开放强度调整；保存前执行同样校验。
 
 ## 客户端与运行时
@@ -72,17 +83,11 @@ LobsterAI 按服务端列表动态渲染思考强度入口，不硬编码 DeepSe
 
 会话和 Agent 本地均保存 `thinking_level`。切换模型或思考强度时，模型 ID 与思考强度走同一套持久化路径；新会话使用 Agent 已保存的有效强度，旧会话或空值在运行时解析为当前模型默认值。
 
-OpenClaw 配置同步将 `thinkingConfig` 转换为 `thinkingProfiles`。只有 server 为该完整模型 ID 下发 `lobsterai-options-v1` 时，profile 才额外包含 `requestOptionsVersion: 1`。模型兼容插件从 exact `provider/modelId` profile 和当前 `thinkingLevel` 生成最终请求参数，不删除 `YoudaoInner` 后缀，也不硬编码 DeepSeek 型号；未声明协议能力的旧 server 继续使用原 OpenClaw 请求格式。
+OpenClaw 配置同步从 `options[].openclawLevel` 生成模型目录的 `thinkingLevelMap` 和 `supportedReasoningEfforts`，并将完整映射写入 `thinkingProfiles`。`sessions.patch` 前，LobsterAI 将本地保存的产品 `level` 转为 `openclawLevel`；模型兼容插件在最终 payload 中再反向还原为产品 `level`。该链路不删除 `YoudaoInner` 后缀，不硬编码 DeepSeek 型号，也不依赖全局插件 registry 或 `activation.onStartup`。
 
-## 版本兼容矩阵
+## 分支约束
 
-| 客户端 | 服务端数据 | 行为 |
-| --- | --- | --- |
-| 旧客户端 | 新服务端新增字段 | JSON 未知字段被忽略，不发送 `lobsterai_options`，既有行为不变 |
-| 新客户端 | 旧服务端有 `thinkingConfig`、无请求 capability | 可按既有 UI/运行时逻辑选择，但不发送未知内部参数 |
-| 新客户端 | 新服务端合法配置和 capability | 动态显示允许值，并发送明确的 `lobsterai_options.thinking.level` |
-| 新客户端 | 新服务端非法/未知值 | 客户端忽略配置，不显示入口；代理端也不接受该值 |
-| 旧管理端 | 新服务端 | 更新请求不带字段时保留原配置 |
+该功能尚未发版，三工程同一功能分支直接使用 `options` 新结构，不保留 `levels: string[]` 的运行时兼容逻辑。Server、Admin 和 LobsterAI 必须成套部署或测试。
 
 DeepSeek 兼容策略：
 
@@ -96,15 +101,14 @@ DeepSeek 兼容策略：
 先执行 `lobsterai-server/sql/V65__model_thinking_config.sql`。该脚本新增 `model_pricing.thinking_config JSON NULL`，并为 LobsterAI 渠道中的 `deepseek-v4-flash`、`deepseek-v4-pro`，以及 `YoudaoInner` 渠道中的对应后缀模型初始化：
 
 ```json
-{"levels":["off","high","max"],"defaultLevel":"high"}
+{"options":[{"level":"off","openclawLevel":"off"},{"level":"high","openclawLevel":"high"},{"level":"max","openclawLevel":"xhigh"}],"defaultLevel":"high"}
 ```
 
 推荐发布顺序：
 
-1. 执行 V65 并核验 JSON 列和两组 DeepSeek 配置。
-2. 发布 server；此时旧客户端和旧 admin 可继续工作，模型目录开始下发 `lobsterai-options-v1`。
-3. 发布 admin，用于后续模型级配置维护。
-4. 发布 LobsterAI 客户端；客户端只对已声明 v1 capability 的模型注入内部参数。
+1. 新环境执行 V65；已执行旧 V65 的测试环境额外执行 V66，将 JSON 数据转为 `options`。
+2. 成套发布 server 和 admin，核验模型目录下发完整映射。
+3. 发布 LobsterAI 客户端，核验 `max → xhigh → max` 链路。
 
 数据库核验：
 
@@ -121,9 +125,7 @@ WHERE (provider = 'LobsterAI'
 
 ## 回滚与卡点
 
-- 客户端回滚无需回滚数据库；旧客户端会忽略新增字段。
-- server 回滚前不必删除列；旧 server 不会下发 `lobsterai-options-v1`，客户端下一次模型同步后停止注入内部参数。
-- 发布顺序必须 server 在前。能力协商用于避免新客户端把未知 `lobsterai_options` 发送给尚未支持剥离该字段的旧 server。
+- 如回滚其中一个工程，必须同时回滚三工程的本功能改动或恢复同版本 JSON 结构。
 - 如需关闭入口，优先由 admin 显式清空单模型 `thinkingConfig`，不必回滚客户端。
 - 模型元数据变化会使 OpenClaw 配置指纹变化并触发网关重启；批量修改模型时应合并发布，避免连续重启。
 - 不同上游 provider 对 effort 枚举的支持可能不同。新模型上线前必须在 server allowlist、下发配置和实际 provider 三处联合验证，不能仅依赖 UI 可选项。

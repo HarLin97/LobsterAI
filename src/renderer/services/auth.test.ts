@@ -33,7 +33,11 @@ describe('pricing catalog model mapping', () => {
         supportsImage: true,
         supportsThinking: true,
         thinkingConfig: {
-          levels: ['off', 'high', 'max'],
+          options: [
+            { level: 'off', openclawLevel: 'off' },
+            { level: 'high', openclawLevel: 'high' },
+            { level: 'max', openclawLevel: 'xhigh' },
+          ],
           defaultLevel: 'high',
         },
         contextWindow: 1_000_000,
@@ -52,7 +56,11 @@ describe('pricing catalog model mapping', () => {
       supportsImage: true,
       supportsThinking: true,
       thinkingConfig: {
-        levels: ['off', 'high', 'max'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
         defaultLevel: 'high',
       },
       contextWindow: 1_000_000,
@@ -99,7 +107,11 @@ describe('authenticated server model mapping', () => {
       supportsVideo: true,
       supportsThinking: true,
       thinkingConfig: {
-        levels: ['off', 'high', 'max'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
         defaultLevel: 'high',
       },
       supportsToolCalling: true,
@@ -119,7 +131,11 @@ describe('authenticated server model mapping', () => {
       supportsVideo: true,
       supportsThinking: true,
       thinkingConfig: {
-        levels: ['off', 'high', 'max'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
         defaultLevel: 'high',
       },
       supportsToolCalling: true,
@@ -138,7 +154,10 @@ describe('authenticated server model mapping', () => {
       apiFormat: 'openai',
       supportsThinking: true,
       thinkingConfig: {
-        levels: ['off', 'high'],
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+        ],
         defaultLevel: 'max',
       },
     }]);

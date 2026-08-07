@@ -39,10 +39,18 @@ export {
   resolveModelRuntimeProfile,
   THINKING_LEVEL_CONTROL_CAPABILITY,
 } from './modelRuntimeProfiles';
-export type { ModelThinkingConfig } from './modelThinking';
+export type {
+  ModelThinkingConfig,
+  ModelThinkingOption,
+} from './modelThinking';
 export {
+  getModelThinkingLevels,
   ModelThinkingLevel,
+  OpenClawThinkingLevel,
   parseModelThinkingConfig,
   parseModelThinkingLevel,
+  parseOpenClawThinkingLevel,
+  resolveOpenClawThinkingLevel,
+  resolveProductThinkingLevel,
 } from './modelThinking';
 export type { ProviderConfig } from './types';
