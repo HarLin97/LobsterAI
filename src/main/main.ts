@@ -2367,8 +2367,16 @@ const executeDeferredGatewayRestart = async (reason: string) => {
   console.log(
     `${gwDiagTs()} executeDeferredGatewayRestart: performing deferred restart (reason: ${reason})`,
   );
+  // When the sync below re-defers (workloads still active), the re-scheduled
+  // reason flows back here on the next attempt — don't stack another
+  // `deferred:` prefix. Unbounded stacking also breaks the
+  // selfRestartSatisfiesSync() prefix check, misclassifying restarts that a
+  // gateway self-restart would satisfy as needing a full respawn.
+  const syncReason = reason.startsWith(DEFERRED_SYNC_REASON_PREFIX)
+    ? reason
+    : `${DEFERRED_SYNC_REASON_PREFIX}${reason}`;
   await syncOpenClawConfig({
-    reason: `${DEFERRED_SYNC_REASON_PREFIX}${reason}`,
+    reason: syncReason,
     restartGatewayIfRunning: true,
     expectedImpact: OpenClawConfigImpact.Restart,
   });
@@ -2427,10 +2435,13 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
     }
   }, DEFERRED_RESTART_POLL_MS);
 
-  // Hard timeout: restart anyway after max wait to avoid config drift.
+  // Hard timeout: attempt the restart after max wait to bound config drift.
+  // Not a true force — the sync still re-defers when workloads are active,
+  // so a busy gateway gets another full wait window instead of being killed
+  // mid-task.
   deferredRestartTimeout = setTimeout(() => {
     console.warn(
-      `${gwDiagTs()} scheduleDeferredGatewayRestart: max wait exceeded, forcing restart (reason: ${reason})`,
+      `${gwDiagTs()} scheduleDeferredGatewayRestart: max wait exceeded, attempting restart (re-defers if workloads are still active) (reason: ${reason})`,
     );
     void executeDeferredGatewayRestart(reason);
   }, DEFERRED_RESTART_MAX_WAIT_MS);

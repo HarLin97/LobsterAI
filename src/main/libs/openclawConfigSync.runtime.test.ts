@@ -262,6 +262,32 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.models.pricing).toEqual({ enabled: false });
   });
 
+  test('strips plugin-index-managed plugins.installs while preserving other plugins keys', async () => {
+    // A leaked plugins.installs on disk poisons config.set hot delivery
+    // (the gateway rejects the key) and makes the gateway self-restart on
+    // the file diff — sync must scrub it on every write.
+    fs.writeFileSync(configPath, `${JSON.stringify({
+      gateway: { mode: 'local', port: 18789 },
+      plugins: {
+        entries: { 'runtime-injected-plugin': { enabled: true } },
+        allow: ['runtime-injected-plugin'],
+        slots: { memory: 'memory-core' },
+        installs: { xai: { source: 'npm', version: '1.0.0' } },
+      },
+    }, null, 2)}\n`, 'utf8');
+    const sync = await createSync();
+
+    const result = sync.sync('installs-scrub');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.installs).toBeUndefined();
+    expect(config.plugins.entries['runtime-injected-plugin']).toEqual({ enabled: true });
+    expect(config.plugins.allow).toContain('runtime-injected-plugin');
+    expect(config.plugins.slots.memory).toBe('memory-core');
+    expect(config.gateway.port).toBe(18789);
+  });
+
   test('defaults memory search to local FTS-only when embeddings are disabled', async () => {
     const sync = await createSync({
       getCoworkConfig: () => ({

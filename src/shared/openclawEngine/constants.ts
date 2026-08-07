@@ -30,6 +30,17 @@ export const OpenClawGatewayRepairErrorCode = {
 export type OpenClawGatewayRepairErrorCode =
   typeof OpenClawGatewayRepairErrorCode[keyof typeof OpenClawGatewayRepairErrorCode];
 
+/**
+ * openclaw.json `plugins` keys that OpenClaw owns exclusively through its
+ * plugin index (SQLite state DB). The gateway tolerates them in the on-disk
+ * file via a load-time migration, but the `config.set` RPC rejects them
+ * ("plugins.installs is managed by the plugin index and cannot be edited with
+ * config set"). Left on disk they turn every hot config delivery into a
+ * guaranteed fallback hard restart, so LobsterAI strips them both when
+ * writing openclaw.json and from every config.set payload.
+ */
+export const OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS = ['installs'] as const;
+
 export const OpenClawEngineErrorCode = {
   /**
    * resources/cfmind has no runtime entry file. On packaged Windows builds

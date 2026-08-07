@@ -15,6 +15,7 @@ import {
 import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
+import { OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS } from '../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
 import type {
   ModelRuntimeProfile as ModelRuntimeProfileType,
@@ -94,6 +95,25 @@ const mapExecutionModeToSandboxMode = (
       return 'off';
   }
 };
+
+/**
+ * Drop `plugins` keys that OpenClaw owns through its plugin index (currently
+ * `installs`). The gateway migrates+strips them when loading the file, but its
+ * `config.set` RPC rejects them, and a file-watcher diff on these keys makes
+ * the gateway self-restart — so persisting them only turns hot config updates
+ * into hard restarts. Every path that preserves an existing `plugins` section
+ * into a config write must run it through this filter.
+ */
+export function omitPluginIndexManagedKeys(plugins: unknown): Record<string, unknown> {
+  if (typeof plugins !== 'object' || plugins === null || Array.isArray(plugins)) {
+    return {};
+  }
+  const managedKeys: readonly string[] = OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS;
+  return Object.fromEntries(
+    Object.entries(plugins as Record<string, unknown>)
+      .filter(([key]) => !managedKeys.includes(key)),
+  );
+}
 
 /**
  * Default agent timeout in seconds written to openclaw config.
@@ -2169,7 +2189,9 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
     try {
       const existing = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       existingGateway = (existing.gateway ?? {}) as Record<string, unknown>;
-      existingPlugins = (existing.plugins ?? {}) as Record<string, unknown>;
+      // Filtered: plugin-index-managed keys (e.g. `installs`) must never be
+      // preserved back into the file — they poison config.set hot delivery.
+      existingPlugins = omitPluginIndexManagedKeys(existing.plugins);
     } catch {
       // First run or corrupt file — nothing to preserve.
     }
@@ -3893,9 +3915,10 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         const existing = JSON.parse(currentContent);
         // Preserve IM channel plugin entries — these reference their own env
         // vars (${LOBSTER_TG_BOT_TOKEN} etc.) that are still injected when
-        // the corresponding IM channels remain enabled.
+        // the corresponding IM channels remain enabled. Plugin-index-managed
+        // keys (`installs`) are filtered out — see omitPluginIndexManagedKeys.
         if (existing.plugins) {
-          mergedConfig.plugins = existing.plugins;
+          mergedConfig.plugins = omitPluginIndexManagedKeys(existing.plugins);
         }
         // Preserve non-default gateway settings (e.g. custom port).
         if (existing.gateway && existing.gateway.mode !== 'local') {
