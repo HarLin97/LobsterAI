@@ -8,7 +8,7 @@
 | 事故版本 | Windows 2026.7.23 |
 | 兼容基线 | Windows 2026.7.17 及当前仍可成功的 stock installer 路径 |
 | 目标修复版本 | 高于 2026.7.23 的新版本号，TBD |
-| 最后更新 | 2026-07-25 |
+| 最后更新 | 2026-08-06 |
 
 ## 执行摘要
 
@@ -57,6 +57,33 @@ P0 不内置固定域名清单；客户端校验输入和最终 URL 的 HTTPS、
   证明；若观察到 `.onInit` 后的新进程，必须先实现显式 GUID handoff；
 - 现场 7.23 安装包的源码 commit、SHA-256 与签名溯源；
 - 高于 2026.7.23 的正式版本号、灰度和回滚开关。
+
+### 修订记录（2026-08-06）：watchdog 空退出码的哨兵救援
+
+现场事故（2026-08-05/06 用户日志）：同一台机器跨 2026.7.23/7.31/8.5 三个
+安装器版本共 11 次安装，Electron extractor 子进程每次都完整成功
+（`extract-ok` + 三目录 `verify-ok` + exit 0），但 PowerShell watchdog 的
+`$p.ExitCode` 每次读到 `$null`（该机安全软件确定性破坏 .NET 退出码查询，
+等待与文件写入均正常）。旧协议把 null 判为 125/127 后，7.24 起的
+fail-closed 中止+回滚使该机类永久无法升级。
+
+修订内容（对 `TarExtractOutputValidationFailed` 语义的最小放宽）：
+
+1. `unpack-cfmind.cjs` 在全部预期目录校验通过后、exit 0 前写哨兵文件
+   `resources/.unpack-cfmind-ok`（严格强于 exit 0 的成功证据）；
+2. watchdog 读到 null 退出码时先查哨兵：存在则写 marker
+   `exit-code-null-sentinel-ok` 并 exit 0，不存在维持 127；
+3. NSIS 侧 127 分支兜底：哨兵存在记录
+   `phase=tar-extract-sentinel-rescue` 后跳回 `TarExtractVerify`，
+   不存在走原 fatal 路径；
+4. 陈旧哨兵在 extractor 启动前删除，安装提交时清理。
+
+FR-11 边界不变：600000ms hard timeout、terminate/wait 语义、124/125/126
+分类全部保留；救援仅覆盖"退出码不可读"这一种歧义结果，且最终提交仍由
+`TarExtractVerify` 的磁盘入口校验把关（与"仅凭退出码不得删除恢复素材"
+互为对偶）。本修订不替代 P0.5 规划的 start/result journal 结果协议。
+合同测试见 `tests/windowsInstallerContract.test.ts`
+（`rescues a null watchdog exit code with the extractor success sentinel`）。
 
 ## 1. 概述
 

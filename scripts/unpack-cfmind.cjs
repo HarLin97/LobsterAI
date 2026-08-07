@@ -12,6 +12,8 @@
  *   输入: $INSTDIR/resources/win-resources.tar
  *   输出: $INSTDIR/resources/cfmind/, SKILLs/, python-win/
  *   tar 文件由 NSIS 脚本在解压后删除
+ *   全部目录校验通过后写入 <destDir>/.unpack-cfmind-ok 哨兵文件,
+ *   供安装器在读不到本进程退出码的环境下兜底判定成功
  *
  * 依赖: 从 app.asar 内加载 tar npm 包 (Electron 内置 ASAR 透明读取支持)
  */
@@ -220,12 +222,32 @@ try {
 
   // Verify key directories exist
   const expectedDirs = ['cfmind', 'SKILLs', 'python-win'];
+  let missingDirs = 0;
   for (const dir of expectedDirs) {
     const dirPath = path.join(destDir, dir);
     if (fs.existsSync(dirPath)) {
       logLine(`[unpack-cfmind] phase=verify-ok dir=${dir}`);
     } else {
+      missingDirs += 1;
       logLine(`[unpack-cfmind] phase=verify-missing dir=${dir}`);
+    }
+  }
+
+  // Success sentinel for exit-code-blind environments: some security tooling
+  // permanently breaks the exit-code query in the installer's PowerShell
+  // watchdog ($p.ExitCode stays null after a successful wait), so the
+  // verified result is also published as a file the installer can consult.
+  // Best-effort: exit code 0 remains the primary success signal.
+  if (missingDirs === 0) {
+    const sentinelPath = path.join(destDir, '.unpack-cfmind-ok');
+    try {
+      fs.writeFileSync(
+        sentinelPath,
+        `${formatTimestamp()} pid=${process.pid} entries=${extractedEntries} bytes=${extractedBytes}\n`,
+      );
+      logLine(`[unpack-cfmind] phase=sentinel-written path=${sentinelPath}`);
+    } catch (error) {
+      logLine(`[unpack-cfmind] phase=sentinel-write-failed error=${stringifyError(error)}`);
     }
   }
 
