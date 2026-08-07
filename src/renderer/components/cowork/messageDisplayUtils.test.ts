@@ -4,13 +4,16 @@ import type { CoworkMessage } from '../../types/cowork';
 import {
   buildConversationTurns,
   buildDisplayItems,
+  formatElapsedDuration,
   formatStructuredText,
-  getStreamingActivityStatusText,
+  getActivityIndicatorStatusText,
   getToolResultCollapsedDisplay,
   getToolResultDisplay,
+  getTurnActivityFingerprint,
   getTurnMessageIds,
   STRUCTURED_TEXT_FORMAT_MAX_CHARS,
   TOOL_RESULT_COLLAPSED_FULL_DISPLAY_MAX_CHARS,
+  turnHasSelfIndicatingActivity,
 } from './messageDisplayUtils';
 
 const createToolResultMessage = (content: string): CoworkMessage => ({
@@ -102,19 +105,24 @@ test('collapsed tool result display summarizes large output without full formatt
   expect(collapsed.text).toContain('first line');
 });
 
-test('streaming activity status shows generic running before assistant content', () => {
-  const messages: CoworkMessage[] = [{
-    id: 'user-1',
-    type: 'user',
-    content: 'hello',
-    timestamp: 1,
-  }];
-
-  expect(getStreamingActivityStatusText(messages)).toBe('执行中...');
+test('activity indicator status defaults to thinking and escalates for long waits', () => {
+  expect(getActivityIndicatorStatusText()).toBe('正在思考');
+  expect(getActivityIndicatorStatusText(true)).toBe('正在整理上下文...');
+  expect(getActivityIndicatorStatusText(false, true)).toBe('模型仍在响应，请耐心等待…');
 });
 
-test('streaming activity status keeps unresolved tool progress visible', () => {
-  const messages: CoworkMessage[] = [{
+test('elapsed duration formats seconds, minutes, and hours', () => {
+  expect(formatElapsedDuration(-500)).toBe('0s');
+  expect(formatElapsedDuration(8_400)).toBe('8s');
+  expect(formatElapsedDuration(84_000)).toBe('1m 24s');
+  expect(formatElapsedDuration(3_720_000)).toBe('1h 2m');
+});
+
+const buildTurn = (messages: CoworkMessage[]) =>
+  buildConversationTurns(buildDisplayItems(messages))[0];
+
+test('pending tool call counts as self-indicating activity', () => {
+  const turn = buildTurn([{
     id: 'user-1',
     type: 'user',
     content: 'hello',
@@ -128,39 +136,78 @@ test('streaming activity status keeps unresolved tool progress visible', () => {
       toolUseId: 'tool-use-1',
       toolName: 'exec_command',
     },
-  }];
+  }]);
 
-  expect(getStreamingActivityStatusText(messages)).toBe('执行中 exec_command...');
+  expect(turnHasSelfIndicatingActivity(turn)).toBe(true);
 });
 
-test('streaming activity status shows context maintenance state', () => {
-  expect(getStreamingActivityStatusText([], true)).toBe('正在整理上下文...');
-});
-
-test('streaming activity status shows a patient waiting hint after prolonged model silence', () => {
-  const messages: CoworkMessage[] = [{
+test('resolved tool call is not self-indicating activity', () => {
+  const turn = buildTurn([{
     id: 'user-1',
     type: 'user',
     content: 'hello',
     timestamp: 1,
-  }];
-
-  expect(getStreamingActivityStatusText(messages, false, true))
-    .toBe('模型仍在响应，请耐心等待…');
-});
-
-test('streaming activity status keeps unresolved tool progress during a prolonged wait', () => {
-  const messages: CoworkMessage[] = [{
+  }, {
     id: 'tool-1',
     type: 'tool_use',
     content: '',
-    timestamp: 1,
+    timestamp: 2,
     metadata: {
       toolUseId: 'tool-use-1',
       toolName: 'exec_command',
     },
-  }];
+  }, {
+    id: 'result-1',
+    type: 'tool_result',
+    content: 'done',
+    timestamp: 3,
+    metadata: {
+      toolUseId: 'tool-use-1',
+    },
+  }]);
 
-  expect(getStreamingActivityStatusText(messages, false, true))
-    .toBe('执行中 exec_command...');
+  expect(turnHasSelfIndicatingActivity(turn)).toBe(false);
+});
+
+test('streaming thinking block counts as self-indicating activity', () => {
+  const turn = buildTurn([{
+    id: 'user-1',
+    type: 'user',
+    content: 'hello',
+    timestamp: 1,
+  }, {
+    id: 'thinking-1',
+    type: 'assistant',
+    content: 'pondering',
+    timestamp: 2,
+    metadata: {
+      isThinking: true,
+      isStreaming: true,
+    },
+  }]);
+
+  expect(turnHasSelfIndicatingActivity(turn)).toBe(true);
+});
+
+test('turn activity fingerprint changes as streamed content grows', () => {
+  const baseMessages: CoworkMessage[] = [{
+    id: 'user-1',
+    type: 'user',
+    content: 'hello',
+    timestamp: 1,
+  }, {
+    id: 'assistant-1',
+    type: 'assistant',
+    content: 'partial',
+    timestamp: 2,
+  }];
+  const grownMessages: CoworkMessage[] = [
+    baseMessages[0],
+    { ...baseMessages[1], content: 'partial plus more text' },
+  ];
+
+  const before = getTurnActivityFingerprint(buildTurn(baseMessages));
+  const after = getTurnActivityFingerprint(buildTurn(grownMessages));
+
+  expect(before).not.toBe(after);
 });
