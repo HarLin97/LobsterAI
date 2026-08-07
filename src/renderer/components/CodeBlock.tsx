@@ -982,9 +982,10 @@ const CodeFullscreenModal: React.FC<CodeFullscreenModalProps> = ({ code, lang, i
 
   const t = (key: string) => i18nService.t(key as any);
 
+  // Keep the portal interactive when it overlaps Electron title-bar drag regions.
   return createPortal(
     <div
-      className="fixed inset-0 z-[200] flex flex-col"
+      className="non-draggable fixed inset-0 z-[200] flex flex-col"
       style={{ backgroundColor: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
