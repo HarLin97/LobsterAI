@@ -159,6 +159,22 @@ samp {
   font-weight: 400;
 }
 
+/* Detail bodies inside activity-group rows stay one step below the row
+   title (text-xs), even when the user raises the code font size, so the
+   header > row > detail hierarchy always holds. */
+.activity-row-detail {
+  --lobster-activity-detail-font-size: min(
+    var(--lobster-code-font-size),
+    calc(var(--lobster-text-xs) - 1px)
+  );
+  font-size: var(--lobster-activity-detail-font-size);
+}
+
+.activity-row-detail .text-code {
+  font-size: var(--lobster-activity-detail-font-size);
+  line-height: calc(var(--lobster-activity-detail-font-size) + 8px);
+}
+
 .text-markdown-body {
   font-size: var(--lobster-text-markdown);
   line-height: var(--lobster-leading-markdown);
