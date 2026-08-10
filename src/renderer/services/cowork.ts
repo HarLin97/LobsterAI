@@ -775,8 +775,27 @@ class CoworkService {
     limit: number,
     offset: number,
   ): Promise<CoworkSessionListResult> {
-    const result = await window.electron?.cowork?.listSessions({ limit, offset, agentId });
-    return result ?? { success: false, error: 'Cowork IPC is unavailable' };
+    try {
+      const result = await window.electron?.cowork?.listSessions({ limit, offset, agentId });
+      const resolved = result ?? { success: false, error: 'Cowork IPC is unavailable' };
+      if (!resolved.success) {
+        this.logDiagnostic(
+          'warn',
+          `agent sidebar session page request failed; agent=${agentId}; offset=${offset}; limit=${limit}; error=${resolved.error ?? 'unknown'}.`,
+        );
+      }
+      return resolved;
+    } catch (error) {
+      this.logDiagnostic(
+        'warn',
+        `agent sidebar session page request threw; agent=${agentId}; offset=${offset}; limit=${limit}.`,
+        error,
+      );
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to load agent task sessions',
+      };
+    }
   }
 
   async listSessionsForSearch(

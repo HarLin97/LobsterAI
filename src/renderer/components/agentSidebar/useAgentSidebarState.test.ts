@@ -14,6 +14,7 @@ import {
   removeAgentSidebarTaskPreviews,
   sortAgentSidebarAgents,
   sortAgentSidebarTasks,
+  toAgentSidebarTaskNode,
 } from './useAgentSidebarState';
 
 const makeSession = (
@@ -23,9 +24,11 @@ const makeSession = (
   status: CoworkSessionStatus = CoworkSessionStatusValue.Completed,
   pinned = false,
   pinOrder: number | null = null,
+  scheduledTaskId: string | null = null,
 ): CoworkSessionSummary => ({
   id,
   title: id,
+  scheduledTaskId,
   status,
   pinned,
   pinOrder,
@@ -119,6 +122,45 @@ test('deriveAgentSidebarIndicator prioritizes pending permission state', () => {
     new Set([session.id]),
     new Set([session.id]),
   )).toBe(AgentSidebarIndicator.PendingPermission);
+});
+
+test('toAgentSidebarTaskNode marks sessions linked to scheduled tasks', () => {
+  const session = makeSession(
+    'scheduled-session',
+    100,
+    200,
+    CoworkSessionStatusValue.Completed,
+    false,
+    null,
+    'job-daily-summary',
+  );
+
+  expect(toAgentSidebarTaskNode(session, null, new Set(), new Set()).isScheduledTask).toBe(true);
+  expect(
+    toAgentSidebarTaskNode(makeSession('regular-session', 100), null, new Set(), new Set())
+      .isScheduledTask,
+  ).toBe(false);
+
+  const legacyZhSession = {
+    ...makeSession('legacy-zh-session', 100),
+    title: '[定时] 科技早报',
+  };
+  const legacyEnSession = {
+    ...makeSession('legacy-en-session', 100),
+    title: '[Cron] Daily summary',
+  };
+  expect(toAgentSidebarTaskNode(legacyZhSession, null, new Set(), new Set()).isScheduledTask)
+    .toBe(true);
+  expect(toAgentSidebarTaskNode(legacyEnSession, null, new Set(), new Set()).isScheduledTask)
+    .toBe(true);
+
+  const legacyFork = {
+    ...legacyZhSession,
+    id: 'legacy-fork',
+    parentSessionId: 'legacy-zh-session',
+  };
+  expect(toAgentSidebarTaskNode(legacyFork, null, new Set(), new Set()).isScheduledTask)
+    .toBe(false);
 });
 
 test('collapseAgentSidebarTaskList resets one agent history list to preview mode', () => {

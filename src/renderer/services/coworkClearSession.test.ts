@@ -11,6 +11,7 @@ const makeSession = (): CoworkSession => ({
   id: 'session-1',
   title: 'Session 1',
   claudeSessionId: null,
+  scheduledTaskId: null,
   status: CoworkSessionStatusValue.Running,
   pinned: false,
   pinOrder: null,

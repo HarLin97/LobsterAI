@@ -322,6 +322,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         id: tempSessionId,
         title: fallbackTitle,
         claudeSessionId: null,
+        scheduledTaskId: null,
         status: 'running',
         pinned: false,
         createdAt: now,

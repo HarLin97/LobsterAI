@@ -31,6 +31,7 @@ const makeSession = (
   id,
   title: id,
   claudeSessionId: null,
+  scheduledTaskId: null,
   status,
   pinned: false,
   cwd: '/tmp',

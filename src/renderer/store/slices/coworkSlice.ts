@@ -405,6 +405,7 @@ const applyPendingMediaStatusUpdates = (
 const toSessionSummary = (session: CoworkSession): CoworkSessionSummary => ({
   id: session.id,
   title: session.title,
+  scheduledTaskId: session.scheduledTaskId,
   status: session.status,
   pinned: session.pinned ?? false,
   pinOrder: session.pinOrder ?? null,
