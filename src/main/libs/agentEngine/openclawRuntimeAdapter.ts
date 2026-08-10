@@ -629,6 +629,31 @@ const OpenClawFailureFinalText = {
   GenericRunFailure: 'Something went wrong while processing your request',
 } as const;
 
+// A critical tool-loop veto replaces the blocked tool's result with a
+// "CRITICAL: ... Session execution blocked ..." text and terminates the run,
+// which then surfaces OpenClaw's generic incomplete-turn copy. Both strings
+// come from the pinned OpenClaw runtime (agents loop detection + embedded
+// runner); re-verify them when bumping the runtime version.
+const OPENCLAW_TOOL_LOOP_BLOCKED_RESULT_PATTERN = /^CRITICAL: [\s\S]*Session execution blocked/;
+const OPENCLAW_INCOMPLETE_TURN_TEXT = "Agent couldn't generate a response";
+
+export function isOpenClawToolLoopBlockedResultText(text: string): boolean {
+  return OPENCLAW_TOOL_LOOP_BLOCKED_RESULT_PATTERN.test(text.trim());
+}
+
+export function resolveOpenClawToolLoopErrorOverride(
+  toolLoopBlockReason: string | undefined,
+  rawErrorMessage: string,
+): { errorMessage: string; detailRawErrorMessage: string } | null {
+  if (!toolLoopBlockReason || !rawErrorMessage.includes(OPENCLAW_INCOMPLETE_TURN_TEXT)) {
+    return null;
+  }
+  return {
+    errorMessage: t('coworkErrorToolLoopBlocked'),
+    detailRawErrorMessage: `${rawErrorMessage}\n${toolLoopBlockReason}`,
+  };
+}
+
 const OpenClawHistoryRole = {
   Tool: 'tool',
   ToolResult: 'toolResult',
@@ -675,6 +700,12 @@ type ActiveTurn = {
   toolUseMessageIdByToolCallId: Map<string, string>;
   toolResultMessageIdByToolCallId: Map<string, string>;
   toolResultTextByToolCallId: Map<string, string>;
+  /**
+   * Reason text of a critical tool-loop veto seen in this turn. The runtime
+   * ends such runs with its generic incomplete-turn copy, so this context is
+   * needed to surface an honest error message instead.
+   */
+  toolLoopBlockReason?: string;
   mediaStatusPollCountByToolCallId: Map<string, number>;
   mediaStatusPollCountByTaskId: Map<string, number>;
   mediaStatusPollBaseByToolCallId: Map<string, number>;
@@ -6320,6 +6351,25 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     });
   }
 
+  /**
+   * The runtime ends a critically tool-loop-vetoed run with its generic
+   * incomplete-turn copy, which reads like a model failure. When this turn saw
+   * a loop veto, surface an honest localized message instead and keep the veto
+   * reason in the technical detail for diagnosis.
+   */
+  private resolveTurnErrorMessageWithToolLoopContext(
+    turn: ActiveTurn | undefined,
+    rawErrorMessage: string,
+    metadata: OpenClawSafeRuntimeErrorMetadata | undefined,
+  ): { errorMessage: string; detailRawErrorMessage: string } {
+    const override = resolveOpenClawToolLoopErrorOverride(turn?.toolLoopBlockReason, rawErrorMessage);
+    if (override) return override;
+    return {
+      errorMessage: resolveOpenClawRuntimeErrorMessage(rawErrorMessage, metadata),
+      detailRawErrorMessage: rawErrorMessage,
+    };
+  }
+
   private finalizeStoppedStreamingMessage(
     sessionId: string,
     messageId: string | null,
@@ -7860,8 +7910,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         if (!turn) return; // Already handled by handleChatError
         // If a different run started while the fallback was pending, leave it alone.
         if (errorRunId && !turn.knownRunIds.has(errorRunId)) return;
-        const errorMessage = resolveOpenClawRuntimeErrorMessage(rawErrorMessage, errorMetadata);
-        const errorDetail = this.buildTurnErrorDetail(sessionId, turn, rawErrorMessage, errorMessage, errorMetadata);
+        const resolved = this.resolveTurnErrorMessageWithToolLoopContext(turn, rawErrorMessage, errorMetadata);
+        const errorMessage = resolved.errorMessage;
+        const errorDetail = this.buildTurnErrorDetail(sessionId, turn, resolved.detailRawErrorMessage, errorMessage, errorMetadata);
         console.log(`[OpenClawRuntime] lifecycle error fallback surfaced an error after waiting for the gateway chat error event in session ${sessionId}: ${errorMessage}`);
         // Abort the retrying run on the gateway so the session is freed for new messages.
         // Without this, the gateway continues retrying indefinitely and rejects subsequent chat.send requests.
@@ -8353,6 +8404,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const previous = turn.toolResultTextByToolCallId.get(toolCallId) ?? '';
       const isError = resolveToolEventIsError(data);
       const finalContent = incoming.trim() ? incoming : previous;
+      if (isOpenClawToolLoopBlockedResultText(finalContent)) {
+        turn.toolLoopBlockReason = finalContent.trim().slice(0, 400);
+      }
       const finalError = isError ? (finalContent || 'Tool execution failed') : undefined;
       const existingResultMessageId = turn.toolResultMessageIdByToolCallId.get(toolCallId);
       const finalMetadata = {
@@ -9004,8 +9058,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (finalTextIsOpenClawFailure) {
       const rawErrorMessage = finalText.trim() || 'OpenClaw run failed';
       const errorMetadata = normalizeOpenClawSafeRuntimeErrorMetadata(payload);
-      const errorMessage = resolveOpenClawRuntimeErrorMessage(rawErrorMessage, errorMetadata);
-      const errorDetail = this.buildTurnErrorDetail(sessionId, turn, rawErrorMessage, errorMessage, errorMetadata);
+      const resolved = this.resolveTurnErrorMessageWithToolLoopContext(turn, rawErrorMessage, errorMetadata);
+      const errorMessage = resolved.errorMessage;
+      const errorDetail = this.buildTurnErrorDetail(sessionId, turn, resolved.detailRawErrorMessage, errorMessage, errorMetadata);
       const erroredSessionKey = turn.sessionKey;
       this.store.updateSession(sessionId, { status: 'error' });
       const errorMsg = this.store.addMessage(sessionId, {
@@ -9970,7 +10025,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     console.log('[OpenClawRuntime] handleChatError payload:', JSON.stringify(payload).slice(0, 1000));
     const rawErrorMessage = payload.errorMessage?.trim() || 'OpenClaw run failed';
     const errorMetadata = normalizeOpenClawSafeRuntimeErrorMetadata(payload);
-    let errorMessage = resolveOpenClawRuntimeErrorMessage(rawErrorMessage, errorMetadata);
+    const resolved = this.resolveTurnErrorMessageWithToolLoopContext(turn, rawErrorMessage, errorMetadata);
+    let errorMessage = resolved.errorMessage;
 
     // Detect model API errors that are likely caused by unsupported image content
     // in tool results (e.g., Read tool returning image blocks for non-vision models).
@@ -9979,7 +10035,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (/^400\b/.test(errorMessage)) {
       errorMessage += '\n\n[Hint: If the model attempted to read an image file, this may be because the model does not support image input. Consider using a vision-capable model or avoid sending image files.]';
     }
-    const errorDetail = this.buildTurnErrorDetail(sessionId, turn, rawErrorMessage, errorMessage, errorMetadata);
+    const errorDetail = this.buildTurnErrorDetail(sessionId, turn, resolved.detailRawErrorMessage, errorMessage, errorMetadata);
 
     const erroredSessionKey = turn.sessionKey;
     this.clearContextMaintenanceState(sessionId, turn, 'chat error');
