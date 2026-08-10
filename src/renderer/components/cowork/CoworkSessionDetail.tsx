@@ -160,11 +160,10 @@ import {
   type ConversationTurn,
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
-  getStreamingActivityStatusText,
   getTurnMessageIds,
-  hasRenderableAssistantContent,
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
+  turnHasSelfIndicatingActivity,
 } from './messageDisplayUtils';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
@@ -1137,49 +1136,6 @@ class ArtifactPanelErrorBoundary extends React.Component<
     return this.props.children;
   }
 }
-
-const MODEL_RESPONSE_WAITING_HINT_DELAY_MS = 30_000;
-
-// Streaming activity bar shown between messages and input
-const StreamingActivityBar: React.FC<{ messages: CoworkMessage[]; isContextMaintenance?: boolean }> = ({
-  messages,
-  isContextMaintenance = false,
-}) => {
-  const [showLongWaitHint, setShowLongWaitHint] = useState(false);
-
-  useEffect(() => {
-    setShowLongWaitHint(false);
-    if (isContextMaintenance) {
-      return undefined;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setShowLongWaitHint(true);
-    }, MODEL_RESPONSE_WAITING_HINT_DELAY_MS);
-    return () => window.clearTimeout(timeoutId);
-  }, [messages, isContextMaintenance]);
-
-  const statusText = getStreamingActivityStatusText(
-    messages,
-    isContextMaintenance,
-    showLongWaitHint,
-  );
-
-  return (
-    <div className={`shrink-0 animate-fade-in ${COWORK_DETAIL_GUTTER_CLASS}`}>
-      <div className={COWORK_DETAIL_CONTENT_CLASS}>
-        <div className="streaming-bar" />
-        {statusText && (
-          <div className="py-1">
-            <span className="text-xs text-secondary" aria-live="polite">
-              {statusText}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
 
 // ── Path resolution utilities (used by resolveLocalFilePath) ─────────────────
 
@@ -5197,7 +5153,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const renderConversationTurns = () => {
     let railCounter = 0;
     if (turns.length === 0) {
-      if (!isStreaming) return null;
+      if (!isSessionBusy) return null;
       return (
         <div data-export-role="assistant-block">
           <AssistantTurnBlock
@@ -5208,7 +5164,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             }}
             resolveLocalFilePath={resolveLocalFilePath}
             localServiceDirectory={currentSession?.cwd}
-            showTypingIndicator
+            showActivityIndicator
+            activityStatusOverride={
+              isContextMaintenance ? i18nService.t('coworkContextMaintenanceRunning') : null
+            }
             showCopyButtons={!isStreaming}
             completedGoal={
               currentSession.goal?.status === CoworkGoalStatus.Complete
@@ -5227,8 +5186,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
     return turns.map((turn, index) => {
       const isLastTurn = index === turns.length - 1;
-      const showTypingIndicator = isStreaming && isLastTurn && !hasRenderableAssistantContent(turn);
-      const showAssistantBlock = turn.assistantItems.length > 0 || showTypingIndicator;
+      // Busy-state indicator at the insertion point; suppressed while an
+      // element in the turn (pending tool row, media lottie) already animates.
+      const showActivityIndicator = isSessionBusy && isLastTurn
+        && (isContextMaintenance || !turnHasSelfIndicatingActivity(turn));
+      const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator;
       // Always render last 3 turns (needed for streaming, auto-scroll, and smooth UX)
       const alwaysRender = index >= turns.length - 3 || index === forcedRailTurnIndex;
 
@@ -5290,7 +5252,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                     />
                   );
                 }}
-                showTypingIndicator={showTypingIndicator}
+                showActivityIndicator={showActivityIndicator}
+                activityStatusOverride={
+                  isContextMaintenance ? i18nService.t('coworkContextMaintenanceRunning') : null
+                }
                 showCopyButtons={!isStreaming || !isLastTurn}
                 completedGoal={
                   isLastTurn && currentSession.goal?.status === CoworkGoalStatus.Complete
@@ -5933,9 +5898,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </button>
         )}
       </div>
-
-      {/* Streaming Activity Bar */}
-      {isSessionBusy && <StreamingActivityBar messages={currentSession.messages} isContextMaintenance={isContextMaintenance} />}
 
       {/* Input Area */}
       <div

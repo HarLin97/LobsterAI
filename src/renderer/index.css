@@ -619,29 +619,55 @@ select::-ms-expand {
   animation: shimmer 1.5s infinite;
 }
 
-/* Streaming activity bar */
-.streaming-bar {
-  position: relative;
-  height: 2px;
-  overflow: hidden;
-  border-radius: 1px;
-  background: var(--lobster-primary-muted);
+/* Busy-state activity indicator: breathing dot + shimmering status text */
+.activity-indicator-dot {
+  animation: activity-dot-breathe 1.8s ease-in-out infinite;
 }
-.streaming-bar::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: 40%;
-  border-radius: 1px;
-  background: linear-gradient(90deg, transparent 0%, var(--lobster-primary) 50%, transparent 100%);
-  opacity: 0.7;
-  animation: streaming-slide 1.5s ease-in-out infinite;
+
+@keyframes activity-dot-breathe {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
 }
-/* Streaming bar glow uses primary color */
-.streaming-bar::before {
-  box-shadow: 0 0 6px var(--lobster-primary-muted);
+
+.shimmer-text {
+  background-image: linear-gradient(
+    100deg,
+    var(--lobster-text-secondary) 0%,
+    var(--lobster-text-secondary) 42%,
+    var(--lobster-text-primary) 50%,
+    var(--lobster-text-secondary) 58%,
+    var(--lobster-text-secondary) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer-text-sweep 2.4s linear infinite;
+}
+
+@keyframes shimmer-text-sweep {
+  0% { background-position: 175% 0; }
+  100% { background-position: -75% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+    background-image: none;
+    background-clip: border-box;
+    -webkit-background-clip: border-box;
+    color: inherit;
+  }
+  .activity-indicator-dot {
+    animation: none;
+    opacity: 0.7;
+  }
 }
 
 .context-compaction-progress {
@@ -703,11 +729,6 @@ select::-ms-expand {
 
 @keyframes context-compaction-slide {
   0% { left: -55%; }
-  100% { left: 100%; }
-}
-
-@keyframes streaming-slide {
-  0% { left: -40%; }
   100% { left: 100%; }
 }
 

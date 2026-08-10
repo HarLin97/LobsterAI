@@ -4,11 +4,30 @@ import React, { useMemo, useState } from 'react';
 import { bucketCount, reportConversationBlockAction } from './conversationAnalytics';
 import {
   type ActivityChunkEntry,
+  type ConsolidatedItem,
   formatActivityDuration,
   getActivityCurrentActionText,
   getActivityGroupHeaderLabel,
   getActivityGroupSummary,
+  isMediaGenerateRunning,
+  isMediaStatusPollRunning,
 } from './messageDisplayUtils';
+
+// Mirrors turnHasSelfIndicatingActivity: whether the step still carries its
+// own running state. While live, the header shimmers and the turn-level
+// activity indicator stays hidden; in quiet gaps the header goes static and
+// the indicator takes over, keeping a single animation on screen.
+const isItemLive = (item: ConsolidatedItem): boolean => {
+  if (item.type === 'tool_group') {
+    return !item.group.toolResult
+      || isMediaGenerateRunning(item.group)
+      || isMediaStatusPollRunning(item.group);
+  }
+  if (item.type === 'media_polling_group') {
+    return !item.group.isComplete;
+  }
+  return item.type === 'assistant' && Boolean(item.message.metadata?.isStreaming);
+};
 
 /**
  * Collapses a run of consecutive agent work items (tool calls, thinking,
@@ -28,8 +47,10 @@ const ActivityGroupBlock: React.FC<{
   const items = useMemo(() => entries.map((entry) => entry.item), [entries]);
   const summary = useMemo(() => getActivityGroupSummary(items), [items]);
 
-  const headerLabel = isStreamingTail
-    ? getActivityCurrentActionText(items[items.length - 1])
+  const lastItem = items[items.length - 1];
+  const showLiveAction = isStreamingTail && isItemLive(lastItem);
+  const headerLabel = showLiveAction
+    ? getActivityCurrentActionText(lastItem)
     : getActivityGroupHeaderLabel(items);
   const durationText = isStreamingTail ? null : formatActivityDuration(summary.durationMs);
 
@@ -55,7 +76,9 @@ const ActivityGroupBlock: React.FC<{
         className="flex max-w-full items-center gap-1.5 text-left group"
         aria-expanded={isExpanded}
       >
-        <span className="min-w-0 truncate text-sm text-secondary group-hover:text-foreground transition-colors">
+        <span className={`min-w-0 truncate text-sm text-secondary group-hover:text-foreground transition-colors ${
+          showLiveAction ? 'shimmer-text' : ''
+        }`}>
           {headerLabel}
         </span>
         {durationText && (
@@ -66,9 +89,6 @@ const ActivityGroupBlock: React.FC<{
             isExpanded ? 'rotate-90' : ''
           }`}
         />
-        {isStreamingTail && (
-          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse flex-shrink-0" />
-        )}
       </button>
       {isExpanded && (
         <div className="mt-2 w-full overflow-hidden rounded-lg border border-border divide-y divide-border">

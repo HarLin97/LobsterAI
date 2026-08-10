@@ -410,46 +410,28 @@ export const getToolResultLineCountSummary = (lineCount: number): string => {
 export const getLargeToolResultSummary = (sizeLabel: string): string =>
   i18nService.t('coworkToolLargeOutput').replace('{size}', sizeLabel);
 
-const getGenericRunningStatusText = (): string => {
-  const text = i18nService.t('coworkToolRunning');
-  return text.endsWith('...') || text.endsWith('…') ? text : `${text}...`;
-};
-
-export const getStreamingActivityStatusText = (
-  messages: CoworkMessage[],
+export const getActivityIndicatorStatusText = (
   isContextMaintenance = false,
   isLongWaiting = false,
 ): string => {
   if (isContextMaintenance) {
     return i18nService.t('coworkContextMaintenanceRunning');
   }
-
-  const toolResultIds = new Set<string>();
-  for (const message of messages) {
-    const id = message.metadata?.toolUseId;
-    if (message.type === 'tool_result' && typeof id === 'string') {
-      toolResultIds.add(id);
-    }
-  }
-
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.type !== 'tool_use') continue;
-
-    const id = message.metadata?.toolUseId;
-    if (typeof id === 'string' && toolResultIds.has(id)) continue;
-
-    const toolName = typeof message.metadata?.toolName === 'string'
-      ? message.metadata.toolName.trim()
-      : '';
-    return toolName
-      ? `${i18nService.t('coworkToolRunning')} ${toolName}...`
-      : getGenericRunningStatusText();
-  }
-
   return isLongWaiting
     ? i18nService.t('coworkModelResponseWaitingLong')
-    : getGenericRunningStatusText();
+    : i18nService.t('coworkThinking');
+};
+
+export const formatElapsedDuration = (elapsedMs: number): string => {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    return `${totalMinutes}m ${totalSeconds % 60}s`;
+  }
+  return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
 };
 
 export const getToolResultCollapsedDisplay = (message: CoworkMessage): ToolResultCollapsedDisplay => {
@@ -540,6 +522,38 @@ export const getVisibleAssistantItems = (assistantItems: AssistantTurnItem[]): A
 export const hasRenderableAssistantContent = (turn: ConversationTurn): boolean => (
   getVisibleAssistantItems(turn.assistantItems).length > 0
 );
+
+// True when the turn contains an element that carries its own running
+// animation (pulsing pending-tool row, media generation lottie, streaming
+// thinking block). The turn-level activity indicator stays hidden for these
+// so at most one element animates at a time.
+export const turnHasSelfIndicatingActivity = (turn: ConversationTurn): boolean =>
+  turn.assistantItems.some(item => {
+    if (item.type === 'tool_group') {
+      return !item.group.toolResult
+        || isMediaGenerateRunning(item.group)
+        || isMediaStatusPollRunning(item.group);
+    }
+    return item.type === 'assistant'
+      && Boolean(item.message.metadata?.isThinking)
+      && Boolean(item.message.metadata?.isStreaming);
+  });
+
+// Changes whenever streamed content for the turn grows. The activity
+// indicator uses this to tell "output is flowing" (stay hidden) from a quiet
+// gap with nothing on screen animating (fade in).
+export const getTurnActivityFingerprint = (turn: ConversationTurn): string => {
+  let contentLength = 0;
+  for (const item of turn.assistantItems) {
+    if (item.type === 'tool_group') {
+      contentLength += item.group.toolUse.content.length;
+      contentLength += item.group.toolResult?.content.length ?? 0;
+    } else {
+      contentLength += item.message.content.length;
+    }
+  }
+  return `${turn.id}:${turn.assistantItems.length}:${contentLength}`;
+};
 
 // ── Build pipeline ───────────────────────────────────────────────────────────
 

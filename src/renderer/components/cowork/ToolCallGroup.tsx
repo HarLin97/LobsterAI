@@ -1,6 +1,6 @@
 import { CheckIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import Lottie from 'lottie-react';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import mediaGeneratingAnimation from '../../assets/lottie/media-generating.json';
@@ -13,6 +13,7 @@ import {
 } from './conversationAnalytics';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
 import {
+  formatElapsedDuration,
   formatToolInput,
   getLargeToolResultSummary,
   getRetainedMediaPollCount,
@@ -80,6 +81,23 @@ const TodoWriteInputView: React.FC<{ items: ParsedTodoItem[] }> = ({ items }) =>
 };
 
 // ── ToolCallGroup ────────────────────────────────────────────────────────────
+
+// Live elapsed time for a running tool call; appears after a short delay so
+// quick calls don't flash a counter.
+const TOOL_ELAPSED_APPEAR_DELAY_MS = 2000;
+
+const ToolRunningElapsed: React.FC<{ startTimestamp: number }> = ({ startTimestamp }) => {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const elapsedMs = now - startTimestamp;
+  if (elapsedMs < TOOL_ELAPSED_APPEAR_DELAY_MS) return null;
+  return <span className="tabular-nums"> · {formatElapsedDuration(elapsedMs)}</span>;
+};
 
 const ToolCallGroup: React.FC<{
   group: ToolGroupItem;
@@ -354,12 +372,17 @@ const ToolCallGroup: React.FC<{
           {isToolError && (
             <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
           )}
-          <span className="text-sm text-foreground/90 flex-shrink-0">
+          <span className={`text-sm text-foreground/90 flex-shrink-0 ${!toolResult && isSessionStreaming ? 'shimmer-text' : ''}`}>
             {toolName}
           </span>
           {rowSummary && (
             <span className="min-w-0 truncate text-sm text-secondary">
               {rowSummary}
+            </span>
+          )}
+          {!toolResult && isSessionStreaming && (
+            <span className="text-xs text-muted flex-shrink-0">
+              <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
             </span>
           )}
           <ChevronRightIcon
@@ -403,7 +426,7 @@ const ToolCallGroup: React.FC<{
         }`} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-secondary">
+            <span className={`text-sm font-medium text-secondary ${!toolResult && isSessionStreaming ? 'shimmer-text' : ''}`}>
               {toolName}
             </span>
             {toolInputSummary && (
@@ -428,6 +451,7 @@ const ToolCallGroup: React.FC<{
           {!toolResult && isSessionStreaming && (
             <div className="text-xs text-muted mt-0.5">
               {i18nService.t('coworkToolRunning')}
+              <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
             </div>
           )}
         </div>
