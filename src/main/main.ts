@@ -4116,7 +4116,14 @@ if (!gotTheLock) {
   });
 
   // IPC 处理程序
+  // One-shot arrival log: renderer startup has stalled on this invoke in the
+  // field, and this line tells whether the request reached the main process.
+  let firstStoreGetLogged = false;
   ipcMain.handle('store:get', (_event, key) => {
+    if (!firstStoreGetLogged) {
+      firstStoreGetLogged = true;
+      console.log(`[Main] first store:get IPC received from renderer, key=${String(key)}`);
+    }
     return getStore().get(key);
   });
 

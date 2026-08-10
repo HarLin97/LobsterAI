@@ -109,6 +109,22 @@ const SETTINGS_TAB_SHORTCUT_ACTIONS: Array<{
 /** Used for config + i18n init; longer on Windows where main-process IPC can stall during cold start. */
 const INIT_STEP_TIMEOUT_MS_WINDOWS = 24_000;
 const INIT_STEP_TIMEOUT_MS_DEFAULT = 16_000;
+/** Field evidence (2026-08): early renderer↔main invokes can stall ~25-30s and
+ * then recover, so retries with fresh invokes rescue startup where a single
+ * long timeout cannot. */
+const INIT_STEP_RETRY_TIMEOUT_MS = 8_000;
+const INIT_CONFIG_MAX_ATTEMPTS = 3;
+const INIT_AUTO_RETRY_DELAY_MS = 8_000;
+const INIT_AUTO_RETRY_MAX = 2;
+const INIT_CONFIG_REPAIR_DELAY_MS = 15_000;
+const INIT_CONFIG_REPAIR_MAX = 4;
+
+export const InitPassMode = {
+  Startup: 'startup',
+  Retry: 'retry',
+  Repair: 'repair',
+} as const;
+export type InitPassMode = typeof InitPassMode[keyof typeof InitPassMode];
 
 const logAppUpdateRendererLifecycle = (
   message: string,
@@ -158,6 +174,10 @@ const App: React.FC = () => {
   const askAiFocusTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
   const hasReportedAppStartedRef = useRef(false);
+  const initPassRunningRef = useRef(false);
+  const initRetryTimerRef = useRef<number | null>(null);
+  const initAutoRetryCountRef = useRef(0);
+  const initRepairCountRef = useRef(0);
   const previousUpdateStatusRef = useRef<AppUpdateRuntimeState['status']>(AppUpdateStatus.Idle);
   const shouldInstallReadyUpdateRef = useRef(false);
   const isUserInitiatedUpdateFlowActiveRef = useRef(false);
@@ -201,120 +221,255 @@ const App: React.FC = () => {
   );
 
   // 初始化应用
+  const applyConfigToApp = useCallback((log?: (label: string) => void) => {
+    const config = configService.getConfig();
+    applyTypographyPreferences(config);
+    const apiConfig: ApiConfig = {
+      apiKey: config.api.key,
+      baseUrl: config.api.baseUrl,
+    };
+    apiService.setConfig(apiConfig);
+
+    const providerModels: { id: string; name: string; provider?: string; providerKey?: string; openClawProviderId?: string; supportsImage?: boolean }[] = [];
+    if (config.providers) {
+      Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
+        if (providerConfig.enabled && providerConfig.models) {
+          const openClawProviderId = ProviderRegistry.getOpenClawProviderIdForConfig(providerName, providerConfig);
+          if (providerName === ProviderName.Minimax && providerConfig.authType === ProviderAuthType.OAuth) {
+            log?.('MiniMax OAuth provider resolved to OpenClaw minimax-portal');
+          }
+          providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
+            providerModels.push({
+              id: model.id,
+              name: model.name,
+              provider: getProviderDisplayName(providerName, providerConfig),
+              providerKey: providerName,
+              openClawProviderId,
+              supportsImage: model.supportsImage ?? false,
+            });
+          });
+        }
+      });
+    }
+    dispatch(setAvailableModels(providerModels));
+    if (providerModels.length > 0) {
+      const allModels = store.getState().model.availableModels;
+      const preferredModel = allModels.find(
+        model => model.id === config.model.defaultModel
+          && (!config.model.defaultModelProvider || model.providerKey === config.model.defaultModelProvider)
+      ) ?? allModels[0];
+      dispatch(setDefaultSelectedModel(preferredModel));
+    }
+    return providerModels;
+  }, [dispatch]);
+
+  const runInitPassRef = useRef<(mode: InitPassMode) => void>(() => {});
+
+  const runInitPass = useCallback(async (mode: InitPassMode): Promise<void> => {
+    if (initPassRunningRef.current) {
+      return;
+    }
+    initPassRunningRef.current = true;
+    if (initRetryTimerRef.current !== null) {
+      window.clearTimeout(initRetryTimerRef.current);
+      initRetryTimerRef.current = null;
+    }
+
+    const t0 = performance.now();
+    const log = (level: 'info' | 'error', label: string) => {
+      const elapsed = Math.round(performance.now() - t0);
+      const msg = `initializeApp: ${label} (+${elapsed}ms)`;
+      if (level === 'error') {
+        console.error(`[App] ${msg}`);
+      } else {
+        console.info(`[App] ${msg}`);
+      }
+      try { window.electron?.log?.fromRenderer?.(level, 'App', msg); } catch { /* preload may not expose this yet */ }
+    };
+    const mark = (label: string) => log('info', label);
+    const markError = (label: string) => log('error', label);
+
+    const scheduleNextPass = (nextMode: InitPassMode, delayMs: number) => {
+      initRetryTimerRef.current = window.setTimeout(() => {
+        initRetryTimerRef.current = null;
+        runInitPassRef.current(nextMode);
+      }, delayMs);
+    };
+
+    // Runs one init step; retries issue a FRESH invoke because a timed-out
+    // promise is left running (its late completion must stay harmless).
+    const runStep = async (
+      label: string,
+      run: () => Promise<unknown>,
+      opts: { attempts: number; firstTimeoutMs: number },
+    ): Promise<boolean> => {
+      for (let attempt = 1; attempt <= opts.attempts; attempt++) {
+        const timeoutMs = attempt === 1 ? opts.firstTimeoutMs : INIT_STEP_RETRY_TIMEOUT_MS;
+        try {
+          await waitWithTimeout(run(), timeoutMs, label);
+          if (attempt > 1) {
+            mark(`${label} recovered on attempt ${attempt}`);
+          }
+          return true;
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          markError(`${label} attempt ${attempt}/${opts.attempts} failed: ${msg}`);
+        }
+      }
+      return false;
+    };
+
+    const finishShell = (providerModelCount: number, readyLabel: string) => {
+      setIsInitialized(true);
+      setInitError(null);
+      mark(readyLabel);
+      if (!hasReportedAppStartedRef.current) {
+        hasReportedAppStartedRef.current = true;
+        void reportYdAnalyzer({
+          action: LogReporterAction.AppStarted,
+          providerModelCount,
+          hasLoggedInUser: !!store.getState().auth.user?.yid,
+        });
+      }
+    };
+
+    try {
+      mark(`start (mode=${mode})`);
+      document.documentElement.classList.add(`platform-${window.electron.platform}`);
+
+      const initTimeoutMs =
+        window.electron.platform === 'win32'
+          ? INIT_STEP_TIMEOUT_MS_WINDOWS
+          : INIT_STEP_TIMEOUT_MS_DEFAULT;
+      const isRepair = mode === InitPassMode.Repair;
+
+      mark('configService.init begin');
+      const configReady = await runStep('configService.init', () => configService.init(), {
+        attempts: isRepair ? 2 : INIT_CONFIG_MAX_ATTEMPTS,
+        firstTimeoutMs: isRepair ? INIT_STEP_RETRY_TIMEOUT_MS : initTimeoutMs,
+      });
+
+      if (!configReady) {
+        if (isRepair) {
+          if (initRepairCountRef.current < INIT_CONFIG_REPAIR_MAX) {
+            initRepairCountRef.current += 1;
+            markError(`config repair still failing — retry ${initRepairCountRef.current}/${INIT_CONFIG_REPAIR_MAX} in ${INIT_CONFIG_REPAIR_DELAY_MS}ms`);
+            scheduleNextPass(InitPassMode.Repair, INIT_CONFIG_REPAIR_DELAY_MS);
+          } else {
+            markError('config repair attempts exhausted — app keeps default config until next launch');
+          }
+          return;
+        }
+        // Do not dead-end the app on a local config read: bring the shell up
+        // on defaults and finish the remaining init in a background repair
+        // pass (none of the later steps have run yet in this branch).
+        markError('configService.init unavailable — starting with default config, background repair scheduled');
+        const fallbackModels = applyConfigToApp(mark);
+        finishShell(fallbackModels.length, 'shell ready (degraded: default config)');
+        initRepairCountRef.current = 1;
+        scheduleNextPass(InitPassMode.Repair, INIT_CONFIG_REPAIR_DELAY_MS);
+        return;
+      }
+      mark('configService.init done');
+      if (isRepair) {
+        mark('config repaired — completing the remaining startup initialization');
+      }
+
+      // Setter lives inside the wrapped promise so a late IPC reply after a
+      // timeout still applies the enterprise config.
+      const enterpriseReady = await runStep('enterprise.getConfig', async () => {
+        const entConfig = await window.electron.enterprise.getConfig();
+        setEnterpriseConfig(entConfig);
+      }, { attempts: 1, firstTimeoutMs: INIT_STEP_RETRY_TIMEOUT_MS });
+      mark(enterpriseReady ? 'enterprise.getConfig done' : 'enterprise.getConfig pending (late reply will apply it)');
+
+      themeService.initialize();
+      mark('themeService done');
+
+      mark('i18nService.initialize begin');
+      const i18nReady = await runStep('i18nService.initialize', () => i18nService.initialize(), {
+        attempts: 2,
+        firstTimeoutMs: initTimeoutMs,
+      });
+      mark(i18nReady ? 'i18nService.initialize done' : 'i18nService.initialize degraded — using persisted language hint');
+
+      // Single attempt: authService.init() re-entry tears down listeners, so a
+      // concurrent retry could stack them; its in-flight run self-completes
+      // once IPC recovers.
+      mark('authService.init begin');
+      const authReady = await runStep('authService.init', () => authService.init(), {
+        attempts: 1,
+        firstTimeoutMs: INIT_STEP_RETRY_TIMEOUT_MS,
+      });
+      mark(authReady ? 'authService.init done' : 'authService.init pending (auth restore completes in background)');
+
+      const providerModels = applyConfigToApp(mark);
+      mark('model resolution done');
+
+      const privacyReady = await runStep('privacy check', async () => {
+        const agreed = await window.electron.store.get('privacy_agreed');
+        setPrivacyAgreed(agreed === true);
+      }, { attempts: 1, firstTimeoutMs: INIT_STEP_RETRY_TIMEOUT_MS });
+      mark(privacyReady ? 'privacy check done' : 'privacy check pending (late reply will apply it)');
+
+      finishShell(providerModels.length, 'shell ready');
+
+      void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
+        console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
+      });
+
+    } catch (error) {
+      const elapsed = Math.round(performance.now() - t0);
+      const msg = error instanceof Error ? error.message : String(error);
+      const detail = `initializeApp FAILED after ${elapsed}ms (mode=${mode}): ${msg}`;
+      console.error(`[App] ${detail}`);
+      try { window.electron?.log?.fromRenderer?.('error', 'App', detail); } catch { /* best-effort */ }
+      if (mode === InitPassMode.Repair) {
+        // The shell is already up in degraded mode — never replace it with the
+        // error page from a background pass.
+        return;
+      }
+      setInitError(i18nService.t('initializationError'));
+      setIsInitialized(true);
+      if (initAutoRetryCountRef.current < INIT_AUTO_RETRY_MAX) {
+        initAutoRetryCountRef.current += 1;
+        markError(`scheduling automatic init retry ${initAutoRetryCountRef.current}/${INIT_AUTO_RETRY_MAX} in ${INIT_AUTO_RETRY_DELAY_MS}ms`);
+        // Retries silently behind the error page; success swaps straight into
+        // the app without flashing the loading screen.
+        scheduleNextPass(InitPassMode.Retry, INIT_AUTO_RETRY_DELAY_MS);
+      }
+    } finally {
+      initPassRunningRef.current = false;
+    }
+  }, [applyConfigToApp, waitWithTimeout]);
+
+  useEffect(() => {
+    runInitPassRef.current = (mode: InitPassMode) => { void runInitPass(mode); };
+  }, [runInitPass]);
+
+  const handleInitRetry = useCallback(() => {
+    if (initPassRunningRef.current) {
+      return;
+    }
+    initAutoRetryCountRef.current = 0;
+    setInitError(null);
+    setIsInitialized(false);
+    void runInitPass(InitPassMode.Retry);
+  }, [runInitPass]);
+
   useEffect(() => {
     if (hasInitialized.current) {
       return;
     }
     hasInitialized.current = true;
+    void runInitPass(InitPassMode.Startup);
+  }, [runInitPass]);
 
-    const initializeApp = async () => {
-      const t0 = performance.now();
-      const mark = (label: string) => {
-        const elapsed = Math.round(performance.now() - t0);
-        const msg = `initializeApp: ${label} (+${elapsed}ms)`;
-        console.info(`[App] ${msg}`);
-        try { window.electron?.log?.fromRenderer?.('info', 'App', msg); } catch { /* preload may not expose this yet */ }
-      };
-
-      try {
-        mark('start');
-        document.documentElement.classList.add(`platform-${window.electron.platform}`);
-
-        const initTimeoutMs =
-          window.electron.platform === 'win32'
-            ? INIT_STEP_TIMEOUT_MS_WINDOWS
-            : INIT_STEP_TIMEOUT_MS_DEFAULT;
-        mark('configService.init begin');
-        await waitWithTimeout(configService.init(), initTimeoutMs, 'configService.init');
-        mark('configService.init done');
-
-        const entConfig = await window.electron.enterprise.getConfig();
-        setEnterpriseConfig(entConfig);
-        mark('enterprise.getConfig done');
-
-        themeService.initialize();
-        mark('themeService done');
-
-        mark('i18nService.initialize begin');
-        await waitWithTimeout(i18nService.initialize(), initTimeoutMs, 'i18nService.initialize');
-        mark('i18nService.initialize done');
-
-        mark('authService.init begin');
-        await authService.init();
-        mark('authService.init done');
-
-        const config = await configService.getConfig();
-        applyTypographyPreferences(config);
-        const apiConfig: ApiConfig = {
-          apiKey: config.api.key,
-          baseUrl: config.api.baseUrl,
-        };
-        apiService.setConfig(apiConfig);
-
-        const providerModels: { id: string; name: string; provider?: string; providerKey?: string; openClawProviderId?: string; supportsImage?: boolean }[] = [];
-        if (config.providers) {
-          Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
-            if (providerConfig.enabled && providerConfig.models) {
-              const openClawProviderId = ProviderRegistry.getOpenClawProviderIdForConfig(providerName, providerConfig);
-              if (providerName === ProviderName.Minimax && providerConfig.authType === ProviderAuthType.OAuth) {
-                mark('MiniMax OAuth provider resolved to OpenClaw minimax-portal');
-              }
-              providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
-                providerModels.push({
-                  id: model.id,
-                  name: model.name,
-                  provider: getProviderDisplayName(providerName, providerConfig),
-                  providerKey: providerName,
-                  openClawProviderId,
-                  supportsImage: model.supportsImage ?? false,
-                });
-              });
-            }
-          });
-        }
-        dispatch(setAvailableModels(providerModels));
-        if (providerModels.length > 0) {
-          const allModels = store.getState().model.availableModels;
-          const preferredModel = allModels.find(
-            model => model.id === config.model.defaultModel
-              && (!config.model.defaultModelProvider || model.providerKey === config.model.defaultModelProvider)
-          ) ?? allModels[0];
-          dispatch(setDefaultSelectedModel(preferredModel));
-        }
-        mark('model resolution done');
-
-        const agreed = await window.electron.store.get('privacy_agreed');
-        setPrivacyAgreed(agreed === true);
-        mark('privacy check done');
-
-        setIsInitialized(true);
-        mark('shell ready');
-        if (!hasReportedAppStartedRef.current) {
-          hasReportedAppStartedRef.current = true;
-          void reportYdAnalyzer({
-            action: LogReporterAction.AppStarted,
-            providerModelCount: providerModels.length,
-            hasLoggedInUser: !!store.getState().auth.user?.yid,
-          });
-        }
-
-        void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
-          console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
-        });
-
-      } catch (error) {
-        const elapsed = Math.round(performance.now() - t0);
-        const msg = error instanceof Error ? error.message : String(error);
-        const detail = `initializeApp FAILED after ${elapsed}ms: ${msg}`;
-        console.error(`[App] ${detail}`);
-        try { window.electron?.log?.fromRenderer?.('error', 'App', detail); } catch { /* best-effort */ }
-        setInitError(i18nService.t('initializationError'));
-        setIsInitialized(true);
-      }
-    };
-
-    void initializeApp();
-  }, [dispatch, waitWithTimeout]);
+  useEffect(() => () => {
+    if (initRetryTimerRef.current !== null) {
+      window.clearTimeout(initRetryTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     const unsubscribe = i18nService.subscribe(() => {
@@ -1329,8 +1484,14 @@ const App: React.FC = () => {
             <div className="text-foreground text-xl font-medium text-center">{initError}</div>
             <div className="flex items-center gap-3">
               <button
-                onClick={() => window.electron.appInfo.relaunch()}
+                onClick={handleInitRetry}
                 className="px-6 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors text-sm font-medium"
+              >
+                {i18nService.t('retry')}
+              </button>
+              <button
+                onClick={() => window.electron.appInfo.relaunch()}
+                className="px-6 py-2.5 border border-border text-foreground hover:bg-surface-raised rounded-xl transition-colors text-sm font-medium"
               >
                 {i18nService.t('restartApp')}
               </button>
