@@ -1577,6 +1577,12 @@ FunctionEnd
   ; Wrapped in a 10-minute watchdog: if security software freezes the child
   ; before it can run, the installer must fail visibly instead of hanging
   ; forever (a killed installer leaves a half-installed app behind).
+  ;
+  ; Some security tooling permanently breaks the .NET exit-code query inside
+  ; PowerShell ($p.ExitCode stays $null after a successful wait) while the
+  ; child itself completes fine. The child therefore publishes a post-verify
+  ; sentinel file (.unpack-cfmind-ok); a null exit code with the sentinel
+  ; present is treated as success, still gated by TarExtractVerify.
   StrCpy $R3 "electron"
   DetailPrint "[Installer] Launching bundled extractor"
   FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
@@ -1589,6 +1595,8 @@ FunctionEnd
   !insertmacro ResolveTrustedPowerShell
   StrCmp $lobsterTrustedPowerShellPath "" TarExtractHelperNotFound
   Delete "$PLUGINSDIR\lobster-watchdog-$lobsterInstallerAttemptId.marker"
+  ; A stale sentinel from an earlier run must never vouch for this attempt.
+  Delete "$INSTDIR\resources\.unpack-cfmind-ok"
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_WATCHDOG_MARKER_PATH", t "$PLUGINSDIR\lobster-watchdog-$lobsterInstallerAttemptId.marker")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_EXE", t "$INSTDIR\${APP_EXECUTABLE_FILENAME}")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_SCRIPT", t "$INSTDIR\resources\unpack-cfmind.cjs")i'
@@ -1617,6 +1625,15 @@ FunctionEnd
     if ($$p.WaitForExit(600000)) {\
       $$p.WaitForExit();\
       if ($$p.ExitCode -eq $$null) {\
+        $$sentinelOk = $$false;\
+        try {\
+          $$sentinel = Join-Path $$env:LOBSTERAI_EXTRACTOR_DESTINATION \".unpack-cfmind-ok\";\
+          $$sentinelOk = Test-Path -LiteralPath $$sentinel\
+        } catch { $$sentinelOk = $$false };\
+        if ($$sentinelOk) {\
+          Write-LobsterWatchdogMarker \"exit-code-null-sentinel-ok\";\
+          exit 0\
+        };\
         Write-LobsterWatchdogMarker \"output-validation-failed\";\
         exit 127\
       };\
@@ -1737,6 +1754,22 @@ FunctionEnd
     Quit
 
   TarExtractOutputValidationFailed:
+    ; The watchdog waited out the child but could not read its exit code. On
+    ; machines where security tooling permanently breaks that query the child
+    ; may still have succeeded, so consult its post-verify sentinel before
+    ; declaring failure; TarExtractVerify still makes the final on-disk call.
+    ; (Dual of the TarExtractVerify principle: just as an exit code alone must
+    ; never trigger deletion, an unreadable exit code alone must never abort
+    ; an installation whose payload verifiably exists.)
+    IfFileExists "$INSTDIR\resources\.unpack-cfmind-ok" 0 TarExtractOutputValidationFatal
+    FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
+    FileSeek $2 0 END
+    !insertmacro GetTimestamp $8
+    FileWrite $2 "$8 phase=tar-extract-sentinel-rescue attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 raw_marker=$R4 elapsed_ms=$5 sentinel=present$\r$\n"
+    FileClose $2
+    Goto TarExtractVerify
+
+  TarExtractOutputValidationFatal:
     FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
     FileSeek $2 0 END
     !insertmacro GetTimestamp $8
@@ -1767,9 +1800,11 @@ FunctionEnd
   FileClose $2
   DetailPrint "[Installer] Bundled resources extraction complete"
   ; Only a verified success may delete these: the preserved archive is what
-  ; lets the app finish an interrupted extraction at first launch.
+  ; lets the app finish an interrupted extraction at first launch. The
+  ; sentinel has served its purpose once the install commits.
   Delete "$INSTDIR\resources\win-resources.tar"
   Delete "$INSTDIR\resources\unpack-cfmind.cjs"
+  Delete "$INSTDIR\resources\.unpack-cfmind-ok"
   Goto TarExtractDone
 
   TarExtractFailed:

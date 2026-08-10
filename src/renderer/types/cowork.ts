@@ -147,6 +147,7 @@ export interface CoworkSession {
   id: string;
   title: string;
   claudeSessionId: string | null;
+  scheduledTaskId: string | null;
   status: CoworkSessionStatus;
   pinned: boolean;
   pinOrder?: number | null;
@@ -317,6 +318,7 @@ export interface CoworkPermissionResponse {
 export interface CoworkSessionSummary {
   id: string;
   title: string;
+  scheduledTaskId: string | null;
   status: CoworkSessionStatus;
   pinned: boolean;
   pinOrder?: number | null;

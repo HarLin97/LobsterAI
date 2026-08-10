@@ -23,6 +23,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
 import { CoworkForkMode } from '../shared/cowork/constants';
+import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 
@@ -42,6 +43,7 @@ function setupDb(): void {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       claude_session_id TEXT,
+      scheduled_task_id TEXT,
       status TEXT NOT NULL DEFAULT 'idle',
       pinned INTEGER NOT NULL DEFAULT 0,
       pin_order INTEGER,
@@ -235,6 +237,54 @@ test('searchSessions finds matching titles beyond the recent page', () => {
 
   expect(results.map((session) => session.id)).toEqual(['deep-match']);
   expect(store.countSearchSessions({ query: 'history search needle' })).toBe(1);
+});
+
+test('scheduled task sessions preserve their task id in session details and list summaries', () => {
+  const session = store.createSession(
+    'Daily summary',
+    '/tmp',
+    '',
+    'local',
+    [],
+    'main',
+    '',
+    { scheduledTaskId: 'job-daily-summary' },
+  );
+
+  expect(session.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.getSession(session.id)?.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.listSessions(10, 0, 'main')[0]?.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.searchSessions({ query: 'Daily summary' })[0]?.scheduledTaskId).toBe(
+    'job-daily-summary',
+  );
+
+  insertSession('newer-fork', 'main', 'Forked daily summary', Date.now() + 10_000);
+  db.prepare(
+    `UPDATE cowork_sessions
+     SET scheduled_task_id = ?, parent_session_id = ?
+     WHERE id = ?`,
+  ).run('job-daily-summary', session.id, 'newer-fork');
+
+  expect(store.getSessionIdByScheduledTaskId('job-daily-summary', 'main')).toBe(session.id);
+  expect(store.getSessionIdByScheduledTaskId('job-daily-summary', 'other-agent')).toBeNull();
+});
+
+test('scheduled task session lookup uses a stable newest-created top-level session', () => {
+  insertSession('older-session', 'main', 'Older daily summary', 1_000);
+  insertSession('newer-session', 'main', 'Newer daily summary', 2_000);
+  db.prepare(
+    `UPDATE cowork_sessions
+     SET scheduled_task_id = ?
+     WHERE id IN (?, ?)`,
+  ).run('job-daily-summary', 'older-session', 'newer-session');
+
+  // A user interaction may update an older history row. It must not change the
+  // canonical destination chosen for future scheduled runs.
+  db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?')
+    .run(3_000, 'older-session');
+
+  expect(store.getSessionIdByScheduledTaskId('job-daily-summary', 'main'))
+    .toBe('newer-session');
 });
 
 test('searchSessions preserves pinned ordering and pagination', () => {
@@ -647,7 +697,7 @@ test('create and update session persist the selected thinking level', () => {
     [],
     'main',
     'lobsterai-server/deepseek-v4-flash',
-    'high',
+    { thinkingLevel: 'high' },
   );
 
   expect(store.getSession(session.id)?.thinkingLevel).toBe('high');
@@ -685,7 +735,11 @@ test('deleteSession removes messages without relying on foreign key cascade', ()
 test('forkSession copies stable history and records fork metadata', () => {
   const sid = 'sess-fork-source';
   insertSession(sid);
-  insertMessage('msg-user', sid, 'user', 'start here', '{"keep":true}', 1, 1000);
+  insertMessage('msg-user', sid, 'user', 'start here', JSON.stringify({
+    keep: true,
+    [OpenClawCronRunMetadataKey.SessionKey]: 'agent:main:cron:job-1:run:run-1',
+    [OpenClawCronRunMetadataKey.EntryIndex]: 0,
+  }), 1, 1000);
   insertMessage(
     'msg-streaming',
     sid,

@@ -15,6 +15,7 @@ import coworkReducer, {
   addMessage,
   addSession,
   appendBtwEntry,
+  appendNewerMessages,
   clearBtwComposerIfUnchanged,
   clearCurrentSession,
   closeBtwThread,
@@ -40,6 +41,7 @@ const makeSession = (overrides: Partial<Parameters<typeof addSession>[0]> = {}) 
   id: 'session-1',
   title: 'Test Session',
   claudeSessionId: null,
+  scheduledTaskId: null,
   status: CoworkSessionStatusValue.Completed,
   pinned: false,
   cwd: '/tmp',
@@ -193,6 +195,7 @@ test('updateSessionStatus only refreshes the session updated time on a real tran
   const initialState = coworkReducer(undefined, setSessions([{
     id: 'session-1',
     title: 'Running task',
+    scheduledTaskId: null,
     status: CoworkSessionStatusValue.Running,
     pinned: false,
     agentId: 'main',
@@ -242,6 +245,36 @@ test('addMessage refreshes the session updated time only for user messages', () 
   );
   expect(userState.sessions[0].updatedAt).toBe(3000);
   expect(userState.currentSession?.updatedAt).toBe(3000);
+});
+
+test('appendNewerMessages extends a paged window without changing its offset or duplicating messages', () => {
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: [
+      { id: 'message-20', type: 'user', content: 'twenty', timestamp: 20 },
+      { id: 'message-21', type: 'assistant', content: 'twenty one', timestamp: 21 },
+    ],
+    messagesOffset: 20,
+    totalMessages: 24,
+  })));
+
+  const state = coworkReducer(initialState, appendNewerMessages({
+    sessionId: 'session-1',
+    messages: [
+      { id: 'message-21', type: 'assistant', content: 'duplicate', timestamp: 21 },
+      { id: 'message-22', type: 'user', content: 'twenty two', timestamp: 22 },
+      { id: 'message-23', type: 'assistant', content: 'twenty three', timestamp: 23 },
+    ],
+    totalMessages: 24,
+  }));
+
+  expect(state.currentSession?.messages.map(message => message.id)).toEqual([
+    'message-20',
+    'message-21',
+    'message-22',
+    'message-23',
+  ]);
+  expect(state.currentSession?.messagesOffset).toBe(20);
+  expect(state.currentSession?.totalMessages).toBe(24);
 });
 
 test('updateMessageContent preserves the session updated time', () => {
@@ -615,6 +648,7 @@ test('updateSessionStatus marks completed inactive sessions unread', () => {
   const state = coworkReducer(undefined, setSessions([{
     id: 'session-1',
     title: 'Completed task',
+    scheduledTaskId: null,
     status: CoworkSessionStatusValue.Running,
     pinned: false,
     agentId: 'main',
@@ -638,6 +672,7 @@ test('updateSessionStatus does not mark the active completed session unread', ()
     coworkReducer(undefined, setSessions([{
       id: 'session-1',
       title: 'Active task',
+      scheduledTaskId: null,
       status: CoworkSessionStatusValue.Running,
       pinned: false,
       agentId: 'main',

@@ -1,4 +1,7 @@
-import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+import {
+  OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS,
+  OpenClawEnginePhase,
+} from '../../shared/openclawEngine/constants';
 
 /**
  * Reliable delivery of openclaw.json changes to a RUNNING gateway.
@@ -26,6 +29,12 @@ export const OpenClawConfigDeliveryMode = {
   Skipped: 'skipped',
   /** RPC path failed; a deferred gateway restart guarantees convergence. */
   Fallback: 'fallback',
+  /**
+   * Gateway rejected the payload as invalid config. A restart cannot fix an
+   * invalid payload (and would interrupt the user for nothing), so no restart
+   * is scheduled — the failure is surfaced as an error instead.
+   */
+  Rejected: 'rejected',
 } as const;
 export type OpenClawConfigDeliveryMode =
   typeof OpenClawConfigDeliveryMode[keyof typeof OpenClawConfigDeliveryMode];
@@ -83,6 +92,45 @@ const isBaseHashConflict = (error: unknown): boolean => {
   return /base hash|changed since last load/i.test(message);
 };
 
+const isConfigValidationRejection = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return /invalid config|INVALID_REQUEST/i.test(message);
+};
+
+/**
+ * Remove `plugins` keys the gateway's `config.set` schema rejects (they are
+ * owned by the plugin index, not the config file — see
+ * OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS). The on-disk file tolerates them via a
+ * load-time migration, but the RPC validation is strict, so leaving them in
+ * turns every hot delivery into a guaranteed fallback restart. Returns the
+ * input unchanged when there is nothing to strip or it is not JSON.
+ */
+export function stripPluginIndexManagedKeysFromRawConfig(raw: string): string {
+  try {
+    const config = JSON.parse(raw) as Record<string, unknown>;
+    const plugins = config?.plugins;
+    if (typeof plugins !== 'object' || plugins === null || Array.isArray(plugins)) {
+      return raw;
+    }
+    const pluginsRecord = plugins as Record<string, unknown>;
+    const managedKeys: readonly string[] = OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS;
+    if (!managedKeys.some((key) => key in pluginsRecord)) {
+      return raw;
+    }
+    const cleaned = Object.fromEntries(
+      Object.entries(pluginsRecord).filter(([key]) => !managedKeys.includes(key)),
+    );
+    if (Object.keys(cleaned).length === 0) {
+      delete config.plugins;
+    } else {
+      config.plugins = cleaned;
+    }
+    return `${JSON.stringify(config, null, 2)}\n`;
+  } catch {
+    return raw;
+  }
+}
+
 const describeError = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error);
   return message.slice(0, 200);
@@ -128,7 +176,9 @@ export async function deliverOpenClawConfigToGateway(
       restartScheduled,
       elapsedMs: now() - startedAtMs,
     };
-    const log = mode === OpenClawConfigDeliveryMode.Fallback ? console.warn : console.log;
+    const log = mode === OpenClawConfigDeliveryMode.Rejected
+      ? console.error
+      : mode === OpenClawConfigDeliveryMode.Fallback ? console.warn : console.log;
     log(
       `[ConfigDelivery] mode=${result.mode} reason=${input.reason} detail=${result.detail}`
       + ` restartScheduled=${result.restartScheduled} elapsedMs=${result.elapsedMs}`,
@@ -169,6 +219,7 @@ export async function deliverOpenClawConfigToGateway(
   if (!raw.trim()) {
     return fallback('config file is empty');
   }
+  raw = stripPluginIndexManagedKeysFromRawConfig(raw);
 
   let client: OpenClawConfigRpcClient | null = null;
   try {
@@ -184,6 +235,12 @@ export async function deliverOpenClawConfigToGateway(
     await requestConfigSet(client, raw);
     return finish(OpenClawConfigDeliveryMode.Rpc, 'config.set acked');
   } catch (error) {
+    if (isConfigValidationRejection(error)) {
+      return finish(
+        OpenClawConfigDeliveryMode.Rejected,
+        `config.set rejected payload: ${describeError(error)}; restart skipped`,
+      );
+    }
     if (!isBaseHashConflict(error)) {
       return fallback(`config.set failed: ${describeError(error)}`);
     }
@@ -193,6 +250,12 @@ export async function deliverOpenClawConfigToGateway(
       await requestConfigSet(client, raw);
       return finish(OpenClawConfigDeliveryMode.Rpc, 'config.set acked after hash retry');
     } catch (retryError) {
+      if (isConfigValidationRejection(retryError)) {
+        return finish(
+          OpenClawConfigDeliveryMode.Rejected,
+          `config.set rejected payload: ${describeError(retryError)}; restart skipped`,
+        );
+      }
       return fallback(`config.set retry failed: ${describeError(retryError)}`);
     }
   }

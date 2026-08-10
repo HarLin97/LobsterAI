@@ -139,6 +139,7 @@ interface CoworkSession {
   id: string;
   title: string;
   claudeSessionId: string | null;
+  scheduledTaskId: string | null;
   status: 'idle' | 'running' | 'completed' | 'error';
   pinned: boolean;
   pinOrder?: number | null;
@@ -173,6 +174,7 @@ interface CoworkMessage {
 interface CoworkSessionSummary {
   id: string;
   title: string;
+  scheduledTaskId: string | null;
   status: 'idle' | 'running' | 'completed' | 'error';
   pinned: boolean;
   pinOrder?: number | null;

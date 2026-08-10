@@ -33,6 +33,11 @@ import {
 import {
   AgentId,
 } from '../shared/agent/constants';
+import {
+  LogReporterAction,
+  LogReporterSource,
+  LogReporterStoreKey,
+} from '../shared/analytics/constants';
 import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
@@ -310,6 +315,7 @@ import {
 import { packageHtmlFile } from './libs/htmlShare/htmlSharePackager';
 import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyfromAttribution';
 import { exportLogsZip } from './libs/logExport';
+import { MainLogReporter } from './libs/mainLogReporter';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import {
   migrateAgentModelRefs,
@@ -1848,8 +1854,7 @@ let coworkRuntimeForwarderBound = false;
 let memoryMigrationDone = false;
 let preventSleepBlockerId: number | null = null;
 let appUpdateCoordinator: AppUpdateCoordinator | null = null;
-
-const AUTH_USER_STORE_KEY = 'auth_user';
+let mainLogReporter: MainLogReporter | null = null;
 
 function setPreventSleepBlockerEnabled(enabled: boolean): void {
   if (enabled) {
@@ -1915,6 +1920,22 @@ const getAppUpdateCoordinator = (): AppUpdateCoordinator => {
     appUpdateCoordinator = new AppUpdateCoordinator(getStore());
   }
   return appUpdateCoordinator;
+};
+
+const getMainLogReporter = (): MainLogReporter => {
+  if (!mainLogReporter) {
+    mainLogReporter = new MainLogReporter({
+      appVersion: app.getVersion(),
+      fetch: async (url, signal) => {
+        const response = await session.defaultSession.fetch(url, { method: 'GET', signal });
+        const result = { ok: response.ok, status: response.status };
+        await response.body?.cancel();
+        return result;
+      },
+      store: getStore(),
+    });
+  }
+  return mainLogReporter;
 };
 
 const forwardOpenClawStatus = (status: OpenClawEngineStatus): void => {
@@ -2352,8 +2373,16 @@ const executeDeferredGatewayRestart = async (reason: string) => {
   console.log(
     `${gwDiagTs()} executeDeferredGatewayRestart: performing deferred restart (reason: ${reason})`,
   );
+  // When the sync below re-defers (workloads still active), the re-scheduled
+  // reason flows back here on the next attempt — don't stack another
+  // `deferred:` prefix. Unbounded stacking also breaks the
+  // selfRestartSatisfiesSync() prefix check, misclassifying restarts that a
+  // gateway self-restart would satisfy as needing a full respawn.
+  const syncReason = reason.startsWith(DEFERRED_SYNC_REASON_PREFIX)
+    ? reason
+    : `${DEFERRED_SYNC_REASON_PREFIX}${reason}`;
   await syncOpenClawConfig({
-    reason: `${DEFERRED_SYNC_REASON_PREFIX}${reason}`,
+    reason: syncReason,
     restartGatewayIfRunning: true,
     expectedImpact: OpenClawConfigImpact.Restart,
   });
@@ -2412,10 +2441,13 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
     }
   }, DEFERRED_RESTART_POLL_MS);
 
-  // Hard timeout: restart anyway after max wait to avoid config drift.
+  // Hard timeout: attempt the restart after max wait to bound config drift.
+  // Not a true force — the sync still re-defers when workloads are active,
+  // so a busy gateway gets another full wait window instead of being killed
+  // mid-task.
   deferredRestartTimeout = setTimeout(() => {
     console.warn(
-      `${gwDiagTs()} scheduleDeferredGatewayRestart: max wait exceeded, forcing restart (reason: ${reason})`,
+      `${gwDiagTs()} scheduleDeferredGatewayRestart: max wait exceeded, attempting restart (re-defers if workloads are still active) (reason: ${reason})`,
     );
     void executeDeferredGatewayRestart(reason);
   }, DEFERRED_RESTART_MAX_WAIT_MS);
@@ -3035,6 +3067,13 @@ const getCoworkEngineRouter = () => {
         getOpenClawEngineManager(),
         {
           normalizeModelRef: normalizeOpenClawModelRef,
+          onChannelPromptSubmit: event => {
+            void getMainLogReporter().report({
+              action: LogReporterAction.ImPromptSubmit,
+              source: LogReporterSource.OpenClawChannel,
+              ...event,
+            });
+          },
           onGatewayClientReady: () => {
             getCronJobService().notifyGatewayReady();
             handleGatewaySelfRestartSettled();
@@ -4401,7 +4440,7 @@ if (!gotTheLock) {
 
   const getAuthUser = (): Record<string, unknown> | null => {
     try {
-      return getStore().get<Record<string, unknown>>(AUTH_USER_STORE_KEY) || null;
+      return getStore().get<Record<string, unknown>>(LogReporterStoreKey.AuthUser) || null;
     } catch (error) {
       console.warn('[Auth] failed to read cached auth user:', error);
       return null;
@@ -4410,7 +4449,7 @@ if (!gotTheLock) {
 
   const saveAuthUser = (user: Record<string, unknown>) => {
     try {
-      getStore().set(AUTH_USER_STORE_KEY, user);
+      getStore().set(LogReporterStoreKey.AuthUser, user);
     } catch (error) {
       console.warn('[Auth] failed to save auth user for attribution:', error);
     }
@@ -4431,7 +4470,7 @@ if (!gotTheLock) {
 
   const clearAuthUser = () => {
     try {
-      getStore().delete(AUTH_USER_STORE_KEY);
+      getStore().delete(LogReporterStoreKey.AuthUser);
     } catch (error) {
       console.warn('[Auth] failed to clear auth user for attribution:', error);
     }
@@ -7341,7 +7380,7 @@ if (!gotTheLock) {
           runtimeSkillIds || [],
           options.agentId || 'main',
           options.modelOverride || '',
-          thinkingLevel || '',
+          { thinkingLevel: thinkingLevel || '' },
         );
 
         if (options.modelOverride) {

@@ -50,6 +50,9 @@ export type ConversationTurn = {
 
 export const getTurnMessageIds = (turn: ConversationTurn): Set<string> => {
   const messageIds = new Set<string>();
+  if (turn.userMessage) {
+    messageIds.add(turn.userMessage.id);
+  }
   for (const item of turn.assistantItems) {
     if (item.type === 'assistant' || item.type === 'system' || item.type === 'tool_result') {
       messageIds.add(item.message.id);
@@ -598,10 +601,10 @@ export const buildConversationTurns = (items: DisplayItem[]): ConversationTurn[]
   let currentTurn: ConversationTurn | null = null;
   let orphanIndex = 0;
 
-  const ensureTurn = (): ConversationTurn => {
+  const ensureTurn = (anchorMessageId?: string): ConversationTurn => {
     if (currentTurn) return currentTurn;
     const orphanTurn: ConversationTurn = {
-      id: `orphan-${orphanIndex++}`,
+      id: anchorMessageId ? `orphan-${anchorMessageId}` : `orphan-${orphanIndex++}`,
       userMessage: null,
       assistantItems: [],
     };
@@ -622,7 +625,7 @@ export const buildConversationTurns = (items: DisplayItem[]): ConversationTurn[]
     }
 
     if (item.type === 'tool_group') {
-      const turn = ensureTurn();
+      const turn = ensureTurn(item.toolUse.id);
       turn.assistantItems.push({ type: 'tool_group', group: item });
       continue;
     }
@@ -631,7 +634,7 @@ export const buildConversationTurns = (items: DisplayItem[]): ConversationTurn[]
     if (isContextCompactionMessage(message) && currentTurn?.assistantItems.length) {
       currentTurn = null;
     }
-    const turn = ensureTurn();
+    const turn = ensureTurn(message.id);
 
     if (message.type === 'assistant') {
       turn.assistantItems.push({ type: 'assistant', message });

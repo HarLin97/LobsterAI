@@ -6,6 +6,7 @@ import {
   deliverOpenClawConfigToGateway,
   OpenClawConfigDeliveryMode,
   type OpenClawConfigRpcClient,
+  stripPluginIndexManagedKeysFromRawConfig,
 } from './openclawConfigDelivery';
 
 const FILE_CONTENT = '{"models":{"providers":{"p":{"models":[{"id":"m-b"}]}}},"meta":{"lastTouchedAt":"t1"}}\n';
@@ -207,5 +208,96 @@ describe('deliverOpenClawConfigToGateway', () => {
     const setParams = calls.find((call) => call.method === 'config.set')?.params as { raw: string };
     expect(setParams.raw).toBe(FILE_CONTENT);
     expect(setParams.raw).not.toContain('__OPENCLAW_REDACTED__');
+  });
+
+  test('plugins.installs is stripped from the config.set payload, other keys survive', async () => {
+    const fileWithInstalls = JSON.stringify({
+      plugins: {
+        entries: { xai: { enabled: true } },
+        allow: ['xai'],
+        installs: { xai: { version: '1.0.0' } },
+      },
+      meta: { lastTouchedAt: 't1' },
+    });
+    const { client, calls } = createClient({});
+    const result = await deliverOpenClawConfigToGateway(baseInput({
+      readConfigFile: () => fileWithInstalls,
+      ensureRpcClient: async () => client,
+    }));
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
+    const setParams = calls.find((call) => call.method === 'config.set')?.params as { raw: string };
+    const sent = JSON.parse(setParams.raw) as {
+      plugins: Record<string, unknown>;
+      meta: Record<string, unknown>;
+    };
+    expect(sent.plugins.installs).toBeUndefined();
+    expect(sent.plugins.entries).toEqual({ xai: { enabled: true } });
+    expect(sent.plugins.allow).toEqual(['xai']);
+    expect(sent.meta).toEqual({ lastTouchedAt: 't1' });
+  });
+
+  test('invalid-config rejection reports rejected mode and never schedules a restart', async () => {
+    const { client } = createClient({
+      set: () => {
+        throw new Error('invalid config: plugins: Unrecognized key: "installs"');
+      },
+    });
+    const scheduleDeferredRestart = vi.fn();
+    const result = await deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => client,
+      scheduleDeferredRestart,
+    }));
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rejected);
+    expect(result.restartScheduled).toBe(false);
+    expect(result.detail).toContain('restart skipped');
+    expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+  });
+
+  test('rejection does not consume the fallback restart rate-limit window', async () => {
+    const rejecting = createClient({
+      set: () => {
+        throw new Error('invalid config: plugins: Unrecognized key: "installs"');
+      },
+    });
+    const scheduleDeferredRestart = vi.fn();
+    const rejected = await deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => rejecting.client,
+      scheduleDeferredRestart,
+    }));
+    const disconnected = createClient({
+      set: () => {
+        throw new Error('socket closed');
+      },
+    });
+    const fellBack = await deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => disconnected.client,
+      scheduleDeferredRestart,
+    }));
+
+    expect(rejected.mode).toBe(OpenClawConfigDeliveryMode.Rejected);
+    expect(fellBack.mode).toBe(OpenClawConfigDeliveryMode.Fallback);
+    expect(fellBack.restartScheduled).toBe(true);
+    expect(scheduleDeferredRestart).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('stripPluginIndexManagedKeysFromRawConfig', () => {
+  test('returns non-JSON and installs-free content unchanged', () => {
+    expect(stripPluginIndexManagedKeysFromRawConfig('not json {')).toBe('not json {');
+    expect(stripPluginIndexManagedKeysFromRawConfig(FILE_CONTENT)).toBe(FILE_CONTENT);
+    const noPlugins = '{"gateway":{"mode":"local"}}\n';
+    expect(stripPluginIndexManagedKeysFromRawConfig(noPlugins)).toBe(noPlugins);
+  });
+
+  test('drops the plugins object entirely when installs was its only key', () => {
+    const raw = JSON.stringify({
+      plugins: { installs: { xai: { version: '1.0.0' } } },
+      gateway: { mode: 'local' },
+    });
+    const stripped = JSON.parse(stripPluginIndexManagedKeysFromRawConfig(raw)) as Record<string, unknown>;
+    expect(stripped.plugins).toBeUndefined();
+    expect(stripped.gateway).toEqual({ mode: 'local' });
   });
 });
