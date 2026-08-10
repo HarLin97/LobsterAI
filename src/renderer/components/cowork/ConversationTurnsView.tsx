@@ -76,6 +76,7 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
           resolveLocalFilePath={resolveLocalFilePath}
           showTypingIndicator
           showCopyButtons={false}
+          isStreamingTurn
         />
       </div>
     );
@@ -128,6 +129,7 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
                   onOpenLocalService={onOpenLocalService}
                   showTypingIndicator={showTypingIndicator}
                   showCopyButtons={!isStreaming || !isLastTurn}
+                  isStreamingTurn={isStreaming && isLastTurn}
                 />
               </div>
             )}

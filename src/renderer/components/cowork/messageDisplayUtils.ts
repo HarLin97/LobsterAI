@@ -1110,3 +1110,262 @@ export const consolidateMediaPolling = (items: AssistantTurnItem[]): Consolidate
 
   return result;
 };
+
+// ── Activity grouping (collapsed consecutive tool/thinking steps) ────────────
+
+export type ActivityChunkEntry = { item: ConsolidatedItem; index: number };
+
+export type ConsolidatedRenderChunk =
+  | { kind: 'item'; item: ConsolidatedItem; index: number }
+  | { kind: 'activity_group'; entries: ActivityChunkEntry[] };
+
+/** Minimum consecutive work items before they collapse into one activity group. */
+export const ACTIVITY_GROUP_MIN_ITEMS = 2;
+
+/**
+ * Work items that read as intermediate agent activity rather than answer
+ * content: tool calls, media polling, orphan tool results, and thinking.
+ */
+export const isActivityConsolidatedItem = (item: ConsolidatedItem): boolean => {
+  if (item.type === 'tool_group' || item.type === 'media_polling_group' || item.type === 'tool_result') {
+    return true;
+  }
+  return item.type === 'assistant' && item.message.metadata?.isThinking === true;
+};
+
+export const chunkConsolidatedItemsForDisplay = (
+  items: ConsolidatedItem[],
+  isGroupable: (item: ConsolidatedItem, index: number) => boolean = isActivityConsolidatedItem,
+): ConsolidatedRenderChunk[] => {
+  const chunks: ConsolidatedRenderChunk[] = [];
+  let pending: ActivityChunkEntry[] = [];
+
+  const flushPending = () => {
+    if (pending.length === 0) return;
+    if (pending.length >= ACTIVITY_GROUP_MIN_ITEMS) {
+      chunks.push({ kind: 'activity_group', entries: pending });
+    } else {
+      for (const entry of pending) {
+        chunks.push({ kind: 'item', item: entry.item, index: entry.index });
+      }
+    }
+    pending = [];
+  };
+
+  items.forEach((item, index) => {
+    if (isGroupable(item, index)) {
+      pending.push({ item, index });
+      return;
+    }
+    flushPending();
+    chunks.push({ kind: 'item', item, index });
+  });
+  flushPending();
+  return chunks;
+};
+
+export type ActivityGroupSummary = {
+  stepCount: number;
+  durationMs: number | null;
+};
+
+const getActivityItemStepCount = (item: ConsolidatedItem): number => {
+  if (item.type === 'media_polling_group') {
+    return Math.max(1, item.group.polls.length);
+  }
+  return 1;
+};
+
+const collectActivityItemTimestamps = (item: ConsolidatedItem, out: number[]): void => {
+  const push = (value: unknown) => {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      out.push(value);
+    }
+  };
+  if (item.type === 'tool_group') {
+    push(item.group.toolUse.timestamp);
+    push(item.group.toolResult?.timestamp);
+    return;
+  }
+  if (item.type === 'media_polling_group') {
+    for (const poll of item.group.polls) {
+      push(poll.toolUse.timestamp);
+      push(poll.toolResult?.timestamp);
+    }
+    return;
+  }
+  push(item.message.timestamp);
+};
+
+const ACTIVITY_DURATION_MAX_MS = 24 * 60 * 60 * 1000;
+
+export const getActivityGroupSummary = (items: ConsolidatedItem[]): ActivityGroupSummary => {
+  let stepCount = 0;
+  const timestamps: number[] = [];
+
+  for (const item of items) {
+    stepCount += getActivityItemStepCount(item);
+    collectActivityItemTimestamps(item, timestamps);
+  }
+
+  let durationMs: number | null = null;
+  if (timestamps.length >= 2) {
+    const span = Math.max(...timestamps) - Math.min(...timestamps);
+    durationMs = span >= 1000 && span <= ACTIVITY_DURATION_MAX_MS ? span : null;
+  }
+
+  return { stepCount, durationMs };
+};
+
+export const formatActivityDuration = (durationMs: number | null): string | null => {
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 1000) return null;
+  const totalSeconds = Math.round(durationMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return i18nService.t('coworkActivityDurationHours')
+      .replace('{hours}', String(hours))
+      .replace('{minutes}', String(minutes));
+  }
+  if (minutes > 0) {
+    return i18nService.t('coworkActivityDurationMinutes')
+      .replace('{minutes}', String(minutes))
+      .replace('{seconds}', String(seconds));
+  }
+  return i18nService.t('coworkActivityDurationSeconds')
+    .replace('{seconds}', String(seconds));
+};
+
+const READ_TOOL_NAMES = new Set(['read', 'readfile']);
+const EDIT_TOOL_NAMES = new Set(['write', 'writefile', 'edit', 'editfile', 'multiedit']);
+
+const getFileBasename = (value: string): string => {
+  const normalized = value.replace(/\\/g, '/');
+  const lastSlash = normalized.lastIndexOf('/');
+  return lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+};
+
+type ActivityCategoryCounts = {
+  commands: number;
+  reads: number;
+  edits: number;
+  tools: number;
+  thinking: number;
+};
+
+const countActivityCategories = (items: ConsolidatedItem[]): ActivityCategoryCounts => {
+  const counts: ActivityCategoryCounts = { commands: 0, reads: 0, edits: 0, tools: 0, thinking: 0 };
+  for (const item of items) {
+    if (item.type === 'tool_group') {
+      const rawName = item.group.toolUse.metadata?.toolName;
+      const normalized = typeof rawName === 'string' ? normalizeToolName(rawName) : '';
+      if (isBashLikeToolName(typeof rawName === 'string' ? rawName : undefined)) {
+        counts.commands += 1;
+      } else if (READ_TOOL_NAMES.has(normalized)) {
+        counts.reads += 1;
+      } else if (EDIT_TOOL_NAMES.has(normalized)) {
+        counts.edits += 1;
+      } else {
+        counts.tools += 1;
+      }
+      continue;
+    }
+    if (item.type === 'media_polling_group') {
+      counts.tools += Math.max(1, item.group.polls.length);
+      continue;
+    }
+    if (item.type === 'tool_result') {
+      counts.tools += 1;
+      continue;
+    }
+    counts.thinking += 1;
+  }
+  return counts;
+};
+
+/**
+ * Natural-language summary for a collapsed activity group, e.g.
+ * "运行了 3 个命令、读取了 2 个文件" / "Ran 3 commands, read 2 files".
+ */
+export const getActivityGroupHeaderLabel = (items: ConsolidatedItem[]): string => {
+  const counts = countActivityCategories(items);
+  const segment = (count: number, oneKey: string, manyKey: string): string =>
+    i18nService.t(count === 1 ? oneKey : manyKey).replace('{count}', String(count));
+
+  const segments: string[] = [];
+  if (counts.commands > 0) {
+    segments.push(segment(counts.commands, 'coworkActivitySegmentCommand', 'coworkActivitySegmentCommands'));
+  }
+  if (counts.reads > 0) {
+    segments.push(segment(counts.reads, 'coworkActivitySegmentFileRead', 'coworkActivitySegmentFilesRead'));
+  }
+  if (counts.edits > 0) {
+    segments.push(segment(counts.edits, 'coworkActivitySegmentEdit', 'coworkActivitySegmentEdits'));
+  }
+  if (counts.tools > 0) {
+    segments.push(segment(counts.tools, 'coworkActivitySegmentTool', 'coworkActivitySegmentTools'));
+  }
+  if (segments.length === 0) {
+    return i18nService.t('coworkActivityThoughtProcess');
+  }
+  const joined = segments.join(i18nService.t('coworkActivitySegmentSeparator'));
+  return joined.charAt(0).toUpperCase() + joined.slice(1);
+};
+
+export type ActivityStepDisplay = { name: string; summary: string | null };
+
+/** Compact one-line row label for a tool step; file tools show just the basename. */
+export const getToolStepDisplay = (
+  rawToolName: string | undefined,
+  toolInput: Record<string, unknown> | undefined,
+): ActivityStepDisplay => {
+  const name = getToolDisplayName(rawToolName);
+  let summary = getToolInputSummary(rawToolName, toolInput);
+  if (summary) {
+    const normalized = rawToolName ? normalizeToolName(rawToolName) : '';
+    if (READ_TOOL_NAMES.has(normalized) || EDIT_TOOL_NAMES.has(normalized)) {
+      summary = getFileBasename(summary);
+    }
+    summary = truncatePreview(summary.split('\n')[0].trim(), 96);
+  }
+  return { name, summary: summary ?? null };
+};
+
+export const getActivityStepDisplay = (item: ConsolidatedItem): ActivityStepDisplay => {
+  if (item.type === 'tool_group') {
+    const rawName = item.group.toolUse.metadata?.toolName;
+    return getToolStepDisplay(
+      typeof rawName === 'string' ? rawName : undefined,
+      item.group.toolUse.metadata?.toolInput,
+    );
+  }
+  if (item.type === 'media_polling_group') {
+    return { name: getToolDisplayName(item.group.toolName), summary: null };
+  }
+  if (item.type === 'tool_result') {
+    return { name: i18nService.t('coworkToolResult'), summary: null };
+  }
+  return { name: i18nService.t('reasoning'), summary: null };
+};
+
+/**
+ * Live header text while the group is still streaming: mirrors the most
+ * recent step ("Read App.tsx", "思考中…"), like the Claude Code app header.
+ */
+export const getActivityCurrentActionText = (item: ConsolidatedItem): string => {
+  if (item.type === 'assistant') {
+    return i18nService.t('coworkActivityThinkingNow');
+  }
+  const mediaToolName = item.type === 'media_polling_group'
+    ? item.group.toolName
+    : item.type === 'tool_group' && isMediaStatusPoll(item.group)
+      ? item.group.toolUse.metadata?.toolName
+      : null;
+  if (typeof mediaToolName === 'string') {
+    const isVideo = normalizeToolName(mediaToolName) === 'lobsteraivideogenerate';
+    return i18nService.t(isVideo ? 'mediaGeneratingVideo' : 'mediaGeneratingImage');
+  }
+  const { name, summary } = getActivityStepDisplay(item);
+  return summary ? `${name} ${summary}` : name;
+};

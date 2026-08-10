@@ -12,9 +12,12 @@ import {
 const ThinkingBlock: React.FC<{
   message: CoworkMessage;
   mapDisplayText?: (value: string) => string;
-}> = ({ message, mapDisplayText }) => {
+  /** 'default' renders the standalone card; 'row' renders a compact list row for activity groups. */
+  variant?: 'default' | 'row';
+}> = ({ message, mapDisplayText, variant = 'default' }) => {
   const isCurrentlyStreaming = Boolean(message.metadata?.isStreaming);
-  const [isExpanded, setIsExpanded] = useState(isCurrentlyStreaming);
+  const isRowVariant = variant === 'row';
+  const [isExpanded, setIsExpanded] = useState(isCurrentlyStreaming && !isRowVariant);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
   const handleToggleExpanded = () => {
     const nextExpanded = !isExpanded;
@@ -32,12 +35,45 @@ const ThinkingBlock: React.FC<{
   };
 
   useEffect(() => {
+    if (isRowVariant) return;
     if (isCurrentlyStreaming) {
       setIsExpanded(true);
     } else {
       setIsExpanded(false);
     }
-  }, [isCurrentlyStreaming]);
+  }, [isCurrentlyStreaming, isRowVariant]);
+
+  if (isRowVariant) {
+    return (
+      <div>
+        <button
+          onClick={handleToggleExpanded}
+          className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-surface-raised/40 transition-colors"
+          aria-expanded={isExpanded}
+        >
+          <LightBulbIcon className="h-3.5 w-3.5 text-secondary flex-shrink-0" />
+          <span className="text-sm text-secondary">
+            {i18nService.t('reasoning')}
+          </span>
+          {isCurrentlyStreaming && (
+            <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse flex-shrink-0" />
+          )}
+          <ChevronRightIcon
+            className={`h-3.5 w-3.5 text-muted flex-shrink-0 transition-transform duration-200 ${
+              isExpanded ? 'rotate-90' : ''
+            }`}
+          />
+        </button>
+        {isExpanded && (
+          <div className="px-4 pb-3 max-h-[300px] overflow-y-auto">
+            <div className="text-xs leading-relaxed text-muted whitespace-pre-wrap">
+              {displayContent}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-border bg-surface-sunken/50 overflow-hidden">

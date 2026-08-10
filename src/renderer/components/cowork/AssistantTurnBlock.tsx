@@ -20,11 +20,14 @@ import { ArtifactPreviewCard } from '../artifacts';
 import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
 import InformationCircleIcon from '../icons/InformationCircleIcon';
 import MarkdownContent from '../MarkdownContent';
+import ActivityGroupBlock from './ActivityGroupBlock';
 import AssistantMessageItem from './AssistantMessageItem';
 import MediaPollingIndicator from './MediaPollingIndicator';
 import { MessageCopyButton } from './MessageActionButton';
 import {
+  chunkConsolidatedItemsForDisplay,
   collectMediaPollCounts,
+  type ConsolidatedItem,
   consolidateMediaPolling,
   type ConversationTurn,
   COWORK_DETAIL_CONTENT_CLASS,
@@ -38,6 +41,7 @@ import {
   getVideoPathArtifacts,
   getVisibleAssistantItems,
   hasText,
+  isActivityConsolidatedItem,
   isContextCompactionMessage,
   isDuplicateGeneratedVideoAssistantMessage,
   type ToolGroupItem,
@@ -269,6 +273,12 @@ const MediaImageInline: React.FC<{ artifacts: Artifact[] }> = ({ artifacts }) =>
 
 // ── AssistantTurnBlock ───────────────────────────────────────────────────────
 
+const getActivityGroupKey = (item: ConsolidatedItem): string => {
+  if (item.type === 'media_polling_group') return `media-${item.group.taskId}`;
+  if (item.type === 'tool_group') return item.group.toolUse.id;
+  return item.message.id;
+};
+
 const AssistantTurnBlock: React.FC<{
   turn: ConversationTurn;
   artifacts?: Artifact[];
@@ -288,6 +298,8 @@ const AssistantTurnBlock: React.FC<{
   showCopyButtons?: boolean;
   completedGoal?: CoworkGoal | null;
   searchTargetMessageId?: string | null;
+  /** True when this turn is the one currently streaming; keeps the latest activity step visible. */
+  isStreamingTurn?: boolean;
 }> = ({
   turn,
   artifacts,
@@ -307,6 +319,7 @@ const AssistantTurnBlock: React.FC<{
   showCopyButtons = true,
   completedGoal,
   searchTargetMessageId,
+  isStreamingTurn = false,
 }) => {
   const [artifactCardsExpanded, setArtifactCardsExpanded] = useState(false);
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
@@ -452,113 +465,146 @@ const AssistantTurnBlock: React.FC<{
     );
   };
 
+  const renderConsolidatedItem = (
+    item: ConsolidatedItem,
+    index: number,
+    displayVariant: 'timeline' | 'row' = 'timeline',
+  ): React.ReactNode => {
+    const isRowVariant = displayVariant === 'row';
+    if (item.type === 'media_polling_group') {
+      const nextItem = consolidatedItems[index + 1];
+      const isLastInSequence = isRowVariant
+        || !nextItem || (nextItem.type !== 'tool_group' && nextItem.type !== 'media_polling_group');
+      const retainedPollCount = getRetainedMediaPollCount(
+        { taskId: item.group.taskId, upstreamTaskId: item.group.upstreamTaskId },
+        retainedMediaPollCounts,
+      );
+      const indicator = (
+        <MediaPollingIndicator
+          key={`media-poll-${item.group.taskId}`}
+          group={{
+            ...item.group,
+            pollCount: retainedPollCount ?? item.group.pollCount,
+          }}
+          isLastInSequence={isLastInSequence}
+        />
+      );
+      return isRowVariant
+        ? <div key={`media-poll-${item.group.taskId}`} className="px-4 py-1.5">{indicator}</div>
+        : indicator;
+    }
+
+    if (item.type === 'assistant') {
+      if (item.message.metadata?.isThinking) {
+        return (
+          <ThinkingBlock
+            key={item.message.id}
+            message={item.message}
+            mapDisplayText={mapDisplayText}
+            variant={isRowVariant ? 'row' : 'default'}
+          />
+        );
+      }
+
+      if (isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) {
+        return null;
+      }
+
+      // Check if there are image artifacts for this message (inline MEDIA display)
+      const imageArtifacts = artifacts?.filter(a =>
+        a.type === 'image' && a.messageId === item.message.id,
+      );
+      if (imageArtifacts && imageArtifacts.length > 0 && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
+        return (
+          <MediaImageInline key={item.message.id} artifacts={imageArtifacts} />
+        );
+      }
+
+      const hasToolGroupAfter = consolidatedItems
+        .slice(index + 1)
+        .some(laterItem => laterItem.type === 'tool_group' || laterItem.type === 'media_polling_group');
+      const isLastAssistant = showCopyButtons && !hasToolGroupAfter;
+      const hasAssistantAfter = consolidatedItems
+        .slice(index + 1)
+        .some(laterItem => laterItem.type === 'assistant');
+
+      return (
+        <AssistantMessageItem
+          key={item.message.id}
+          message={item.message}
+          resolveLocalFilePath={resolveLocalFilePath}
+          mapDisplayText={mapDisplayText}
+          showCopyButton={isLastAssistant}
+          onFork={isLastAssistant ? onForkMessage : undefined}
+          turnMetadata={isLastAssistant ? (item.message.metadata as CoworkMessageMetadata) : undefined}
+          completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
+          planConfirmationMessageId={planConfirmationMessageId}
+          onConfirmPlan={onConfirmPlan}
+          onAdjustPlan={onAdjustPlan}
+          forceSearchExpanded={searchTargetMessageId === item.message.id}
+        />
+      );
+    }
+
+    if (item.type === 'tool_group') {
+      const nextItem = consolidatedItems[index + 1];
+      const isLastInSequence = isRowVariant
+        || !nextItem || (nextItem.type !== 'tool_group' && nextItem.type !== 'media_polling_group');
+      return (
+        <ToolCallGroup
+          key={`tool-${item.group.toolUse.id}`}
+          group={item.group}
+          isLastInSequence={isLastInSequence}
+          mapDisplayText={mapDisplayText}
+          retainedMediaPollCounts={retainedMediaPollCounts}
+          footer={renderToolGroupFooter?.(item.group)}
+          variant={displayVariant}
+        />
+      );
+    }
+
+    if (item.type === 'system') {
+      const systemMessage = renderSystemMessage(item.message);
+      if (!systemMessage) {
+        return null;
+      }
+      return (
+        <div key={item.message.id}>
+          {systemMessage}
+        </div>
+      );
+    }
+
+    return (
+      <div key={item.message.id} className={isRowVariant ? 'px-4 py-1.5' : undefined}>
+        {renderOrphanToolResult(item.message)}
+      </div>
+    );
+  };
+
+  // Tool groups with a footer (e.g. subagent links) stay visible on their own.
+  const renderChunks = chunkConsolidatedItemsForDisplay(
+    consolidatedItems,
+    (item) => isActivityConsolidatedItem(item)
+      && !(item.type === 'tool_group' && renderToolGroupFooter?.(item.group)),
+  );
+
   return (
     <div className={`py-2 ${COWORK_DETAIL_GUTTER_CLASS}`}>
       <div className={COWORK_DETAIL_CONTENT_CLASS}>
         <div className="flex items-start gap-3">
           <div className="flex-1 min-w-0 py-3 space-y-3">
-            {consolidatedItems.map((item, index) => {
-              if (item.type === 'media_polling_group') {
-                const nextItem = consolidatedItems[index + 1];
-                const isLastInSequence = !nextItem || (nextItem.type !== 'tool_group' && nextItem.type !== 'media_polling_group');
-                const retainedPollCount = getRetainedMediaPollCount(
-                  { taskId: item.group.taskId, upstreamTaskId: item.group.upstreamTaskId },
-                  retainedMediaPollCounts,
-                );
-                return (
-                  <MediaPollingIndicator
-                    key={`media-poll-${item.group.taskId}`}
-                    group={{
-                      ...item.group,
-                      pollCount: retainedPollCount ?? item.group.pollCount,
-                    }}
-                    isLastInSequence={isLastInSequence}
-                  />
-                );
+            {renderChunks.map((chunk, chunkIndex) => {
+              if (chunk.kind === 'item') {
+                return renderConsolidatedItem(chunk.item, chunk.index);
               }
-
-              if (item.type === 'assistant') {
-                if (item.message.metadata?.isThinking) {
-                  return (
-                    <ThinkingBlock
-                      key={item.message.id}
-                      message={item.message}
-                      mapDisplayText={mapDisplayText}
-                    />
-                  );
-                }
-
-                if (isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) {
-                  return null;
-                }
-
-                // Check if there are image artifacts for this message (inline MEDIA display)
-                const imageArtifacts = artifacts?.filter(a =>
-                  a.type === 'image' && a.messageId === item.message.id,
-                );
-                if (imageArtifacts && imageArtifacts.length > 0 && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
-                  return (
-                    <MediaImageInline key={item.message.id} artifacts={imageArtifacts} />
-                  );
-                }
-
-                const hasToolGroupAfter = consolidatedItems
-                  .slice(index + 1)
-                  .some(laterItem => laterItem.type === 'tool_group' || laterItem.type === 'media_polling_group');
-                const isLastAssistant = showCopyButtons && !hasToolGroupAfter;
-                const hasAssistantAfter = consolidatedItems
-                  .slice(index + 1)
-                  .some(laterItem => laterItem.type === 'assistant');
-
-                return (
-                  <AssistantMessageItem
-                    key={item.message.id}
-                    message={item.message}
-                    resolveLocalFilePath={resolveLocalFilePath}
-                    mapDisplayText={mapDisplayText}
-                    showCopyButton={isLastAssistant}
-                    onFork={isLastAssistant ? onForkMessage : undefined}
-                    turnMetadata={isLastAssistant ? (item.message.metadata as CoworkMessageMetadata) : undefined}
-                    completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
-                    planConfirmationMessageId={planConfirmationMessageId}
-                    onConfirmPlan={onConfirmPlan}
-                    onAdjustPlan={onAdjustPlan}
-                    forceSearchExpanded={searchTargetMessageId === item.message.id}
-                  />
-                );
-              }
-
-              if (item.type === 'tool_group') {
-                const nextItem = consolidatedItems[index + 1];
-                const isLastInSequence = !nextItem || (nextItem.type !== 'tool_group' && nextItem.type !== 'media_polling_group');
-                return (
-                  <ToolCallGroup
-                    key={`tool-${item.group.toolUse.id}`}
-                    group={item.group}
-                    isLastInSequence={isLastInSequence}
-                    mapDisplayText={mapDisplayText}
-                    retainedMediaPollCounts={retainedMediaPollCounts}
-                    footer={renderToolGroupFooter?.(item.group)}
-                  />
-                );
-              }
-
-              if (item.type === 'system') {
-                const systemMessage = renderSystemMessage(item.message);
-                if (!systemMessage) {
-                  return null;
-                }
-                return (
-                  <div key={item.message.id}>
-                    {systemMessage}
-                  </div>
-                );
-              }
-
               return (
-                <div key={item.message.id}>
-                  {renderOrphanToolResult(item.message)}
-                </div>
+                <ActivityGroupBlock
+                  key={`activity-${getActivityGroupKey(chunk.entries[0].item)}`}
+                  entries={chunk.entries}
+                  isStreamingTail={isStreamingTurn && chunkIndex === renderChunks.length - 1}
+                  renderEntry={(entry) => renderConsolidatedItem(entry.item, entry.index, 'row')}
+                />
               );
             })}
             {showTypingIndicator && <TypingDots />}

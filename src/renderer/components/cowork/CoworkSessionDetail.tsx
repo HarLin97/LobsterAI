@@ -5219,6 +5219,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             onConfirmPlan={handleConfirmPlan}
             onAdjustPlan={handleAdjustPlan}
             searchTargetMessageId={activeConversationSearchMatch?.messageId}
+            isStreamingTurn
           />
         </div>
       );
@@ -5300,6 +5301,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 onConfirmPlan={handleConfirmPlan}
                 onAdjustPlan={handleAdjustPlan}
                 searchTargetMessageId={activeConversationSearchMatch?.messageId}
+                isStreamingTurn={isStreaming && isLastTurn}
               />
             </div>
           )}
