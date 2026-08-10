@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronUpIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { classifyErrorKey } from '../../../common/coworkErrorClassify';
@@ -22,6 +22,7 @@ import InformationCircleIcon from '../icons/InformationCircleIcon';
 import MarkdownContent from '../MarkdownContent';
 import ActivityGroupBlock from './ActivityGroupBlock';
 import AssistantMessageItem from './AssistantMessageItem';
+import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
 import { MessageCopyButton } from './MessageActionButton';
 import {
@@ -33,6 +34,7 @@ import {
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
   formatElapsedDuration,
+  formatTurnDuration,
   getActivityIndicatorStatusText,
   getContextCompactionMessageLabel,
   getMediaCompletionDisplayText,
@@ -41,6 +43,9 @@ import {
   getToolResultLineCount,
   getToolResultLineCountSummary,
   getTurnActivityFingerprint,
+  getTurnAnswerStartIndex,
+  getTurnEndTimestamp,
+  getTurnStartTimestamp,
   getVideoPathArtifacts,
   getVisibleAssistantItems,
   hasText,
@@ -132,45 +137,26 @@ const ContextCompactionDivider: React.FC<{ label: string; active?: boolean }> = 
 );
 
 // ── ActivityIndicator ────────────────────────────────────────────────────────
-// Single busy-state indicator at the insertion point of the last turn:
-// breathing dot + shimmering status text + elapsed time. Rendered only in
-// quiet gaps (no pending tool row, no flowing output) so at most one element
-// on screen animates at a time.
+// Persistent busy-state line at the insertion point of the last turn
+// (Codex / ChatGPT style): breathing dot + shimmering status text + elapsed
+// time, visible for the whole run. The label starts as "thinking" and
+// switches to "working" once the turn has shown any content.
 
-const ACTIVITY_QUIET_DELAY_MS = 1500;
-const ACTIVITY_TIMER_APPEAR_DELAY_MS = 2000;
+// One tick: the first value the user sees is "1s", counting up naturally.
+const ACTIVITY_TIMER_APPEAR_DELAY_MS = 1000;
 const ACTIVITY_LONG_WAIT_HINT_DELAY_MS = 30_000;
 
 const ActivityIndicator: React.FC<{
   fingerprint: string;
-  showImmediately: boolean;
+  hasContent: boolean;
   startTimestamp: number | null;
   statusTextOverride?: string | null;
-}> = ({ fingerprint, showImmediately, startTimestamp, statusTextOverride }) => {
-  const [visible, setVisible] = useState(showImmediately);
+}> = ({ fingerprint, hasContent, startTimestamp, statusTextOverride }) => {
   const [isLongWaiting, setIsLongWaiting] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const startRef = useRef<number>(startTimestamp ?? Date.now());
 
-  useEffect(() => {
-    if (typeof startTimestamp === 'number') {
-      startRef.current = startTimestamp;
-    }
-  }, [startTimestamp]);
-
-  // Once content exists, only fade in after output has been quiet for a
-  // moment so the indicator never competes with flowing text; a turn with no
-  // content yet shows it immediately.
-  useEffect(() => {
-    if (showImmediately) {
-      setVisible(true);
-      return undefined;
-    }
-    setVisible(false);
-    const timeoutId = window.setTimeout(() => setVisible(true), ACTIVITY_QUIET_DELAY_MS);
-    return () => window.clearTimeout(timeoutId);
-  }, [fingerprint, showImmediately]);
-
+  // The long-wait hint resets whenever streamed content grows, so it only
+  // appears after the model has been silent for a while.
   useEffect(() => {
     setIsLongWaiting(false);
     const timeoutId = window.setTimeout(
@@ -181,22 +167,23 @@ const ActivityIndicator: React.FC<{
   }, [fingerprint]);
 
   useEffect(() => {
-    if (!visible) return undefined;
     setNow(Date.now());
     const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(intervalId);
-  }, [visible]);
+  }, []);
 
-  if (!visible) return null;
-
-  const elapsedMs = now - startRef.current;
-  const statusText = statusTextOverride ?? getActivityIndicatorStatusText(false, isLongWaiting);
+  // Elapsed time is anchored to message timestamps so it survives remounts
+  // (switching sessions/views); until the turn has a timestamp, show no
+  // counter rather than one restarted from zero.
+  const elapsedMs = startTimestamp != null ? Math.max(0, now - startTimestamp) : null;
+  const statusText = statusTextOverride
+    ?? getActivityIndicatorStatusText(false, isLongWaiting, hasContent);
 
   return (
     <div className="flex items-center gap-2 py-1 animate-fade-in" role="status" aria-live="polite">
       <span className="activity-indicator-dot h-2 w-2 rounded-full bg-primary flex-shrink-0" aria-hidden="true" />
       <span className="shimmer-text text-sm text-secondary min-w-0 truncate">{statusText}</span>
-      {elapsedMs >= ACTIVITY_TIMER_APPEAR_DELAY_MS && (
+      {elapsedMs != null && elapsedMs >= ACTIVITY_TIMER_APPEAR_DELAY_MS && (
         <span className="text-xs text-muted tabular-nums flex-shrink-0 animate-fade-in">
           {formatElapsedDuration(elapsedMs)}
         </span>
@@ -360,7 +347,8 @@ const AssistantTurnBlock: React.FC<{
   planConfirmationMessageId?: string | null;
   onConfirmPlan?: (messageId: string) => void;
   onAdjustPlan?: (messageId: string) => void;
-  renderToolGroupFooter?: (group: ToolGroupItem) => React.ReactNode;
+  /** Replaces a tool_group's rendering entirely (e.g. subagent spawn cards). */
+  renderToolGroupOverride?: (group: ToolGroupItem) => React.ReactNode;
   showActivityIndicator?: boolean;
   activityStatusOverride?: string | null;
   showCopyButtons?: boolean;
@@ -368,6 +356,8 @@ const AssistantTurnBlock: React.FC<{
   searchTargetMessageId?: string | null;
   /** True when this turn is the one currently streaming; keeps the latest activity step visible. */
   isStreamingTurn?: boolean;
+  /** True while subagents spawned in this turn are still running; keeps the process unfolded. */
+  hasRunningSubagents?: boolean;
 }> = ({
   turn,
   artifacts,
@@ -382,15 +372,17 @@ const AssistantTurnBlock: React.FC<{
   planConfirmationMessageId,
   onConfirmPlan,
   onAdjustPlan,
-  renderToolGroupFooter,
+  renderToolGroupOverride,
   showActivityIndicator = false,
   activityStatusOverride = null,
   showCopyButtons = true,
   completedGoal,
   searchTargetMessageId,
   isStreamingTurn = false,
+  hasRunningSubagents = false,
 }) => {
   const [artifactCardsExpanded, setArtifactCardsExpanded] = useState(false);
+  const [processExpanded, setProcessExpanded] = useState(false);
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
   const consolidatedItems = useMemo(
     () => consolidateMediaPolling(visibleAssistantItems),
@@ -432,6 +424,7 @@ const AssistantTurnBlock: React.FC<{
 
   useEffect(() => {
     setArtifactCardsExpanded(false);
+    setProcessExpanded(false);
   }, [turn.id]);
 
   const renderSystemMessage = (message: CoworkMessage) => {
@@ -534,16 +527,32 @@ const AssistantTurnBlock: React.FC<{
     );
   };
 
+  // Tool groups with an override (e.g. subagent cards) stay visible on their own.
+  const renderChunks = chunkConsolidatedItemsForDisplay(
+    consolidatedItems,
+    (item) => isActivityConsolidatedItem(item)
+      && !(item.type === 'tool_group' && renderToolGroupOverride?.(item.group)),
+  );
+
+  // Indices that render as standalone timeline rows; the timeline connector
+  // only draws between two consecutive ones (collapsed groups broke the old
+  // next-item heuristic).
+  const timelineToolIndices = new Set(
+    renderChunks
+      .filter((chunk): chunk is Extract<typeof renderChunks[number], { kind: 'item' }> => chunk.kind === 'item')
+      .filter((chunk) => chunk.item.type === 'tool_group' || chunk.item.type === 'media_polling_group')
+      .map((chunk) => chunk.index),
+  );
+
   const renderConsolidatedItem = (
     item: ConsolidatedItem,
     index: number,
     displayVariant: 'timeline' | 'row' = 'timeline',
+    rowInitiallyExpanded = false,
   ): React.ReactNode => {
     const isRowVariant = displayVariant === 'row';
     if (item.type === 'media_polling_group') {
-      const nextItem = consolidatedItems[index + 1];
-      const isLastInSequence = isRowVariant
-        || !nextItem || (nextItem.type !== 'tool_group' && nextItem.type !== 'media_polling_group');
+      const isLastInSequence = isRowVariant || !timelineToolIndices.has(index + 1);
       const retainedPollCount = getRetainedMediaPollCount(
         { taskId: item.group.taskId, upstreamTaskId: item.group.upstreamTaskId },
         retainedMediaPollCounts,
@@ -571,6 +580,7 @@ const AssistantTurnBlock: React.FC<{
             message={item.message}
             mapDisplayText={mapDisplayText}
             variant={isRowVariant ? 'row' : 'default'}
+            initiallyExpanded={rowInitiallyExpanded}
           />
         );
       }
@@ -616,9 +626,15 @@ const AssistantTurnBlock: React.FC<{
     }
 
     if (item.type === 'tool_group') {
-      const nextItem = consolidatedItems[index + 1];
-      const isLastInSequence = isRowVariant
-        || !nextItem || (nextItem.type !== 'tool_group' && nextItem.type !== 'media_polling_group');
+      const override = renderToolGroupOverride?.(item.group);
+      if (override) {
+        return (
+          <div key={`tool-${item.group.toolUse.id}`}>
+            {override}
+          </div>
+        );
+      }
+      const isLastInSequence = isRowVariant || !timelineToolIndices.has(index + 1);
       return (
         <ToolCallGroup
           key={`tool-${item.group.toolUse.id}`}
@@ -626,8 +642,8 @@ const AssistantTurnBlock: React.FC<{
           isLastInSequence={isLastInSequence}
           mapDisplayText={mapDisplayText}
           retainedMediaPollCounts={retainedMediaPollCounts}
-          footer={renderToolGroupFooter?.(item.group)}
           variant={displayVariant}
+          initiallyExpanded={rowInitiallyExpanded}
         />
       );
     }
@@ -651,36 +667,92 @@ const AssistantTurnBlock: React.FC<{
     );
   };
 
-  // Tool groups with a footer (e.g. subagent links) stay visible on their own.
-  const renderChunks = chunkConsolidatedItemsForDisplay(
-    consolidatedItems,
-    (item) => isActivityConsolidatedItem(item)
-      && !(item.type === 'tool_group' && renderToolGroupFooter?.(item.group)),
+  const renderChunk = (chunk: (typeof renderChunks)[number], chunkIndex: number): React.ReactNode => {
+    if (chunk.kind === 'item') {
+      return renderConsolidatedItem(chunk.item, chunk.index);
+    }
+    return (
+      <ActivityGroupBlock
+        key={`activity-${getActivityGroupKey(chunk.entries[0].item)}`}
+        entries={chunk.entries}
+        isStreamingTail={isStreamingTurn && chunkIndex === renderChunks.length - 1}
+        renderEntry={(entry, options) =>
+          renderConsolidatedItem(entry.item, entry.index, 'row', options?.initiallyExpanded)}
+      />
+    );
+  };
+
+  // Once the turn completes, everything before the final answer folds behind
+  // a single duration line so the user reads input → answer, expanding only
+  // when they want the process. A turn with subagents still running is not
+  // complete — their working cards must stay visible.
+  const answerStartIndex = getTurnAnswerStartIndex(renderChunks);
+  const processChunks = renderChunks.slice(0, answerStartIndex);
+  const answerChunks = renderChunks.slice(answerStartIndex);
+  const shouldFoldProcess = !isStreamingTurn && !hasRunningSubagents && processChunks.length > 0;
+  const processContainsSearchTarget = Boolean(searchTargetMessageId) && processChunks.some(
+    (chunk) => chunk.kind === 'item'
+      && chunk.item.type === 'assistant'
+      && chunk.item.message.id === searchTargetMessageId,
   );
+  const isProcessExpanded = processExpanded || processContainsSearchTarget;
+  const turnStartTimestamp = getTurnStartTimestamp(turn);
+  const turnEndTimestamp = getTurnEndTimestamp(turn);
+  const processDurationMs = turnStartTimestamp != null && turnEndTimestamp != null
+    ? turnEndTimestamp - turnStartTimestamp
+    : null;
+  const processLabel = processDurationMs != null && processDurationMs >= 1000
+    ? i18nService.t('coworkTurnProcessDuration').replace('{duration}', formatTurnDuration(processDurationMs))
+    : i18nService.t('coworkTurnProcess');
+
+  const handleProcessToggle = () => {
+    const nextExpanded = !isProcessExpanded;
+    reportConversationBlockAction({
+      actionType: nextExpanded ? 'turn_process_expand' : 'turn_process_collapse',
+      blockType: 'turn_process',
+      params: {
+        processChunkCount: processChunks.length,
+        durationMs: processDurationMs ?? undefined,
+      },
+    });
+    setProcessExpanded(nextExpanded);
+  };
 
   return (
     <div className={`py-2 ${COWORK_DETAIL_GUTTER_CLASS}`}>
       <div className={COWORK_DETAIL_CONTENT_CLASS}>
         <div className="flex items-start gap-3">
           <div className="flex-1 min-w-0 py-3 space-y-3">
-            {renderChunks.map((chunk, chunkIndex) => {
-              if (chunk.kind === 'item') {
-                return renderConsolidatedItem(chunk.item, chunk.index);
-              }
-              return (
-                <ActivityGroupBlock
-                  key={`activity-${getActivityGroupKey(chunk.entries[0].item)}`}
-                  entries={chunk.entries}
-                  isStreamingTail={isStreamingTurn && chunkIndex === renderChunks.length - 1}
-                  renderEntry={(entry) => renderConsolidatedItem(entry.item, entry.index, 'row')}
-                />
-              );
-            })}
+            {shouldFoldProcess ? (
+              <>
+                <div className="py-1">
+                  <button
+                    type="button"
+                    onClick={handleProcessToggle}
+                    className="group flex max-w-full items-center gap-1.5 text-left"
+                    aria-expanded={isProcessExpanded}
+                  >
+                    <span className="min-w-0 truncate text-sm text-secondary transition-colors group-hover:text-foreground">
+                      {processLabel}
+                    </span>
+                    <ChevronRightIcon
+                      className={`h-3.5 w-3.5 flex-shrink-0 text-muted transition-transform duration-200 group-hover:text-secondary ${
+                        isProcessExpanded ? 'rotate-90' : ''
+                      }`}
+                    />
+                  </button>
+                </div>
+                {isProcessExpanded && processChunks.map((chunk, index) => renderChunk(chunk, index))}
+                {answerChunks.map((chunk, index) => renderChunk(chunk, answerStartIndex + index))}
+              </>
+            ) : (
+              renderChunks.map((chunk, chunkIndex) => renderChunk(chunk, chunkIndex))
+            )}
             {showActivityIndicator && (
               <ActivityIndicator
                 fingerprint={getTurnActivityFingerprint(turn)}
-                showImmediately={visibleAssistantItems.length === 0 || Boolean(activityStatusOverride)}
-                startTimestamp={turn.userMessage?.timestamp ?? null}
+                hasContent={visibleAssistantItems.length > 0}
+                startTimestamp={getTurnStartTimestamp(turn)}
                 statusTextOverride={activityStatusOverride}
               />
             )}

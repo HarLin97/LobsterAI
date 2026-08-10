@@ -14,7 +14,6 @@ import LazyRenderTurn from './LazyRenderTurn';
 import {
   buildConversationTurns,
   buildDisplayItems,
-  turnHasSelfIndicatingActivity,
 } from './messageDisplayUtils';
 import UserMessageItem from './UserMessageItem';
 
@@ -86,7 +85,7 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
     <div className={className}>
       {turns.map((turn, index) => {
         const isLastTurn = index === turns.length - 1;
-        const showActivityIndicator = isStreaming && isLastTurn && !turnHasSelfIndicatingActivity(turn);
+        const showActivityIndicator = isStreaming && isLastTurn;
         const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator;
         const alwaysRender = index >= turns.length - 3;
 

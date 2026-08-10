@@ -135,6 +135,8 @@ export const getToolDisplayName = (toolName: string | undefined): string => {
       return 'Process';
     case 'sessionsspawn':
       return 'Subagent';
+    case 'sessionsyield':
+      return i18nService.t('coworkToolWaitingSubagents');
     default:
       return toolName;
   }
@@ -413,13 +415,15 @@ export const getLargeToolResultSummary = (sizeLabel: string): string =>
 export const getActivityIndicatorStatusText = (
   isContextMaintenance = false,
   isLongWaiting = false,
+  hasContent = false,
 ): string => {
   if (isContextMaintenance) {
     return i18nService.t('coworkContextMaintenanceRunning');
   }
-  return isLongWaiting
-    ? i18nService.t('coworkModelResponseWaitingLong')
-    : i18nService.t('coworkThinking');
+  if (isLongWaiting) {
+    return i18nService.t('coworkModelResponseWaitingLong');
+  }
+  return i18nService.t(hasContent ? 'coworkProcessing' : 'coworkThinking');
 };
 
 export const formatElapsedDuration = (elapsedMs: number): string => {
@@ -538,6 +542,69 @@ export const turnHasSelfIndicatingActivity = (turn: ConversationTurn): boolean =
       && Boolean(item.message.metadata?.isThinking)
       && Boolean(item.message.metadata?.isStreaming);
   });
+
+// Earliest message timestamp in the turn — the stable start time for the
+// activity indicator's elapsed counter. Falls back across the user message
+// and assistant items so orphan turns (e.g. after context compaction) keep
+// a stable start across remounts; null when the turn has no timestamps yet.
+export const getTurnStartTimestamp = (turn: ConversationTurn): number | null => {
+  let earliest: number | null = null;
+  const consider = (value: unknown) => {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      earliest = earliest == null ? value : Math.min(earliest, value);
+    }
+  };
+  consider(turn.userMessage?.timestamp);
+  for (const item of turn.assistantItems) {
+    if (item.type === 'tool_group') {
+      consider(item.group.toolUse.timestamp);
+      consider(item.group.toolResult?.timestamp);
+      continue;
+    }
+    consider(item.message.timestamp);
+  }
+  return earliest;
+};
+
+// Latest message timestamp in the turn — the end anchor for the completed
+// turn's total duration line.
+export const getTurnEndTimestamp = (turn: ConversationTurn): number | null => {
+  let latest: number | null = null;
+  const consider = (value: unknown) => {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      latest = latest == null ? value : Math.max(latest, value);
+    }
+  };
+  consider(turn.userMessage?.timestamp);
+  for (const item of turn.assistantItems) {
+    if (item.type === 'tool_group') {
+      consider(item.group.toolUse.timestamp);
+      consider(item.group.toolResult?.timestamp);
+      continue;
+    }
+    consider(item.message.timestamp);
+  }
+  return latest;
+};
+
+/** Localized duration for the collapsed-process line, e.g. "21分钟 45秒" / "21m 45s". */
+export const formatTurnDuration = (durationMs: number): string => {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return i18nService.t('coworkDurationHours')
+      .replace('{hours}', String(hours))
+      .replace('{minutes}', String(minutes));
+  }
+  if (minutes > 0) {
+    return i18nService.t('coworkDurationMinutes')
+      .replace('{minutes}', String(minutes))
+      .replace('{seconds}', String(seconds));
+  }
+  return i18nService.t('coworkDurationSecondsOnly').replace('{seconds}', String(seconds));
+};
 
 // Changes whenever streamed content for the turn grows. The activity
 // indicator uses this to tell "output is flowing" (stay hidden) from a quiet
@@ -1133,15 +1200,21 @@ export type ConsolidatedRenderChunk =
   | { kind: 'item'; item: ConsolidatedItem; index: number }
   | { kind: 'activity_group'; entries: ActivityChunkEntry[] };
 
-/** Minimum consecutive work items before they collapse into one activity group. */
-export const ACTIVITY_GROUP_MIN_ITEMS = 2;
+/**
+ * Every run of consecutive work items collapses, even a run of one, so
+ * assistant turns read as summary lines interleaved with text (Claude
+ * Code app style) instead of mixing collapsed groups with raw tool rows.
+ */
+export const ACTIVITY_GROUP_MIN_ITEMS = 1;
 
 /**
  * Work items that read as intermediate agent activity rather than answer
- * content: tool calls, media polling, orphan tool results, and thinking.
+ * content: tool calls, orphan tool results, and thinking. Media polling
+ * groups stay standalone — their indicator carries live progress and a
+ * cancel action that must not disappear behind a collapsed header.
  */
 export const isActivityConsolidatedItem = (item: ConsolidatedItem): boolean => {
-  if (item.type === 'tool_group' || item.type === 'media_polling_group' || item.type === 'tool_result') {
+  if (item.type === 'tool_group' || item.type === 'tool_result') {
     return true;
   }
   return item.type === 'assistant' && item.message.metadata?.isThinking === true;
@@ -1178,9 +1251,27 @@ export const chunkConsolidatedItemsForDisplay = (
   return chunks;
 };
 
+/**
+ * Where the turn's final answer begins: the trailing run of plain assistant
+ * text (and system notices) at the end of the chunk list. Everything before
+ * it is intermediate process that folds away once the turn completes.
+ */
+export const getTurnAnswerStartIndex = (chunks: ConsolidatedRenderChunk[]): number => {
+  let index = chunks.length;
+  while (index > 0) {
+    const chunk = chunks[index - 1];
+    if (chunk.kind !== 'item') break;
+    const item = chunk.item;
+    const isAnswerItem = item.type === 'system'
+      || (item.type === 'assistant' && item.message.metadata?.isThinking !== true);
+    if (!isAnswerItem) break;
+    index -= 1;
+  }
+  return index;
+};
+
 export type ActivityGroupSummary = {
   stepCount: number;
-  durationMs: number | null;
 };
 
 const getActivityItemStepCount = (item: ConsolidatedItem): number => {
@@ -1190,69 +1281,18 @@ const getActivityItemStepCount = (item: ConsolidatedItem): number => {
   return 1;
 };
 
-const collectActivityItemTimestamps = (item: ConsolidatedItem, out: number[]): void => {
-  const push = (value: unknown) => {
-    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-      out.push(value);
-    }
-  };
-  if (item.type === 'tool_group') {
-    push(item.group.toolUse.timestamp);
-    push(item.group.toolResult?.timestamp);
-    return;
-  }
-  if (item.type === 'media_polling_group') {
-    for (const poll of item.group.polls) {
-      push(poll.toolUse.timestamp);
-      push(poll.toolResult?.timestamp);
-    }
-    return;
-  }
-  push(item.message.timestamp);
-};
-
-const ACTIVITY_DURATION_MAX_MS = 24 * 60 * 60 * 1000;
-
 export const getActivityGroupSummary = (items: ConsolidatedItem[]): ActivityGroupSummary => {
   let stepCount = 0;
-  const timestamps: number[] = [];
-
   for (const item of items) {
     stepCount += getActivityItemStepCount(item);
-    collectActivityItemTimestamps(item, timestamps);
   }
-
-  let durationMs: number | null = null;
-  if (timestamps.length >= 2) {
-    const span = Math.max(...timestamps) - Math.min(...timestamps);
-    durationMs = span >= 1000 && span <= ACTIVITY_DURATION_MAX_MS ? span : null;
-  }
-
-  return { stepCount, durationMs };
-};
-
-export const formatActivityDuration = (durationMs: number | null): string | null => {
-  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 1000) return null;
-  const totalSeconds = Math.round(durationMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return i18nService.t('coworkActivityDurationHours')
-      .replace('{hours}', String(hours))
-      .replace('{minutes}', String(minutes));
-  }
-  if (minutes > 0) {
-    return i18nService.t('coworkActivityDurationMinutes')
-      .replace('{minutes}', String(minutes))
-      .replace('{seconds}', String(seconds));
-  }
-  return i18nService.t('coworkActivityDurationSeconds')
-    .replace('{seconds}', String(seconds));
+  return { stepCount };
 };
 
 const READ_TOOL_NAMES = new Set(['read', 'readfile']);
-const EDIT_TOOL_NAMES = new Set(['write', 'writefile', 'edit', 'editfile', 'multiedit']);
+const WRITE_TOOL_NAMES = new Set(['write', 'writefile']);
+const EDIT_ONLY_TOOL_NAMES = new Set(['edit', 'editfile', 'multiedit']);
+const EDIT_TOOL_NAMES = new Set([...WRITE_TOOL_NAMES, ...EDIT_ONLY_TOOL_NAMES]);
 
 const getFileBasename = (value: string): string => {
   const normalized = value.replace(/\\/g, '/');
@@ -1301,8 +1341,13 @@ const countActivityCategories = (items: ConsolidatedItem[]): ActivityCategoryCou
 /**
  * Natural-language summary for a collapsed activity group, e.g.
  * "运行了 3 个命令、读取了 2 个文件" / "Ran 3 commands, read 2 files".
+ * A single-step group shows the concrete action ("Read App.tsx") instead.
  */
 export const getActivityGroupHeaderLabel = (items: ConsolidatedItem[]): string => {
+  if (items.length === 1 && items[0].type !== 'assistant') {
+    const step = getActivityStepDisplay(items[0]);
+    return step.summary ? `${step.name} ${step.summary}` : step.name;
+  }
   const counts = countActivityCategories(items);
   const segment = (count: number, oneKey: string, manyKey: string): string =>
     i18nService.t(count === 1 ? oneKey : manyKey).replace('{count}', String(count));
@@ -1364,8 +1409,8 @@ export const getActivityStepDisplay = (item: ConsolidatedItem): ActivityStepDisp
 };
 
 /**
- * Live header text while the group is still streaming: mirrors the most
- * recent step ("Read App.tsx", "思考中…"), like the Claude Code app header.
+ * Live header text while the current step is still running: a verb phrase
+ * mirroring the Claude Code app ("Editing Settings.tsx", "正在运行 npm test").
  */
 export const getActivityCurrentActionText = (item: ConsolidatedItem): string => {
   if (item.type === 'assistant') {
@@ -1379,6 +1424,36 @@ export const getActivityCurrentActionText = (item: ConsolidatedItem): string => 
   if (typeof mediaToolName === 'string') {
     const isVideo = normalizeToolName(mediaToolName) === 'lobsteraivideogenerate';
     return i18nService.t(isVideo ? 'mediaGeneratingVideo' : 'mediaGeneratingImage');
+  }
+  if (item.type === 'tool_group') {
+    const rawName = item.group.toolUse.metadata?.toolName;
+    const toolName = typeof rawName === 'string' ? rawName : undefined;
+    const normalized = toolName ? normalizeToolName(toolName) : '';
+    if (normalized === 'sessionsyield') {
+      return i18nService.t('coworkActivityLiveWaitSubagents');
+    }
+    if (normalized === 'sessionsspawn') {
+      return i18nService.t('coworkActivityLiveSpawnSubagent');
+    }
+    const { summary } = getToolStepDisplay(toolName, item.group.toolUse.metadata?.toolInput);
+    const verb = (templateKey: string, genericKey: string): string => (
+      summary
+        ? i18nService.t(templateKey).replace('{target}', summary)
+        : i18nService.t(genericKey)
+    );
+    if (isBashLikeToolName(toolName)) {
+      return verb('coworkActivityLiveCommand', 'coworkActivityLiveCommandGeneric');
+    }
+    if (READ_TOOL_NAMES.has(normalized)) {
+      return verb('coworkActivityLiveRead', 'coworkActivityLiveReadGeneric');
+    }
+    if (WRITE_TOOL_NAMES.has(normalized)) {
+      return verb('coworkActivityLiveWrite', 'coworkActivityLiveWriteGeneric');
+    }
+    if (EDIT_ONLY_TOOL_NAMES.has(normalized)) {
+      return verb('coworkActivityLiveEdit', 'coworkActivityLiveEditGeneric');
+    }
+    return i18nService.t('coworkActivityLiveTool').replace('{target}', getToolDisplayName(toolName));
   }
   const { name, summary } = getActivityStepDisplay(item);
   return summary ? `${name} ${summary}` : name;

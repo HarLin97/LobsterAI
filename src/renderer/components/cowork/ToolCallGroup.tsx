@@ -107,6 +107,8 @@ const ToolCallGroup: React.FC<{
   footer?: React.ReactNode;
   /** 'timeline' renders the classic dot row; 'row' renders a compact list row for activity groups. */
   variant?: 'timeline' | 'row';
+  /** Start expanded (row variant): single-step groups reveal their detail in one click. */
+  initiallyExpanded?: boolean;
 }> = ({
   group,
   isLastInSequence = true,
@@ -114,9 +116,10 @@ const ToolCallGroup: React.FC<{
   retainedMediaPollCounts,
   footer,
   variant = 'timeline',
+  initiallyExpanded = false,
 }) => {
   const { toolUse, toolResult } = group;
-  const shouldExpandByDefault = isMediaStatusPoll(group);
+  const shouldExpandByDefault = isMediaStatusPoll(group) || (variant === 'row' && initiallyExpanded);
   const isSessionStreaming = useSelector(selectIsStreaming);
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
   const toolName = getToolDisplayName(rawToolName);
@@ -363,7 +366,7 @@ const ToolCallGroup: React.FC<{
       <div>
         <button
           onClick={handleToggle}
-          className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-surface-raised/40 transition-colors"
+          className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-surface-raised/40 transition-colors"
           aria-expanded={isExpanded}
         >
           {!toolResult && isSessionStreaming && (
@@ -372,11 +375,11 @@ const ToolCallGroup: React.FC<{
           {isToolError && (
             <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
           )}
-          <span className={`text-sm text-foreground/90 flex-shrink-0 ${!toolResult && isSessionStreaming ? 'shimmer-text' : ''}`}>
+          <span className={`text-xs text-foreground/90 flex-shrink-0 ${!toolResult && isSessionStreaming ? 'shimmer-text' : ''}`}>
             {toolName}
           </span>
           {rowSummary && (
-            <span className="min-w-0 truncate text-sm text-secondary">
+            <span className="min-w-0 truncate text-xs text-secondary">
               {rowSummary}
             </span>
           )}
@@ -386,7 +389,7 @@ const ToolCallGroup: React.FC<{
             </span>
           )}
           <ChevronRightIcon
-            className={`h-3.5 w-3.5 text-muted flex-shrink-0 transition-transform duration-200 ${
+            className={`h-3 w-3 text-muted flex-shrink-0 transition-transform duration-200 ${
               isExpanded ? 'rotate-90' : ''
             }`}
           />
@@ -398,7 +401,7 @@ const ToolCallGroup: React.FC<{
         )}
         {renderMediaRunningIndicators('px-4 pb-2')}
         {isExpanded && (
-          <div className="px-4 pb-3">
+          <div className="activity-row-detail px-4 pb-3">
             {renderDetailBody()}
           </div>
         )}
