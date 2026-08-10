@@ -100,6 +100,7 @@ test('channel sync reuses one local session for run-scoped cron session keys', (
     id: `cron-session-${++nextId}`,
     title,
     claudeSessionId: null,
+    scheduledTaskId: null,
     status: 'idle' as const,
     pinned: false,
     cwd,
@@ -131,6 +132,7 @@ test('channel sync reuses one local session for run-scoped cron session keys', (
     resolveJobName,
   });
 
+  expect(sync.resolveSession('agent:ops:cron:daily-monitor:run:probe')).toBeNull();
   expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-1')).toBe('cron-session-1');
   expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-2')).toBe('cron-session-1');
   expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor')).toBe('cron-session-1');
@@ -144,9 +146,119 @@ test('channel sync reuses one local session for run-scoped cron session keys', (
     'local',
     [],
     'ops',
+    '',
+    { scheduledTaskId: 'daily-monitor' },
   );
   expect(getDefaultCwd).toHaveBeenCalledWith('ops');
   expect(resolveJobName).toHaveBeenCalledWith('daily-monitor');
+
+  const internalState = sync as unknown as {
+    syncedSessionKeys: Map<string, string>;
+    rejectedKeys: Set<string>;
+  };
+  expect(Array.from(internalState.syncedSessionKeys.entries())).toEqual([
+    ['agent:ops:cron:daily-monitor', 'cron-session-1'],
+  ]);
+  expect(internalState.rejectedKeys.size).toBe(0);
+});
+
+test('channel sync reuses a persisted scheduled task session after restart', () => {
+  const getSessionIdByScheduledTaskId = vi.fn(() => 'persisted-cron-session');
+  const getSession = vi.fn(() => ({
+    id: 'persisted-cron-session',
+    title: '[Cron] Daily Monitor',
+    claudeSessionId: null,
+    scheduledTaskId: 'daily-monitor',
+    status: 'completed' as const,
+    pinned: false,
+    cwd: '/repo/old',
+    systemPrompt: '',
+    modelOverride: '',
+    executionMode: 'local' as const,
+    activeSkillIds: [],
+    agentId: 'ops',
+    messages: [],
+    messagesOffset: 0,
+    totalMessages: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const updateSession = vi.fn();
+  const createSession = vi.fn(() => {
+    throw new Error('createSession should not be called for a persisted scheduled task session');
+  });
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession,
+      getSessionIdByScheduledTaskId,
+      updateSession,
+      createSession,
+    },
+    imStore: {
+      getSessionMapping: () => null,
+      updateSessionLastActive: () => {},
+      deleteSessionMapping: () => {},
+      createSessionMapping: () => {},
+    },
+    getDefaultCwd: () => '/repo/ops',
+  });
+
+  expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-1')).toBe(
+    'persisted-cron-session',
+  );
+  expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-2')).toBe(
+    'persisted-cron-session',
+  );
+  expect(getSessionIdByScheduledTaskId).toHaveBeenCalledTimes(1);
+  expect(getSessionIdByScheduledTaskId).toHaveBeenCalledWith('daily-monitor', 'ops');
+  expect(getSession).toHaveBeenCalledWith('persisted-cron-session', 0);
+  expect(updateSession).toHaveBeenCalledWith(
+    'persisted-cron-session',
+    { cwd: '/repo/ops' },
+    { touchUpdatedAt: false },
+  );
+  expect(createSession).not.toHaveBeenCalled();
+});
+
+test('channel sync replaces a stale persisted scheduled task lookup', () => {
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const createSession = vi.fn(() => ({ id: 'replacement-cron-session' }));
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession: () => null,
+      getSessionIdByScheduledTaskId: () => 'deleted-cron-session',
+      createSession,
+    },
+    imStore: {
+      getSessionMapping: () => null,
+      updateSessionLastActive: () => {},
+      deleteSessionMapping: () => {},
+      createSessionMapping: () => {},
+    },
+    getDefaultCwd: () => '/repo/ops',
+    resolveJobName: () => 'Daily Monitor',
+  });
+
+  try {
+    expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-1'))
+      .toBe('replacement-cron-session');
+    expect(createSession).toHaveBeenCalledWith(
+      expect.stringContaining('Daily Monitor'),
+      '/repo/ops',
+      '',
+      'local',
+      [],
+      'ops',
+      '',
+      { scheduledTaskId: 'daily-monitor' },
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[ChannelSessionSync] ignored stale persisted cron session lookup:',
+      expect.objectContaining({ sessionId: 'deleted-cron-session' }),
+    );
+  } finally {
+    warnSpy.mockRestore();
+  }
 });
 
 test('channel sync resolves the conversation record for a delivery target', () => {
@@ -428,6 +540,7 @@ test('channel sync suppresses local cron sessions for IM-announce jobs', () => {
     id: `cron-session-${++nextId}`,
     title,
     claudeSessionId: null,
+    scheduledTaskId: null,
     status: 'idle' as const,
     pinned: false,
     cwd,

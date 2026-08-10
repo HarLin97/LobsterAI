@@ -27,6 +27,7 @@ const makeSession = (
   id: 'session-1',
   title: 'Session 1',
   claudeSessionId: null,
+  scheduledTaskId: null,
   status: CoworkSessionStatusValue.Completed,
   pinned: false,
   pinOrder: null,

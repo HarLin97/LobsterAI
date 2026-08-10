@@ -19,6 +19,7 @@ import {
   type CoworkGoal,
   normalizeCoworkGoal,
 } from '../shared/cowork/goal';
+import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import {
   COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
   type CoworkMessageRailIndexItem,
@@ -481,6 +482,7 @@ export interface CoworkSession {
   id: string;
   title: string;
   claudeSessionId: string | null;
+  scheduledTaskId: string | null;
   status: CoworkSessionStatus;
   pinned: boolean;
   pinOrder?: number | null;
@@ -521,6 +523,7 @@ export interface UpsertSubagentChildSessionOptions {
 export interface CoworkSessionSummary {
   id: string;
   title: string;
+  scheduledTaskId: string | null;
   status: CoworkSessionStatus;
   pinned: boolean;
   pinOrder?: number | null;
@@ -715,6 +718,7 @@ interface CoworkUserMemoryRow {
 interface CoworkSessionSummaryRow {
   id: string;
   title: string;
+  scheduled_task_id: string | null;
   status: string;
   pinned: number | null;
   pin_order: number | null;
@@ -732,6 +736,10 @@ interface CoworkSessionSearchOptions {
   limit?: number;
   offset?: number;
   agentId?: string;
+}
+
+export interface CreateCoworkSessionOptions {
+  scheduledTaskId?: string | null;
 }
 
 export class CoworkStore {
@@ -809,6 +817,7 @@ export class CoworkStore {
     return {
       id: row.id,
       title: row.title,
+      scheduledTaskId: row.scheduled_task_id?.trim() || null,
       status: row.status as CoworkSessionStatus,
       pinned: Boolean(row.pinned),
       pinOrder: row.pin_order ?? null,
@@ -841,21 +850,24 @@ export class CoworkStore {
     executionMode: CoworkExecutionMode = 'local',
     activeSkillIds: string[] = [],
     agentId: string = 'main',
-    modelOverride: string = ''
+    modelOverride: string = '',
+    options: CreateCoworkSessionOptions = {},
   ): CoworkSession {
     const id = uuidv4();
     const now = Date.now();
+    const scheduledTaskId = options.scheduledTaskId?.trim() || null;
 
     this.db
       .prepare(
         `
-      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, model_override, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
-      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      INSERT INTO cowork_sessions (id, title, claude_session_id, scheduled_task_id, status, cwd, system_prompt, model_override, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
+      VALUES (?, ?, NULL, ?, 'idle', ?, ?, ?, ?, ?, ?, 0, ?, ?)
     `,
       )
       .run(
         id,
         title,
+        scheduledTaskId,
         cwd,
         systemPrompt,
         modelOverride,
@@ -870,6 +882,7 @@ export class CoworkStore {
       id,
       title,
       claudeSessionId: null,
+      scheduledTaskId,
       status: 'idle',
       pinned: false,
       pinOrder: null,
@@ -899,6 +912,7 @@ export class CoworkStore {
       id: string;
       title: string;
       claude_session_id: string | null;
+      scheduled_task_id: string | null;
       status: string;
       pinned?: number | null;
       pin_order?: number | null;
@@ -915,7 +929,7 @@ export class CoworkStore {
 
     const row = this.getOne<SessionRow>(
       `
-      SELECT id, title, claude_session_id, status, pinned, pin_order, cwd, system_prompt, model_override, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
+      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `,
@@ -945,6 +959,7 @@ export class CoworkStore {
       id: row.id,
       title: row.title,
       claudeSessionId: row.claude_session_id,
+      scheduledTaskId: row.scheduled_task_id?.trim() || null,
       status: row.status as CoworkSessionStatus,
       pinned: Boolean(row.pinned),
       pinOrder: row.pin_order ?? null,
@@ -1330,6 +1345,8 @@ export class CoworkStore {
       delete sanitized.turnToken;
       delete sanitized.openClawRunId;
       delete sanitized.openClawSessionKey;
+      delete sanitized[OpenClawCronRunMetadataKey.SessionKey];
+      delete sanitized[OpenClawCronRunMetadataKey.EntryIndex];
       if (Array.isArray(sanitized.selectedTextSnippets)) {
         sanitized.selectedTextSnippets = sanitized.selectedTextSnippets.map(snippet => ({
           ...snippet,
@@ -1519,7 +1536,7 @@ export class CoworkStore {
     if (agentId) {
       rows = this.getAll<CoworkSessionSummaryRow>(
         `
-        SELECT id, title, status, pinned, pin_order, agent_id,
+        SELECT id, title, scheduled_task_id, status, pinned, pin_order, agent_id,
                parent_session_id, forked_at, fork_mode,
                goal_json,
                created_at, updated_at
@@ -1536,7 +1553,7 @@ export class CoworkStore {
     } else {
       rows = this.getAll<CoworkSessionSummaryRow>(
         `
-        SELECT id, title, status, pinned, pin_order, agent_id,
+        SELECT id, title, scheduled_task_id, status, pinned, pin_order, agent_id,
                parent_session_id, forked_at, fork_mode,
                goal_json,
                created_at, updated_at
@@ -1596,7 +1613,7 @@ export class CoworkStore {
     if (options.agentId) {
       rows = this.getAll<CoworkSessionSummaryRow>(
         `
-        SELECT id, title, status, pinned, pin_order, agent_id,
+        SELECT id, title, scheduled_task_id, status, pinned, pin_order, agent_id,
                parent_session_id, forked_at, fork_mode,
                goal_json,
                created_at, updated_at
@@ -1614,7 +1631,7 @@ export class CoworkStore {
     } else {
       rows = this.getAll<CoworkSessionSummaryRow>(
         `
-        SELECT id, title, status, pinned, pin_order, agent_id,
+        SELECT id, title, scheduled_task_id, status, pinned, pin_order, agent_id,
                parent_session_id, forked_at, fork_mode,
                goal_json,
                created_at, updated_at
@@ -3175,6 +3192,24 @@ export class CoworkStore {
     const row = this.getOne<{ id: string }>(
       'SELECT id FROM cowork_sessions WHERE claude_session_id = ? LIMIT 1',
       [normalized],
+    );
+    return row?.id ?? null;
+  }
+
+  getSessionIdByScheduledTaskId(scheduledTaskId: string, agentId: string): string | null {
+    const normalizedTaskId = scheduledTaskId.trim();
+    const normalizedAgentId = agentId.trim() || AgentId.Main;
+    if (!normalizedTaskId) return null;
+
+    const row = this.getOne<{ id: string }>(
+      `SELECT id
+       FROM cowork_sessions
+       WHERE scheduled_task_id = ?
+         AND parent_session_id IS NULL
+         AND COALESCE(NULLIF(TRIM(agent_id), ''), ?) = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [normalizedTaskId, AgentId.Main, normalizedAgentId],
     );
     return row?.id ?? null;
   }

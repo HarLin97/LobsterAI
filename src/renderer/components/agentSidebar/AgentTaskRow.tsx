@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
+import ClockIcon from '../icons/ClockIcon';
 import EditIcon from '../icons/EditIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import ListChecksIcon from '../icons/ListChecksIcon';
@@ -11,6 +12,10 @@ import LoadingIcon from '../icons/LoadingIcon';
 import PushPinIcon from '../icons/PushPinIcon';
 import TrashIcon from '../icons/TrashIcon';
 import { AgentSidebarIndicator } from './constants';
+import {
+  getScheduledTaskDisplayTitle,
+  hasLegacyScheduledTaskTitle,
+} from './scheduledTaskSession';
 import { formatAgentTaskRelativeTime } from './time';
 import type { AgentSidebarTaskNode } from './types';
 
@@ -68,11 +73,17 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   onSidebarAction,
   analyticsParams,
 }) => {
+  const displayTitle = task.isScheduledTask
+    ? getScheduledTaskDisplayTitle(task.title)
+    : task.title;
+  // Keep a legacy prefix visible while editing so users can deliberately retain
+  // or remove the heuristic marker. Persisted markers do not depend on the title.
+  const editableTitle = hasLegacyScheduledTaskTitle(task.title) ? task.title : displayTitle;
   const [menuPosition, setMenuPosition] = useState<{ right: number; top: number } | null>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [suppressPinHover, setSuppressPinHover] = useState(false);
-  const [renameValue, setRenameValue] = useState(task.title);
+  const [renameValue, setRenameValue] = useState(editableTitle);
   const menuRef = useRef<HTMLDivElement>(null);
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -115,9 +126,9 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
 
   useEffect(() => {
     if (!isRenaming) {
-      setRenameValue(task.title);
+      setRenameValue(editableTitle);
     }
-  }, [isRenaming, task.title]);
+  }, [editableTitle, isRenaming]);
 
   useEffect(() => {
     if (!isMenuOpen) return;
@@ -185,7 +196,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
 
   const handleRenameCancel = () => {
     onSidebarAction?.('task_rename_cancel', analyticsParams);
-    setRenameValue(task.title);
+    setRenameValue(editableTitle);
     setIsRenaming(false);
   };
 
@@ -200,6 +211,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   const relativeTime = formatAgentTaskRelativeTime(task.updatedAt || task.createdAt);
   const showRelativeTime = task.indicator === AgentSidebarIndicator.None;
   const pinLabel = task.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession');
+  const scheduledTaskLabel = i18nService.t('myAgentSidebarScheduledTask');
 
   return (
     <div
@@ -276,8 +288,20 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
         />
       ) : (
         <>
+          {task.isScheduledTask && (
+            <span
+              className={`inline-flex h-4 w-4 shrink-0 items-center justify-center ${
+                isSelectionDisabled ? 'text-foreground/30' : 'text-secondary'
+              }`}
+              role="img"
+              title={scheduledTaskLabel}
+              aria-label={scheduledTaskLabel}
+            >
+              <ClockIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            </span>
+          )}
           <span className="min-w-0 flex-1 truncate">
-            {task.title}
+            {displayTitle}
           </span>
           {task.indicator === AgentSidebarIndicator.PendingPermission && (
             <span

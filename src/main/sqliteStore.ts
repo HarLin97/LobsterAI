@@ -6,6 +6,10 @@ import fs from 'fs';
 import path from 'path';
 
 import { AgentId, DefaultAgentAvatarIcon, DefaultAgentProfile, LegacyAgentName, normalizeAgentAvatarIcon } from '../shared/agent';
+import {
+  OpenClawCronRunMetadataKey,
+  parseOpenClawCronSessionKey,
+} from '../shared/cowork/openclawCronSessionKey';
 import { DB_FILENAME } from './appConstants';
 import {
   openSqliteDatabaseWithRecovery,
@@ -20,6 +24,25 @@ type ChangePayload<T = unknown> = {
 
 const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
 const AGENT_WORKING_DIRECTORY_BACKFILL_KEY = 'agents.workingDirectoryBackfill.v1.completed';
+const SCHEDULED_TASK_SESSION_BACKFILL_KEY = 'coworkSessions.scheduledTaskIdBackfill.v1.completed';
+const EXTRACT_SCHEDULED_TASK_ID_SQL_FUNCTION = 'lobster_extract_scheduled_task_id';
+
+const extractScheduledTaskIdFromMessageMetadata = (metadata: unknown): string | null => {
+  if (typeof metadata !== 'string' || !metadata) return null;
+  try {
+    const parsedMetadata = JSON.parse(metadata) as unknown;
+    if (!parsedMetadata || typeof parsedMetadata !== 'object' || Array.isArray(parsedMetadata)) {
+      return null;
+    }
+    const sessionKey = (parsedMetadata as Record<string, unknown>)[
+      OpenClawCronRunMetadataKey.SessionKey
+    ];
+    if (typeof sessionKey !== 'string') return null;
+    return parseOpenClawCronSessionKey(sessionKey.trim())?.scheduledTaskId ?? null;
+  } catch {
+    return null;
+  }
+};
 
 export class SqliteStore {
   private db: Database.Database;
@@ -78,6 +101,7 @@ export class SqliteStore {
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         claude_session_id TEXT,
+        scheduled_task_id TEXT,
         status TEXT NOT NULL DEFAULT 'idle',
         pinned INTEGER NOT NULL DEFAULT 0,
         pin_order INTEGER,
@@ -424,6 +448,20 @@ export class SqliteStore {
       // Column already exists or migration not needed.
     }
 
+    // This column is required by all Cowork session reads after this release.
+    // Keep its migration isolated from unrelated legacy columns so an earlier
+    // best-effort migration cannot prevent it from being installed.
+    try {
+      const sessionCols = this.db.pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
+      if (!sessionCols.some(column => column.name === 'scheduled_task_id')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN scheduled_task_id TEXT;');
+        this.didRunMigration = true;
+      }
+    } catch (error) {
+      console.error('[SqliteStore] failed to add cowork_sessions.scheduled_task_id:', error);
+      throw error;
+    }
+
     try {
       const pinnedResult = this.db.prepare('UPDATE cowork_sessions SET pinned = 0 WHERE pinned IS NULL;').run();
       const pinOrderResult = this.db
@@ -451,6 +489,65 @@ export class SqliteStore {
       }
     } catch {
       // Column already exists or migration not needed.
+    }
+
+    try {
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_cowork_sessions_scheduled_task_id
+        ON cowork_sessions(scheduled_task_id, agent_id);
+      `);
+    } catch (error) {
+      // The index improves restart lookup but is not required for correctness.
+      console.warn('[SqliteStore] failed to create scheduled task session index:', error);
+    }
+
+    // Migration: identify legacy top-level cron sessions from their imported run history.
+    // The completion key is written only after a successful transaction so an interrupted
+    // migration can safely retry on the next startup.
+    try {
+      if (this.get<string>(SCHEDULED_TASK_SESSION_BACKFILL_KEY) !== '1') {
+        this.db.function(
+          EXTRACT_SCHEDULED_TASK_ID_SQL_FUNCTION,
+          { deterministic: true },
+          extractScheduledTaskIdFromMessageMetadata,
+        );
+        const backfillScheduledTaskIds = this.db.transaction(() => {
+          const result = this.db.prepare(
+            `WITH candidate_sessions AS MATERIALIZED (
+               SELECT sessions.id AS session_id,
+                      (
+                        SELECT ${EXTRACT_SCHEDULED_TASK_ID_SQL_FUNCTION}(messages.metadata)
+                        FROM cowork_messages AS messages
+                        WHERE messages.session_id = sessions.id
+                          AND messages.metadata IS NOT NULL
+                          AND messages.metadata LIKE ?
+                          AND ${EXTRACT_SCHEDULED_TASK_ID_SQL_FUNCTION}(messages.metadata) IS NOT NULL
+                        ORDER BY messages.created_at DESC, messages.id DESC
+                        LIMIT 1
+                      ) AS scheduled_task_id
+               FROM cowork_sessions AS sessions
+               WHERE sessions.scheduled_task_id IS NULL
+                 AND sessions.parent_session_id IS NULL
+             )
+             UPDATE cowork_sessions AS sessions
+             SET scheduled_task_id = candidates.scheduled_task_id
+             FROM candidate_sessions AS candidates
+             WHERE sessions.id = candidates.session_id
+               AND candidates.scheduled_task_id IS NOT NULL`,
+          ).run(`%"${OpenClawCronRunMetadataKey.SessionKey}"%`);
+          return result.changes;
+        });
+        const backfilledSessionCount = backfillScheduledTaskIds();
+        if (backfilledSessionCount > 0) {
+          this.didRunMigration = true;
+          console.log(
+            `[SqliteStore] backfilled scheduled task ids for ${backfilledSessionCount} legacy sessions.`,
+          );
+        }
+        this.set(SCHEDULED_TASK_SESSION_BACKFILL_KEY, '1');
+      }
+    } catch (error) {
+      console.warn('[SqliteStore] failed to backfill scheduled task session ids:', error);
     }
 
     // Migration: Add working_directory column to agents
