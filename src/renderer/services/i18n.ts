@@ -171,6 +171,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     inputFileLabel: '输入文件',
     inputFolderLabel: '输入文件夹',
     folderAttachmentType: '文件夹',
+    coworkFileAttachmentRevealHint: '点击在文件夹中显示',
+    coworkFileAttachmentMissing: '文件不存在，可能已被移动或删除',
+    coworkFileAttachmentRevealFailed: '无法在文件夹中显示该文件',
     imageVisionHint:
       '当前模型未启用图片输入，图片将以文件路径形式发送。若该模型本身支持图片理解，可在模型配置中开启图片输入选项。',
     copied: '已复制',
@@ -3407,6 +3410,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     inputFileLabel: 'Input Files',
     inputFolderLabel: 'Input Folder',
     folderAttachmentType: 'Folder',
+    coworkFileAttachmentRevealHint: 'Click to reveal in folder',
+    coworkFileAttachmentMissing: 'File not found. It may have been moved or deleted.',
+    coworkFileAttachmentRevealFailed: 'Could not reveal this file in its folder.',
     imageVisionHint:
       'Image input is not enabled for the current model. Images will be sent as file paths. If the model supports vision, you can enable image input in the model configuration.',
     copied: 'Copied',
