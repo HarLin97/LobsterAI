@@ -78,7 +78,10 @@ const strongPatchValidators = {
     {
       file: 'src/agents/agent-tools.before-tool-call.ts',
       snippets: [
-        'const terminateRun = deniedReason === "tool-loop"',
+        // zz-openclaw-tool-loop-soft-vetoes.patch rewrites this line to
+        // `params.terminateRun ?? deniedReason === "tool-loop"`; validate the
+        // stable core expression only.
+        'deniedReason === "tool-loop"',
         '...(terminateRun ? { terminate: true } : {})',
       ],
     },
@@ -100,9 +103,40 @@ const strongPatchValidators = {
     {
       file: 'src/agents/agent-tools.before-tool-call.blocked-result.test.ts',
       snippets: [
-        'terminates critical tool-loop vetoes',
+        // Test name comes from zz-openclaw-tool-loop-soft-vetoes.patch, which
+        // rewrites this file after the terminate patch creates it.
+        'terminates tool-loop vetoes from legacy callers',
         'keeps %s vetoes non-terminating',
         'expect(result.terminate).toBe(true)',
+      ],
+    },
+  ],
+  'zz-openclaw-tool-loop-soft-vetoes.patch': [
+    {
+      file: 'src/agents/agent-tools.before-tool-call.ts',
+      snippets: [
+        'TOOL_LOOP_VETO_STREAK_TERMINATE_THRESHOLD',
+        'appendLoopWarningToToolResult',
+        'evaluateToolLoopGate',
+      ],
+    },
+    {
+      file: 'src/agents/tool-loop-detection.ts',
+      snippets: [
+        'hardStop: true',
+        'Repeating the same blocked call will end this run.',
+      ],
+    },
+    {
+      file: 'src/agents/sessions/sdk.ts',
+      snippets: [
+        'details.terminateRun === true',
+      ],
+    },
+    {
+      file: 'src/logging/diagnostic-session-state.ts',
+      snippets: [
+        'toolLoopVetoStreaks',
       ],
     },
   ],

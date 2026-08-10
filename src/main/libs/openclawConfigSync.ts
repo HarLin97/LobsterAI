@@ -305,16 +305,25 @@ const MANAGED_OWNER_ALLOW_FROM = [
 ];
 
 const MANAGED_TOOL_DENY = ['web_search'] as const;
+// knownPollNoProgress is off: polling a live background process that stays
+// quiet (builds, installs, downloads) legitimately repeats identical calls
+// with identical output, and the detector killed such runs after 10 polls
+// (~5 min). Runaway polling is still bounded by the global circuit breaker,
+// which applies regardless of detector flags. Aborted-tool protection is
+// unaffected: those detectors use their own hardcoded thresholds.
+// historySize must stay comfortably above globalCircuitBreakerThreshold or
+// interleaved tool calls push streak entries out of the window and the
+// breaker becomes unreachable.
 const MANAGED_TOOL_LOOP_DETECTION = {
   enabled: true,
-  historySize: 40,
+  historySize: 48,
   warningThreshold: 6,
   unknownToolThreshold: 6,
   criticalThreshold: 10,
-  globalCircuitBreakerThreshold: 16,
+  globalCircuitBreakerThreshold: 30,
   detectors: {
     genericRepeat: true,
-    knownPollNoProgress: true,
+    knownPollNoProgress: false,
     pingPong: true,
   },
 } as const;

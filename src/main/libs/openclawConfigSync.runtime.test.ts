@@ -2680,14 +2680,14 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.tools.loopDetection).toEqual({
       enabled: true,
-      historySize: 40,
+      historySize: 48,
       warningThreshold: 6,
       unknownToolThreshold: 6,
       criticalThreshold: 10,
-      globalCircuitBreakerThreshold: 16,
+      globalCircuitBreakerThreshold: 30,
       detectors: {
         genericRepeat: true,
-        knownPollNoProgress: true,
+        knownPollNoProgress: false,
         pingPong: true,
       },
     });
