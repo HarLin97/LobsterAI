@@ -4985,6 +4985,99 @@ test('stale chat error after a successful deferred final completes the turn inst
   }
 });
 
+test('model idle timeout chat error still surfaces after a deferred final (text-only payload)', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'query bhumi-data', timestamp: 1, metadata: {} },
+    ]);
+    session.status = 'running';
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const errorSpy = vi.fn();
+    adapter.on('error', errorSpy);
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const turn = createActiveTurn(session.id, sessionKey, 'run-idle-timeout');
+    adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+
+    adapter.handleChatEvent({
+      state: 'final',
+      runId: 'run-idle-timeout',
+      sessionKey,
+      message: { role: 'assistant', content: '明白，接下来只走 bhumi-data 的只读查询。' },
+    }, 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(turn.finalCompletionTimer).toBeDefined();
+
+    // OpenClaw's surface_error failover delivers the timeout through the
+    // webchat reply path (broadcastChatError): text only, no metadata, and the
+    // lifecycle ended with isError=false so terminatedRunIds stays empty.
+    const timeoutText = 'LLM request timed out. | The model did not produce a response before the model idle timeout. Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted provider.';
+    adapter.handleChatEvent({
+      state: 'error',
+      runId: 'run-idle-timeout',
+      sessionKey,
+      errorMessage: timeoutText,
+      message: { role: 'assistant', content: [{ type: 'text', text: `Error: ${timeoutText}` }] },
+    }, 2);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(errorSpy).toHaveBeenCalled();
+    expect(session.status).toBe('error');
+    expect(adapter.activeTurns.has(session.id)).toBe(false);
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+test('chat error with provider runtime failure metadata still surfaces after a deferred final', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'query bhumi-data', timestamp: 1, metadata: {} },
+    ]);
+    session.status = 'running';
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const errorSpy = vi.fn();
+    adapter.on('error', errorSpy);
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const turn = createActiveTurn(session.id, sessionKey, 'run-failover-meta');
+    adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+
+    adapter.handleChatEvent({
+      state: 'final',
+      runId: 'run-failover-meta',
+      sessionKey,
+      message: { role: 'assistant', content: 'partial reply' },
+    }, 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(turn.finalCompletionTimer).toBeDefined();
+
+    // The lifecycle-error forwarding path attaches structured observation
+    // fields (extractSafeChatErrorMetadata) to the late chat error.
+    adapter.handleChatEvent({
+      state: 'error',
+      runId: 'run-failover-meta',
+      sessionKey,
+      errorMessage: 'upstream provider failed',
+      provider: 'openai',
+      model: 'gpt-5.6-sol',
+      failoverReason: 'timeout',
+      providerRuntimeFailureKind: 'timeout',
+    }, 2);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(errorSpy).toHaveBeenCalled();
+    expect(session.status).toBe('error');
+    expect(adapter.activeTurns.has(session.id)).toBe(false);
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
 test('chat error still surfaces when a deferred final exists but the run reported a lifecycle error', async () => {
   vi.useFakeTimers();
   try {

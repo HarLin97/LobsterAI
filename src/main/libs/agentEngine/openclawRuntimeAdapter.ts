@@ -9897,6 +9897,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * successful chat.final is persisted and only its deferred completion is
    * pending. Surfacing that stale notice would flip a successful turn into a
    * session error, so complete the deferred final instead.
+   *
+   * Exception: OpenClaw's surface_error failover (e.g. LLM idle timeout after a
+   * partial reply) ends the lifecycle with isError=false and delivers the real
+   * failure through this same late chat-error path, so it never reaches
+   * terminatedRunIds. Those provider-runtime failures must surface — swallowing
+   * them makes a dead run look completed.
    */
   private completeDeferredFinalOnStaleChatError(
     sessionId: string,
@@ -9914,6 +9920,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
     const staleErrorText = payload.errorMessage?.trim()
       || extractGatewayMessageText(payload.message).trim();
+    if (this.isProviderRuntimeFailureChatError(payload, staleErrorText)) {
+      console.warn(
+        '[OpenClawRuntime] surfacing a provider runtime failure that arrived as a late chat error despite a pending deferred final.',
+        `Session ${sessionId}.`,
+        `Run ${errorRunId || turn.finalCompletionRunId || turn.runId}.`,
+        `Error ${staleErrorText.slice(0, 200) || 'unknown'}.`,
+      );
+      return false;
+    }
     console.warn(
       '[OpenClawRuntime] ignored a stale chat error after a successful final; completing the deferred final instead.',
       `Session ${sessionId}.`,
@@ -9926,6 +9941,29 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       turn.finalCompletionRunId ?? turn.runId,
     );
     return true;
+  }
+
+  /**
+   * True when a late chat error carries evidence of a real provider/LLM runtime
+   * failure rather than a stale tool-failure notice. The lifecycle-error
+   * forwarding path attaches structured observation fields; the webchat reply
+   * path (broadcastChatError) sends text only, so also match the model-timeout
+   * wording OpenClaw uses for surfaced LLM failures. Tool-failure notices carry
+   * neither: broader text classes such as network errors ("request timed out")
+   * overlap with tool error output and must stay swallowed here.
+   */
+  private isProviderRuntimeFailureChatError(payload: ChatEventPayload, errorText: string): boolean {
+    const metadata = normalizeOpenClawSafeRuntimeErrorMetadata(payload);
+    if (
+      metadata?.providerRuntimeFailureKind
+      || metadata?.failoverReason
+      || metadata?.httpCode
+      || metadata?.providerErrorType
+    ) {
+      return true;
+    }
+    if (!errorText) return false;
+    return classifyErrorKey(errorText) === CoworkErrorI18nKey.ModelResponseTimeout;
   }
 
   private handleChatError(sessionId: string, turn: ActiveTurn, payload: ChatEventPayload): void {
