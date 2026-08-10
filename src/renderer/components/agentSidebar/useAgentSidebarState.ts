@@ -523,6 +523,12 @@ export const useAgentSidebarState = () => {
     });
   }, []);
 
+  const collapseAgent = useCallback((agentId: string) => {
+    setExpandedAgentIds((previous) => {
+      return previous.includes(agentId) ? previous.filter((id) => id !== agentId) : previous;
+    });
+  }, []);
+
   const expandTasks = useCallback((agentId: string) => {
     expandAgent(agentId);
     return loadMoreTasks(agentId);
@@ -669,6 +675,7 @@ export const useAgentSidebarState = () => {
     retryLoadTasks,
     loadMoreTasks,
     expandAgent,
+    collapseAgent,
     expandTasks,
     collapseTasks,
     toggleAgentExpanded,

@@ -36,7 +36,7 @@ import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPasswo
 import { i18nService, LanguageType } from '../services/i18n';
 import { imService } from '../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
-import { formatShortcutForDisplay, getShortcutConflictSignature, matchesShortcut } from '../services/shortcuts';
+import { formatShortcutForDisplay, getShortcutConflictSignature, isTextEditingSafeShortcut, matchesShortcut } from '../services/shortcuts';
 import {
   type ThemeDefaultChangedDetail,
   themeService,
@@ -775,7 +775,6 @@ const SETTINGS_TAB_SHORTCUT_COMMANDS: ShortcutCommandDefinition[] = [
   { key: ShortcutAction.OpenSettingsMemory, tabLabelKey: 'coworkMemoryTitle' },
   { key: ShortcutAction.OpenSettingsDreaming, tabLabelKey: 'coworkMemoryTabDreaming' },
   { key: ShortcutAction.OpenSettingsPlugins, tabLabelKey: 'pluginsTab' },
-  { key: ShortcutAction.OpenSettingsShortcuts, tabLabelKey: 'shortcuts' },
   { key: ShortcutAction.OpenSettingsAbout, tabLabelKey: 'about' },
 ].map(command => ({
   ...command,
@@ -830,6 +829,11 @@ const SHORTCUT_COMMAND_GROUPS: Array<{
         key: ShortcutAction.ShowCurrentAgentTasks,
         labelKey: 'shortcutShowCurrentAgentTasks',
         descriptionKey: 'shortcutDescShowCurrentAgentTasks',
+      },
+      {
+        key: ShortcutAction.CollapseCurrentAgentTasks,
+        labelKey: 'shortcutCollapseCurrentAgentTasks',
+        descriptionKey: 'shortcutDescCollapseCurrentAgentTasks',
       },
       ...AGENT_TASK_SLOT_COMMANDS,
     ],
@@ -4513,10 +4517,14 @@ const Settings: React.FC<SettingsProps> = ({
 
   useEffect(() => {
     const handleSettingsTabShortcut = (event: KeyboardEvent) => {
-      if (event.repeat || isShortcutInputActive() || isTextEditingActive()) return;
+      if (event.repeat || isShortcutInputActive()) return;
 
+      const isTextEditing = isTextEditingActive();
       const command = SETTINGS_TAB_SHORTCUT_COMMANDS.find((candidate) => {
-        return matchesShortcut(event, shortcuts[candidate.key]);
+        const binding = shortcuts[candidate.key];
+        // While typing, only run shortcuts carrying a Cmd/Ctrl modifier so plain keys keep inserting text.
+        if (isTextEditing && !isTextEditingSafeShortcut(binding)) return false;
+        return matchesShortcut(event, binding);
       });
       if (!command) return;
 
