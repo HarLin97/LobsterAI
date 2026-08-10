@@ -56,7 +56,7 @@ import { isTestModeEnabled } from './services/endpoints';
 import { i18nService } from './services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
 import { scheduledTaskService } from './services/scheduledTask';
-import { matchesShortcut } from './services/shortcuts';
+import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
 import { applyTypographyPreferences } from './services/typography';
 import { RootState, store } from './store';
@@ -103,7 +103,6 @@ const SETTINGS_TAB_SHORTCUT_ACTIONS: Array<{
   { action: ShortcutAction.OpenSettingsMemory, initialTab: 'coworkMemory' },
   { action: ShortcutAction.OpenSettingsDreaming, initialTab: 'coworkDreaming' },
   { action: ShortcutAction.OpenSettingsPlugins, initialTab: 'plugins' },
-  { action: ShortcutAction.OpenSettingsShortcuts, initialTab: 'shortcuts' },
   { action: ShortcutAction.OpenSettingsAbout, initialTab: 'about' },
 ];
 
@@ -887,10 +886,15 @@ const App: React.FC = () => {
         ...(shortcuts ?? {}),
       };
 
-      const matchesAction = (action: ShortcutAction) => matchesShortcut(event, activeShortcuts[action]);
+      const isTextEditing = isTextEditingActive();
+      const matchesAction = (action: ShortcutAction) => {
+        const binding = activeShortcuts[action];
+        // While typing, only run shortcuts carrying a Cmd/Ctrl modifier so plain keys keep inserting text.
+        if (isTextEditing && !isTextEditingSafeShortcut(binding)) return false;
+        return matchesShortcut(event, binding);
+      };
 
       if (showSettings) {
-        if (isTextEditingActive()) return;
         if (matchesAction(ShortcutAction.ShowShortcuts)) {
           event.preventDefault();
           handleShowSettings({ initialTab: 'shortcuts' });
@@ -904,7 +908,7 @@ const App: React.FC = () => {
         const shortcutTarget = resolveConversationSearchShortcutTarget({
           isCoworkView: mainView === 'cowork',
           hasCurrentSession: Boolean(currentSessionId),
-          isTextEditing: isTextEditingActive(),
+          isTextEditing,
           isCoworkSearchEligibleEditor: isCoworkSearchEligibleEditorActive(),
         });
         if (shortcutTarget === ConversationSearchShortcutTarget.Conversation) {
@@ -916,8 +920,6 @@ const App: React.FC = () => {
         }
         return;
       }
-
-      if (isTextEditingActive()) return;
 
       if (matchesAction(ShortcutAction.NewChat)) {
         event.preventDefault();
@@ -1005,6 +1007,14 @@ const App: React.FC = () => {
         setMainView('cowork');
         setIsSidebarCollapsed(false);
         window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutShowCurrentAgentTasks));
+        return;
+      }
+
+      if (matchesAction(ShortcutAction.CollapseCurrentAgentTasks)) {
+        event.preventDefault();
+        setMainView('cowork');
+        setIsSidebarCollapsed(false);
+        window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutCollapseCurrentAgentTasks));
         return;
       }
 

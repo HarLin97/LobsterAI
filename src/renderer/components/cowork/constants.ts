@@ -9,6 +9,7 @@ export const CoworkUiEvent = {
   ShortcutToggleArtifacts: 'cowork:shortcut:toggle-artifacts',
   ShortcutSwitchAgent: 'cowork:shortcut:switch-agent',
   ShortcutShowCurrentAgentTasks: 'cowork:shortcut:show-current-agent-tasks',
+  ShortcutCollapseCurrentAgentTasks: 'cowork:shortcut:collapse-current-agent-tasks',
   ShortcutOpenAgentTaskSlot: 'cowork:shortcut:open-agent-task-slot',
 } as const;
 
