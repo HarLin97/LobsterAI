@@ -29,12 +29,15 @@ import {
   type ConversationTurn,
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
+  formatElapsedDuration,
+  getActivityIndicatorStatusText,
   getContextCompactionMessageLabel,
   getMediaCompletionDisplayText,
   getRetainedMediaPollCount,
   getToolResultDisplay,
   getToolResultLineCount,
   getToolResultLineCountSummary,
+  getTurnActivityFingerprint,
   getVideoPathArtifacts,
   getVisibleAssistantItems,
   hasText,
@@ -124,15 +127,79 @@ const ContextCompactionDivider: React.FC<{ label: string; active?: boolean }> = 
   </div>
 );
 
-// ── TypingDots ───────────────────────────────────────────────────────────────
+// ── ActivityIndicator ────────────────────────────────────────────────────────
+// Single busy-state indicator at the insertion point of the last turn:
+// breathing dot + shimmering status text + elapsed time. Rendered only in
+// quiet gaps (no pending tool row, no flowing output) so at most one element
+// on screen animates at a time.
 
-const TypingDots: React.FC = () => (
-  <div className="flex items-center space-x-1.5 py-1">
-    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '0ms' }} />
-    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '150ms' }} />
-    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '300ms' }} />
-  </div>
-);
+const ACTIVITY_QUIET_DELAY_MS = 1500;
+const ACTIVITY_TIMER_APPEAR_DELAY_MS = 2000;
+const ACTIVITY_LONG_WAIT_HINT_DELAY_MS = 30_000;
+
+const ActivityIndicator: React.FC<{
+  fingerprint: string;
+  showImmediately: boolean;
+  startTimestamp: number | null;
+  statusTextOverride?: string | null;
+}> = ({ fingerprint, showImmediately, startTimestamp, statusTextOverride }) => {
+  const [visible, setVisible] = useState(showImmediately);
+  const [isLongWaiting, setIsLongWaiting] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const startRef = useRef<number>(startTimestamp ?? Date.now());
+
+  useEffect(() => {
+    if (typeof startTimestamp === 'number') {
+      startRef.current = startTimestamp;
+    }
+  }, [startTimestamp]);
+
+  // Once content exists, only fade in after output has been quiet for a
+  // moment so the indicator never competes with flowing text; a turn with no
+  // content yet shows it immediately.
+  useEffect(() => {
+    if (showImmediately) {
+      setVisible(true);
+      return undefined;
+    }
+    setVisible(false);
+    const timeoutId = window.setTimeout(() => setVisible(true), ACTIVITY_QUIET_DELAY_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [fingerprint, showImmediately]);
+
+  useEffect(() => {
+    setIsLongWaiting(false);
+    const timeoutId = window.setTimeout(
+      () => setIsLongWaiting(true),
+      ACTIVITY_LONG_WAIT_HINT_DELAY_MS,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [fingerprint]);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    setNow(Date.now());
+    const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [visible]);
+
+  if (!visible) return null;
+
+  const elapsedMs = now - startRef.current;
+  const statusText = statusTextOverride ?? getActivityIndicatorStatusText(false, isLongWaiting);
+
+  return (
+    <div className="flex items-center gap-2 py-1 animate-fade-in" role="status" aria-live="polite">
+      <span className="activity-indicator-dot h-2 w-2 rounded-full bg-primary flex-shrink-0" aria-hidden="true" />
+      <span className="shimmer-text text-sm text-secondary min-w-0 truncate">{statusText}</span>
+      {elapsedMs >= ACTIVITY_TIMER_APPEAR_DELAY_MS && (
+        <span className="text-xs text-muted tabular-nums flex-shrink-0 animate-fade-in">
+          {formatElapsedDuration(elapsedMs)}
+        </span>
+      )}
+    </div>
+  );
+};
 
 const getSystemMessageDisplayContent = (message: CoworkMessage, content: string): string => {
   const errorText = typeof message.metadata?.error === 'string' ? message.metadata.error : null;
@@ -284,7 +351,8 @@ const AssistantTurnBlock: React.FC<{
   onConfirmPlan?: (messageId: string) => void;
   onAdjustPlan?: (messageId: string) => void;
   renderToolGroupFooter?: (group: ToolGroupItem) => React.ReactNode;
-  showTypingIndicator?: boolean;
+  showActivityIndicator?: boolean;
+  activityStatusOverride?: string | null;
   showCopyButtons?: boolean;
   completedGoal?: CoworkGoal | null;
   searchTargetMessageId?: string | null;
@@ -303,7 +371,8 @@ const AssistantTurnBlock: React.FC<{
   onConfirmPlan,
   onAdjustPlan,
   renderToolGroupFooter,
-  showTypingIndicator = false,
+  showActivityIndicator = false,
+  activityStatusOverride = null,
   showCopyButtons = true,
   completedGoal,
   searchTargetMessageId,
@@ -561,7 +630,14 @@ const AssistantTurnBlock: React.FC<{
                 </div>
               );
             })}
-            {showTypingIndicator && <TypingDots />}
+            {showActivityIndicator && (
+              <ActivityIndicator
+                fingerprint={getTurnActivityFingerprint(turn)}
+                showImmediately={visibleAssistantItems.length === 0 || Boolean(activityStatusOverride)}
+                startTimestamp={turn.userMessage?.timestamp ?? null}
+                statusTextOverride={activityStatusOverride}
+              />
+            )}
             {artifacts && artifacts.length > 0 && (
               <div className="space-y-2 pt-1">
                 <VideoArtifactPathList artifacts={videoPathArtifacts} />
