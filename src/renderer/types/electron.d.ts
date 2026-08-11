@@ -44,6 +44,10 @@ import type {
 import type { CoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type {
+  CoworkSearchMessage,
+  CoworkSearchMessageCursor,
+} from '../../shared/cowork/search';
+import type {
   DataMigrationBackupResult,
   DataMigrationLastRestoreResponse,
   DataMigrationRestoreScheduleResult,
@@ -962,6 +966,21 @@ interface IElectronAPI {
       success: boolean;
       messages?: CoworkMessage[];
       offset?: number;
+      total?: number;
+      error?: string;
+    }>;
+    getSessionSearchMessages: (options: {
+      sessionId: string;
+      limit?: number;
+      offset?: number;
+      cursor?: CoworkSearchMessageCursor;
+      knownTotal?: number;
+    }) => Promise<{
+      success: boolean;
+      messages?: CoworkSearchMessage[];
+      offset?: number;
+      nextOffset?: number;
+      nextCursor?: CoworkSearchMessageCursor;
       total?: number;
       error?: string;
     }>;

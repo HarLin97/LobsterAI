@@ -424,6 +424,29 @@ export class SqliteStore {
       // Column already exists or migration not needed.
     }
 
+    // Keep mixed-message pagination (history rail and conversation search)
+    // index-backed. This must run after the legacy `sequence` migration above:
+    // older installations can still have a cowork_messages table without that
+    // column when initializeTables starts.
+    try {
+      const indexName = 'idx_cowork_messages_session_order';
+      const existingIndex = this.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?")
+        .get(indexName);
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_cowork_messages_session_order
+        ON cowork_messages(session_id, COALESCE(sequence, created_at), created_at);
+      `);
+      if (!existingIndex) {
+        this.didRunMigration = true;
+        console.log('[SqliteStore] created cowork message pagination index');
+      }
+    } catch (error) {
+      // Index creation is an optimization; keep startup compatible with a
+      // recoverable legacy schema and leave the existing pagination path usable.
+      console.warn('[SqliteStore] failed to create cowork message pagination index:', error);
+    }
+
     try {
       const pinnedResult = this.db.prepare('UPDATE cowork_sessions SET pinned = 0 WHERE pinned IS NULL;').run();
       const pinOrderResult = this.db

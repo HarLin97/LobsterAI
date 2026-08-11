@@ -18,6 +18,7 @@ import coworkReducer, {
   addPendingSteer,
   addSession,
   appendBtwEntry,
+  appendNewerMessages,
   clearBtwComposerIfUnchanged,
   clearCurrentSession,
   clearMediaAccountState,
@@ -33,6 +34,7 @@ import coworkReducer, {
   setCurrentSessionId,
   setMediaModels,
   setMediaSelection,
+  setMessageWindow,
   setSessions,
   settleBtwEntry,
   updateCurrentSessionModelOverride,
@@ -297,6 +299,191 @@ test('addMessage refreshes the session updated time only for user messages', () 
   );
   expect(userState.sessions[0].updatedAt).toBe(3000);
   expect(userState.currentSession?.updatedAt).toBe(3000);
+});
+
+test('addMessage keeps live tail messages outside a detached middle window', () => {
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: [
+      { id: 'message-20', type: 'user', content: 'twenty', timestamp: 20 },
+      { id: 'message-21', type: 'assistant', content: 'twenty one', timestamp: 21 },
+    ],
+    messagesOffset: 20,
+    totalMessages: 24,
+  })));
+
+  const state = coworkReducer(initialState, addMessage({
+    sessionId: 'session-1',
+    message: { id: 'message-24', type: 'assistant', content: 'live tail', timestamp: 24 },
+  }));
+
+  expect(state.currentSession?.messages.map(message => message.id)).toEqual([
+    'message-20',
+    'message-21',
+  ]);
+  expect(state.currentSession?.totalMessages).toBe(25);
+  expect(state.detachedTailMessagesBySessionId['session-1']?.map(message => message.id)).toEqual([
+    'message-24',
+  ]);
+});
+
+test('setMessageWindow retains the displaced tail for streaming updates', () => {
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: [
+      { id: 'message-22', type: 'user', content: 'twenty two', timestamp: 22 },
+      { id: 'message-23', type: 'assistant', content: 'streaming', timestamp: 23 },
+    ],
+    messagesOffset: 22,
+    totalMessages: 24,
+  })));
+  const detachedState = coworkReducer(initialState, setMessageWindow({
+    sessionId: 'session-1',
+    messages: [
+      { id: 'message-10', type: 'user', content: 'ten', timestamp: 10 },
+      { id: 'message-11', type: 'assistant', content: 'eleven', timestamp: 11 },
+    ],
+    messagesOffset: 10,
+    totalMessages: 24,
+  }));
+
+  const state = coworkReducer(detachedState, updateMessageContent({
+    sessionId: 'session-1',
+    messageId: 'message-23',
+    content: 'streaming update with needle',
+  }));
+
+  expect(state.currentSession?.messages.map(message => message.id)).toEqual([
+    'message-10',
+    'message-11',
+  ]);
+  expect(state.detachedTailMessagesBySessionId['session-1']?.find(
+    message => message.id === 'message-23',
+  )?.content).toBe('streaming update with needle');
+});
+
+test('setMessageWindow bounds the detached tail to the most recent messages', () => {
+  const allMessages = Array.from({ length: 150 }, (_, index) => ({
+    id: `message-${index}`,
+    type: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+    content: `message ${index}`,
+    timestamp: index,
+  }));
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: allMessages,
+    messagesOffset: 0,
+    totalMessages: allMessages.length,
+  })));
+
+  const state = coworkReducer(initialState, setMessageWindow({
+    sessionId: 'session-1',
+    messages: allMessages.slice(0, 50),
+    messagesOffset: 0,
+    totalMessages: allMessages.length,
+  }));
+
+  expect(state.detachedTailMessagesBySessionId['session-1']).toHaveLength(100);
+  expect(state.detachedTailMessagesBySessionId['session-1']?.[0]?.id).toBe('message-50');
+  expect(state.detachedTailMessagesBySessionId['session-1']?.[99]?.id).toBe('message-149');
+});
+
+test('setMessageWindow does not detach older messages when the next window includes the tail', () => {
+  const allMessages = Array.from({ length: 150 }, (_, index) => ({
+    id: `message-${index}`,
+    type: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+    content: `message ${index}`,
+    timestamp: index,
+  }));
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: allMessages,
+    messagesOffset: 0,
+    totalMessages: allMessages.length,
+  })));
+
+  const state = coworkReducer(initialState, setMessageWindow({
+    sessionId: 'session-1',
+    messages: allMessages.slice(100),
+    messagesOffset: 100,
+    totalMessages: allMessages.length,
+  }));
+
+  expect(state.currentSession?.messages.map(message => message.id)).toEqual(
+    allMessages.slice(100).map(message => message.id),
+  );
+  expect(state.detachedTailMessagesBySessionId['session-1']).toBeUndefined();
+});
+
+test('setMessageWindow accepts an authoritative lower total when no live message raced the request', () => {
+  const allMessages = Array.from({ length: 10 }, (_, index) => ({
+    id: `message-${index}`,
+    type: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+    content: `message ${index}`,
+    timestamp: index,
+  }));
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: allMessages,
+    messagesOffset: 0,
+    totalMessages: 12,
+  })));
+
+  const state = coworkReducer(initialState, setMessageWindow({
+    sessionId: 'session-1',
+    messages: allMessages,
+    messagesOffset: 0,
+    totalMessages: 10,
+  }));
+
+  expect(state.currentSession?.totalMessages).toBe(10);
+});
+
+test('setCurrentSession releases the previous session detached tail', () => {
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: [
+      { id: 'message-20', type: 'user', content: 'twenty', timestamp: 20 },
+    ],
+    messagesOffset: 20,
+    totalMessages: 24,
+  })));
+  const withDetachedTail = coworkReducer(initialState, addMessage({
+    sessionId: 'session-1',
+    message: { id: 'message-24', type: 'assistant', content: 'live tail', timestamp: 24 },
+  }));
+
+  const state = coworkReducer(withDetachedTail, setCurrentSession(makeSession({
+    id: 'session-2',
+    title: 'Session 2',
+  })));
+
+  expect(state.currentSession?.id).toBe('session-2');
+  expect(state.detachedTailMessagesBySessionId['session-1']).toBeUndefined();
+});
+
+test('appendNewerMessages extends a paged window without changing its offset or duplicating messages', () => {
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: [
+      { id: 'message-20', type: 'user', content: 'twenty', timestamp: 20 },
+      { id: 'message-21', type: 'assistant', content: 'twenty one', timestamp: 21 },
+    ],
+    messagesOffset: 20,
+    totalMessages: 24,
+  })));
+
+  const state = coworkReducer(initialState, appendNewerMessages({
+    sessionId: 'session-1',
+    messages: [
+      { id: 'message-21', type: 'assistant', content: 'duplicate', timestamp: 21 },
+      { id: 'message-22', type: 'user', content: 'twenty two', timestamp: 22 },
+      { id: 'message-23', type: 'assistant', content: 'twenty three', timestamp: 23 },
+    ],
+    totalMessages: 24,
+  }));
+
+  expect(state.currentSession?.messages.map(message => message.id)).toEqual([
+    'message-20',
+    'message-21',
+    'message-22',
+    'message-23',
+  ]);
+  expect(state.currentSession?.messagesOffset).toBe(20);
+  expect(state.currentSession?.totalMessages).toBe(24);
 });
 
 test('updateMessageContent preserves the session updated time', () => {

@@ -33,6 +33,11 @@ import {
 import {
   AgentId,
 } from '../shared/agent/constants';
+import {
+  LogReporterAction,
+  LogReporterSource,
+  LogReporterStoreKey,
+} from '../shared/analytics/constants';
 import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
@@ -75,6 +80,8 @@ import {
 } from '../shared/cowork/btw';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
+  COWORK_SEARCH_MESSAGE_PAGE_MAX_SIZE,
+  COWORK_SEARCH_MESSAGE_PAGE_SIZE,
   COWORK_SESSION_PAGE_SIZE,
   COWORK_TEMP_ATTACHMENTS_DIR_NAME,
   COWORK_TEMP_DIR_NAME,
@@ -90,6 +97,7 @@ import {
   validateCoworkImageAttachmentSize,
 } from '../shared/cowork/imageAttachments';
 import { containsPlanModePrompt } from '../shared/cowork/planMode';
+import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import {
   type CoworkSelectedTextSnippet,
   normalizeCoworkSelectedTextSnippets,
@@ -282,6 +290,7 @@ import {
 } from './libs/coworkTempJanitor';
 import {
   generateSessionTitle,
+  getElectronNodeRuntimePath,
   probeCoworkModelReadiness,
 } from './libs/coworkUtil';
 import {
@@ -329,6 +338,7 @@ import {
 import { packageHtmlFile } from './libs/htmlShare/htmlSharePackager';
 import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyfromAttribution';
 import { exportLogsZip } from './libs/logExport';
+import { MainLogReporter } from './libs/mainLogReporter';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import {
   migrateAgentModelRefs,
@@ -344,7 +354,11 @@ import {
   DEFAULT_MANAGED_AGENT_ID,
   OpenClawChannelSessionSync,
 } from './libs/openclawChannelSessionSync';
-import { CONFIG_DELIVERY_FALLBACK_REASON_PREFIX, deliverOpenClawConfigToGateway } from './libs/openclawConfigDelivery';
+import {
+  CONFIG_DELIVERY_FALLBACK_REASON_PREFIX,
+  deliverOpenClawConfigToGateway,
+  OpenClawConfigDeliveryMode,
+} from './libs/openclawConfigDelivery';
 import {
   classifyAppConfigChange,
   classifyCoworkConfigChange,
@@ -379,6 +393,10 @@ import {
   writeBootstrapFile,
   writeMemoryFileRaw,
 } from './libs/openclawMemoryFile';
+import {
+  migrateLegacyOpenClawPluginInstalls,
+  OpenClawPluginInstallMigrationStatus,
+} from './libs/openclawPluginInstallMigration';
 import { collectReferencedEnvVarNames, pickReferencedSecretEnvVars } from './libs/openclawSecretEnv';
 import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
@@ -1880,8 +1898,7 @@ let coworkRuntimeForwarderBound = false;
 let memoryMigrationDone = false;
 let preventSleepBlockerId: number | null = null;
 let appUpdateCoordinator: AppUpdateCoordinator | null = null;
-
-const AUTH_USER_STORE_KEY = 'auth_user';
+let mainLogReporter: MainLogReporter | null = null;
 
 function setPreventSleepBlockerEnabled(enabled: boolean): void {
   if (enabled) {
@@ -1947,6 +1964,22 @@ const getAppUpdateCoordinator = (): AppUpdateCoordinator => {
     appUpdateCoordinator = new AppUpdateCoordinator(getStore());
   }
   return appUpdateCoordinator;
+};
+
+const getMainLogReporter = (): MainLogReporter => {
+  if (!mainLogReporter) {
+    mainLogReporter = new MainLogReporter({
+      appVersion: app.getVersion(),
+      fetch: async (url, signal) => {
+        const response = await session.defaultSession.fetch(url, { method: 'GET', signal });
+        const result = { ok: response.ok, status: response.status };
+        await response.body?.cancel();
+        return result;
+      },
+      store: getStore(),
+    });
+  }
+  return mainLogReporter;
 };
 
 const forwardOpenClawStatus = (status: OpenClawEngineStatus): void => {
@@ -2284,13 +2317,15 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
 };
 
 // Deferred gateway restart: when a config change requires a gateway restart
-// but active cowork sessions or cron jobs exist, we defer the restart until
-// all workloads complete.  A polling interval checks periodically; a hard
-// timeout ensures the restart eventually happens even if a session hangs.
+// but active cowork sessions or cron jobs exist, defer it until all workloads
+// complete. Polling applies it at the first idle point; after the overdue
+// threshold we keep the same request queued and surface a clearer pending
+// state instead of repeatedly re-syncing or terminating in-flight work.
 let deferredRestartTimer: ReturnType<typeof setInterval> | null = null;
 let deferredRestartTimeout: ReturnType<typeof setTimeout> | null = null;
+let deferredRestartOverdue = false;
 const DEFERRED_RESTART_POLL_MS = 3_000;
-const DEFERRED_RESTART_MAX_WAIT_MS = 5 * 60_000; // 5 minutes hard cap
+const DEFERRED_RESTART_OVERDUE_MS = 5 * 60_000;
 
 const hasActiveGatewayWorkloads = (): boolean => {
   if (openClawRuntimeAdapter?.hasActiveSessions()) return true;
@@ -2311,6 +2346,7 @@ const clearDeferredRestart = () => {
     clearTimeout(deferredRestartTimeout);
     deferredRestartTimeout = null;
   }
+  deferredRestartOverdue = false;
 };
 
 type SyncOpenClawConfigOptions = {
@@ -2369,7 +2405,9 @@ const waitForOpenClawConfigApply = async (context: string): Promise<OpenClawEngi
 
   if (deferredRestartReason) {
     return buildConfigApplyPendingStatus(
-      'OpenClaw is applying MCP configuration. Please try again shortly.',
+      deferredRestartOverdue
+        ? t('openClawConfigApplyOverdue')
+        : t('openClawConfigApplyPending'),
     );
   }
 
@@ -2384,8 +2422,16 @@ const executeDeferredGatewayRestart = async (reason: string) => {
   console.log(
     `${gwDiagTs()} executeDeferredGatewayRestart: performing deferred restart (reason: ${reason})`,
   );
+  // When the sync below re-defers (workloads still active), the re-scheduled
+  // reason flows back here on the next attempt — don't stack another
+  // `deferred:` prefix. Unbounded stacking also breaks the
+  // selfRestartSatisfiesSync() prefix check, misclassifying restarts that a
+  // gateway self-restart would satisfy as needing a full respawn.
+  const syncReason = reason.startsWith(DEFERRED_SYNC_REASON_PREFIX)
+    ? reason
+    : `${DEFERRED_SYNC_REASON_PREFIX}${reason}`;
   await syncOpenClawConfig({
-    reason: `${DEFERRED_SYNC_REASON_PREFIX}${reason}`,
+    reason: syncReason,
     restartGatewayIfRunning: true,
     expectedImpact: OpenClawConfigImpact.Restart,
   });
@@ -2435,22 +2481,33 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
   }
 
   console.log(
-    `${gwDiagTs()} scheduleDeferredGatewayRestart: scheduling deferred restart, polling every ${DEFERRED_RESTART_POLL_MS}ms, max wait ${DEFERRED_RESTART_MAX_WAIT_MS}ms (reason: ${reason})`,
+    `${gwDiagTs()} scheduleDeferredGatewayRestart: scheduling deferred restart, polling every ${DEFERRED_RESTART_POLL_MS}ms, overdue threshold ${DEFERRED_RESTART_OVERDUE_MS}ms (reason: ${reason})`,
   );
   deferredRestartReason = reason;
+  deferredRestartOverdue = false;
   deferredRestartTimer = setInterval(() => {
     if (!hasActiveGatewayWorkloads()) {
       void executeDeferredGatewayRestart(reason);
     }
   }, DEFERRED_RESTART_POLL_MS);
 
-  // Hard timeout: restart anyway after max wait to avoid config drift.
+  // Do not kill an active task at the threshold. Keep the original interval
+  // alive so the restart happens at the first idle poll, and avoid re-running
+  // sync every five minutes while a long task is still active.
   deferredRestartTimeout = setTimeout(() => {
+    deferredRestartTimeout = null;
+    if (hasActiveGatewayWorkloads()) {
+      deferredRestartOverdue = true;
+      console.warn(
+        `${gwDiagTs()} scheduleDeferredGatewayRestart: overdue while workloads remain active; restart stays queued until the first idle poll (reason: ${reason})`,
+      );
+      return;
+    }
     console.warn(
-      `${gwDiagTs()} scheduleDeferredGatewayRestart: max wait exceeded, forcing restart (reason: ${reason})`,
+      `${gwDiagTs()} scheduleDeferredGatewayRestart: overdue threshold reached after workloads drained; applying queued restart (reason: ${reason})`,
     );
     void executeDeferredGatewayRestart(reason);
-  }, DEFERRED_RESTART_MAX_WAIT_MS);
+  }, DEFERRED_RESTART_OVERDUE_MS);
 };
 
 const _syncOpenClawConfigImpl = async (
@@ -2461,6 +2518,34 @@ const _syncOpenClawConfigImpl = async (
     `${D()} ──── syncOpenClawConfig START reason=${options.reason} restartIfRunning=${!!options.restartGatewayIfRunning} expectedImpact=${options.expectedImpact ?? OpenClawConfigImpact.None}`,
   );
 
+  const configSync = getOpenClawConfigSync();
+  const manager = getOpenClawEngineManager();
+  const migrationSecretEnvVars = {
+    ...manager.getSecretEnvVars(),
+    ...configSync.collectSecretEnvVars(),
+  };
+  const pluginInstallMigration = await migrateLegacyOpenClawPluginInstalls({
+    configPath: manager.getConfigPath(),
+    stateDir: manager.getStateDir(),
+    runtimeRoot: manager.getRuntimeRoot(),
+    electronNodeRuntimePath: getElectronNodeRuntimePath(),
+    env: process.env,
+    secretEnvVars: migrationSecretEnvVars,
+  });
+  if (pluginInstallMigration.status === OpenClawPluginInstallMigrationStatus.Failed) {
+    const message = `OpenClaw legacy plugin install migration failed: ${pluginInstallMigration.error}`;
+    console.error('[OpenClaw] Legacy plugin install migration blocked config sync:', new Error(message));
+    const status = manager.setExternalError(message);
+    return {
+      success: false,
+      changed: false,
+      status,
+      error: message,
+    };
+  }
+  const pluginInstallMigrationChanged =
+    pluginInstallMigration.status === OpenClawPluginInstallMigrationStatus.Migrated;
+
   // Resolve MCP servers before sync (async → cache for synchronous callback)
   try {
     await getMcpRuntime().refreshResolvedServersCache();
@@ -2469,7 +2554,7 @@ const _syncOpenClawConfigImpl = async (
     getMcpRuntime().clearResolvedServersCache();
   }
 
-  const syncResult = getOpenClawConfigSync().sync(options.reason);
+  const syncResult = configSync.sync(options.reason);
   console.log(
     `${D()} sync() ok=${syncResult.ok} changed=${syncResult.changed} bindingsChanged=${!!syncResult.bindingsChanged} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None}`,
   );
@@ -2486,17 +2571,24 @@ const _syncOpenClawConfigImpl = async (
     };
   }
 
+  let enterpriseConfigChanged = false;
   try {
-    mergeEnterpriseOpenclawConfig(getOpenClawEngineManager().getConfigPath());
+    enterpriseConfigChanged = mergeEnterpriseOpenclawConfig(manager.getConfigPath());
   } catch {
     /* non-critical */
   }
 
-  const nextSecretEnvVars = getOpenClawConfigSync().collectSecretEnvVars();
-  const prevSecretEnvVars = getOpenClawEngineManager().getSecretEnvVars();
+  const effectiveConfigChanged =
+    syncResult.changed || pluginInstallMigrationChanged || enterpriseConfigChanged;
+  console.log(
+    `${D()} final config changed=${effectiveConfigChanged} (sync=${syncResult.changed} legacyMigration=${pluginInstallMigrationChanged} enterprise=${enterpriseConfigChanged})`,
+  );
+
+  const nextSecretEnvVars = configSync.collectSecretEnvVars();
+  const prevSecretEnvVars = manager.getSecretEnvVars();
   let referencedSecretEnvVarNames: Set<string> | null = null;
   try {
-    const configText = fs.readFileSync(getOpenClawEngineManager().getConfigPath(), 'utf8');
+    const configText = fs.readFileSync(manager.getConfigPath(), 'utf8');
     referencedSecretEnvVarNames = collectReferencedEnvVarNames(configText);
   } catch (error) {
     console.warn('[OpenClawConfigSync] failed to inspect referenced secret env vars, comparing all secrets:', error);
@@ -2508,7 +2600,7 @@ const _syncOpenClawConfigImpl = async (
     ? pickReferencedSecretEnvVars(prevSecretEnvVars, referencedSecretEnvVarNames)
     : prevSecretEnvVars;
   const secretEnvVarsChanged = JSON.stringify(effectiveNextSecretEnvVars) !== JSON.stringify(effectivePrevSecretEnvVars);
-  getOpenClawEngineManager().setSecretEnvVars(nextSecretEnvVars);
+  manager.setSecretEnvVars(nextSecretEnvVars);
 
   // Diagnostic: print which env vars changed
   if (secretEnvVarsChanged) {
@@ -2540,7 +2632,7 @@ const _syncOpenClawConfigImpl = async (
   // requires a running gateway restart. Some IM account state changes are stored
   // outside openclaw.json, so the explicit flag must not depend on config diffing.
   const expectedRestartImpact =
-    syncResult.changed
+    effectiveConfigChanged
     && options.expectedImpact === OpenClawConfigImpact.Restart;
   const syncRestartImpact =
     syncResult.restartImpact === OpenClawConfigImpact.Restart;
@@ -2552,11 +2644,11 @@ const _syncOpenClawConfigImpl = async (
     options.restartGatewayIfRunning === true;
 
   console.log(
-    `${D()} needsHardRestart=${needsHardRestart} (envChanged=${secretEnvVarsChanged} bindingsChanged=${!!syncResult.bindingsChanged} configChanged=${syncResult.changed} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None} expectedRestart=${expectedRestartImpact} restartFlag=${!!options.restartGatewayIfRunning})`,
+    `${D()} needsHardRestart=${needsHardRestart} (envChanged=${secretEnvVarsChanged} bindingsChanged=${!!syncResult.bindingsChanged} configChanged=${effectiveConfigChanged} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None} expectedRestart=${expectedRestartImpact} restartFlag=${!!options.restartGatewayIfRunning})`,
   );
 
   if (!needsHardRestart) {
-    if (!syncResult.changed) {
+    if (!effectiveConfigChanged) {
       console.log(`${D()} ──── NO RESTART, config unchanged. reason=${options.reason}`);
       return {
         success: true,
@@ -2580,13 +2672,20 @@ const _syncOpenClawConfigImpl = async (
     console.log(
       `${D()} ──── NO RESTART, hot delivery mode=${delivery.mode} restartScheduled=${delivery.restartScheduled}. reason=${options.reason}`,
     );
+    if (delivery.mode === OpenClawConfigDeliveryMode.Rejected) {
+      return {
+        success: false,
+        changed: true,
+        status: deliveryManager.getStatus(),
+        error: delivery.detail,
+      };
+    }
     return {
       success: true,
       changed: true,
     };
   }
 
-  const manager = getOpenClawEngineManager();
   const status = manager.getStatus();
   if (status.phase !== 'running') {
     console.log(
@@ -3080,6 +3179,13 @@ const getCoworkEngineRouter = () => {
         getOpenClawEngineManager(),
         {
           normalizeModelRef: normalizeOpenClawModelRef,
+          onChannelPromptSubmit: event => {
+            void getMainLogReporter().report({
+              action: LogReporterAction.ImPromptSubmit,
+              source: LogReporterSource.OpenClawChannel,
+              ...event,
+            });
+          },
           onGatewayClientReady: () => {
             getCronJobService().notifyGatewayReady();
             handleGatewaySelfRestartSettled();
@@ -4581,7 +4687,7 @@ if (!gotTheLock) {
 
   const getAuthUser = (): Record<string, unknown> | null => {
     try {
-      return getStore().get<Record<string, unknown>>(AUTH_USER_STORE_KEY) || null;
+      return getStore().get<Record<string, unknown>>(LogReporterStoreKey.AuthUser) || null;
     } catch (error) {
       console.warn('[Auth] failed to read cached auth user:', error);
       return null;
@@ -4590,7 +4696,7 @@ if (!gotTheLock) {
 
   const saveAuthUser = (user: Record<string, unknown>) => {
     try {
-      getStore().set(AUTH_USER_STORE_KEY, user);
+      getStore().set(LogReporterStoreKey.AuthUser, user);
     } catch (error) {
       console.warn('[Auth] failed to save auth user for attribution:', error);
     }
@@ -4599,7 +4705,7 @@ if (!gotTheLock) {
   const getCurrentMediaAccountScope = (): MediaAccountScope | null => {
     if (!getAuthTokens()) return null;
     try {
-      const user = getStore().get<Record<string, unknown>>(AUTH_USER_STORE_KEY);
+      const user = getStore().get<Record<string, unknown>>(LogReporterStoreKey.AuthUser);
       const enterpriseContext = getPersistedEnterpriseAccountContext(getStore());
       if (
         !enterpriseContext
@@ -4713,7 +4819,7 @@ if (!gotTheLock) {
 
   const clearAuthUser = () => {
     try {
-      getStore().delete(AUTH_USER_STORE_KEY);
+      getStore().delete(LogReporterStoreKey.AuthUser);
     } catch (error) {
       console.warn('[Auth] failed to clear auth user for attribution:', error);
     }
@@ -9091,7 +9197,11 @@ if (!gotTheLock) {
 
   ipcMain.handle(
     'cowork:session:getMessages',
-    async (_event, options: { sessionId: string; limit?: number; offset?: number }) => {
+    async (_event, options: {
+      sessionId: string;
+      limit?: number;
+      offset?: number;
+    }) => {
       try {
         const { sessionId, limit = COWORK_MESSAGE_PAGE_SIZE, offset = 0 } = options;
         const store = getCoworkStore();
@@ -9105,6 +9215,47 @@ if (!gotTheLock) {
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to get session messages',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    CoworkIpcChannel.GetSessionSearchMessages,
+    async (_event, options: {
+      sessionId: string;
+      limit?: number;
+      offset?: number;
+      cursor?: CoworkSearchMessageCursor;
+      knownTotal?: number;
+    }) => {
+      try {
+        const requestedLimit = options?.limit ?? COWORK_SEARCH_MESSAGE_PAGE_SIZE;
+        const limit = Number.isFinite(requestedLimit)
+          ? Math.max(1, Math.min(COWORK_SEARCH_MESSAGE_PAGE_MAX_SIZE, Math.floor(requestedLimit)))
+          : COWORK_SEARCH_MESSAGE_PAGE_SIZE;
+        const requestedOffset = options?.offset ?? 0;
+        const offset = Number.isFinite(requestedOffset)
+          ? Math.max(0, Math.floor(requestedOffset))
+          : 0;
+        const page = getCoworkStore().getSessionSearchMessagePage(
+          options.sessionId,
+          limit,
+          offset,
+          options.cursor,
+          options.knownTotal,
+        );
+        console.debug(
+          `[CoworkIPC] loaded lightweight search page for session ${options.sessionId}; `
+          + `returned ${page.messages.length} searchable messages while advancing `
+          + `from offset ${page.offset} to ${page.nextOffset} of ${page.total}.`,
+        );
+        return { success: true, ...page };
+      } catch (error) {
+        console.error('[CoworkIPC] failed to load lightweight conversation search page:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to get conversation search messages',
         };
       }
     },
@@ -13240,6 +13391,13 @@ if (!gotTheLock) {
     } catch (err) {
       console.warn('[OpenClaw] main agent workspace migration failed (non-fatal):', err);
     }
+
+    // An interrupted Windows installer can leave an empty resources/cfmind
+    // directory plus win-resources.tar. Recover it before config sync because
+    // legacy plugins.installs migration needs the bundled OpenClaw CLI.
+    profiler.mark('prepareOpenClawRuntime');
+    await getOpenClawEngineManager().prepareRuntimeForStartupConfigSync();
+    profiler.measure('prepareOpenClawRuntime');
 
     profiler.mark('syncOpenClawConfig');
     const startupSync = await syncOpenClawConfig({

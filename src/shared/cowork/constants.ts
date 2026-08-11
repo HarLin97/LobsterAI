@@ -20,6 +20,29 @@ export const COWORK_SESSION_PAGE_SIZE = 50;
 export const COWORK_MESSAGE_PAGE_SIZE = 30;
 
 /**
+ * Number of rows from the full mixed-message timeline inspected per
+ * conversation-search request. Search pages intentionally use a separate,
+ * bounded projection so tool/system payloads and message metadata never cross
+ * the renderer IPC boundary.
+ */
+export const COWORK_SEARCH_MESSAGE_PAGE_SIZE = 200;
+
+/** Defensive upper bound for renderer-supplied conversation-search page sizes. */
+export const COWORK_SEARCH_MESSAGE_PAGE_MAX_SIZE = 500;
+
+/** Maximum aggregate searchable UTF-8 content returned by one IPC page. */
+export const COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES = 16_777_216;
+
+/** Maximum number of rows inspected from the complete mixed-message timeline. */
+export const COWORK_SEARCH_HISTORY_MAX_MIXED_ROWS = 100_000;
+
+/** Maximum searchable content retained by the renderer, measured in UTF-16 code units. */
+export const COWORK_SEARCH_HISTORY_MAX_CONTENT_CODE_UNITS = 16_777_216;
+
+/** Maximum searchable content retained for one message, measured in UTF-16 code units. */
+export const COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS = 1_048_576;
+
+/**
  * Per-working-directory scratch directory for intermediate files (model
  * helper scripts, pasted attachments, drafts). Swept by the cowork temp
  * janitor; user-facing deliverables must not live here.
@@ -47,6 +70,7 @@ export const CoworkIpcChannel = {
   SetActiveSession: 'cowork:session:setActive',
   ExportSessionDiagnostics: 'cowork:session:exportDiagnostics',
   GetSessionMessageRailIndex: 'cowork:session:getMessageRailIndex',
+  GetSessionSearchMessages: 'cowork:session:getSearchMessages',
   OpenSessionFromNotification: 'cowork:session:openFromNotification',
   OpenSessionFromNotificationReady: 'cowork:session:openFromNotificationReady',
   GoalCommand: 'cowork:session:goalCommand',

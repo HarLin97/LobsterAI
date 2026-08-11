@@ -1577,6 +1577,12 @@ FunctionEnd
   ; Wrapped in a 10-minute watchdog: if security software freezes the child
   ; before it can run, the installer must fail visibly instead of hanging
   ; forever (a killed installer leaves a half-installed app behind).
+  ;
+  ; Some security tooling permanently breaks the .NET exit-code query inside
+  ; PowerShell ($p.ExitCode stays $null after a successful wait) while the
+  ; child itself completes fine. The child therefore publishes a post-verify
+  ; sentinel file (.unpack-cfmind-ok); a null exit code with the sentinel
+  ; present is treated as success, still gated by TarExtractVerify.
   StrCpy $R3 "electron"
   DetailPrint "[Installer] Launching bundled extractor"
   FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
@@ -1589,6 +1595,8 @@ FunctionEnd
   !insertmacro ResolveTrustedPowerShell
   StrCmp $lobsterTrustedPowerShellPath "" TarExtractHelperNotFound
   Delete "$PLUGINSDIR\lobster-watchdog-$lobsterInstallerAttemptId.marker"
+  ; A stale sentinel from an earlier run must never vouch for this attempt.
+  Delete "$INSTDIR\resources\.unpack-cfmind-ok"
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_WATCHDOG_MARKER_PATH", t "$PLUGINSDIR\lobster-watchdog-$lobsterInstallerAttemptId.marker")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_EXE", t "$INSTDIR\${APP_EXECUTABLE_FILENAME}")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_SCRIPT", t "$INSTDIR\resources\unpack-cfmind.cjs")i'
@@ -1617,6 +1625,15 @@ FunctionEnd
     if ($$p.WaitForExit(600000)) {\
       $$p.WaitForExit();\
       if ($$p.ExitCode -eq $$null) {\
+        $$sentinelOk = $$false;\
+        try {\
+          $$sentinel = Join-Path $$env:LOBSTERAI_EXTRACTOR_DESTINATION \".unpack-cfmind-ok\";\
+          $$sentinelOk = Test-Path -LiteralPath $$sentinel\
+        } catch { $$sentinelOk = $$false };\
+        if ($$sentinelOk) {\
+          Write-LobsterWatchdogMarker \"exit-code-null-sentinel-ok\";\
+          exit 0\
+        };\
         Write-LobsterWatchdogMarker \"output-validation-failed\";\
         exit 127\
       };\
@@ -1686,14 +1703,28 @@ FunctionEnd
   IntCmp $R2 0 TarExtractVerify TarExtractNonZero TarExtractNonZero
 
   TarExtractVerify:
-  ; Success requires the OpenClaw runtime entry to actually exist -- an exit
-  ; code alone must never trigger deletion of the only recovery source.
-  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" TarExtractSucceeded
-  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" TarExtractSucceeded
+  ; Success requires every large bundled resource to be usable -- an exit code
+  ; alone must never trigger deletion of the only recovery source.
+  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" TarExtractVerifySkills
+  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" TarExtractVerifySkills
+  StrCpy $R5 "runtime-entry-missing"
+  Goto TarExtractRequiredResourceMissing
+
+  TarExtractVerifySkills:
+  IfFileExists "$INSTDIR\resources\SKILLs\*.*" TarExtractVerifyPython
+  StrCpy $R5 "skills-content-missing"
+  Goto TarExtractRequiredResourceMissing
+
+  TarExtractVerifyPython:
+  IfFileExists "$INSTDIR\resources\python-win\python.exe" TarExtractSucceeded
+  IfFileExists "$INSTDIR\resources\python-win\python3.exe" TarExtractSucceeded
+  StrCpy $R5 "python-entry-missing"
+
+  TarExtractRequiredResourceMissing:
   FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
   FileSeek $2 0 END
   !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=tar-extract-error attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 reason=entry-missing-after-extract$\r$\n"
+  FileWrite $2 "$8 phase=tar-extract-error attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 reason=$R5-after-extract$\r$\n"
   FileClose $2
   ; A bogus system-tar success still gets a shot at the bundled extractor.
   ;
@@ -1701,7 +1732,7 @@ FunctionEnd
   ; in /S installs unless a silent default is declared, and the in-app update
   ; must never block on an orphan dialog.
   StrCmp $R3 "system-tar" TarExtractElectron
-  MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI installation stopped because resource extraction completed without the required AI runtime entry. The installer will not commit a partial application. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
+  MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI installation stopped because resource extraction completed without all required runtime resources ($R5). The installer will not commit a partial application. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
   Goto TarExtractFailed
 
   TarExtractProcessFailed:
@@ -1737,6 +1768,22 @@ FunctionEnd
     Quit
 
   TarExtractOutputValidationFailed:
+    ; The watchdog waited out the child but could not read its exit code. On
+    ; machines where security tooling permanently breaks that query the child
+    ; may still have succeeded, so consult its post-verify sentinel before
+    ; declaring failure; TarExtractVerify still makes the final on-disk call.
+    ; (Dual of the TarExtractVerify principle: just as an exit code alone must
+    ; never trigger deletion, an unreadable exit code alone must never abort
+    ; an installation whose payload verifiably exists.)
+    IfFileExists "$INSTDIR\resources\.unpack-cfmind-ok" 0 TarExtractOutputValidationFatal
+    FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
+    FileSeek $2 0 END
+    !insertmacro GetTimestamp $8
+    FileWrite $2 "$8 phase=tar-extract-sentinel-rescue attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 raw_marker=$R4 elapsed_ms=$5 sentinel=present$\r$\n"
+    FileClose $2
+    Goto TarExtractVerify
+
+  TarExtractOutputValidationFatal:
     FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
     FileSeek $2 0 END
     !insertmacro GetTimestamp $8
@@ -1767,9 +1814,11 @@ FunctionEnd
   FileClose $2
   DetailPrint "[Installer] Bundled resources extraction complete"
   ; Only a verified success may delete these: the preserved archive is what
-  ; lets the app finish an interrupted extraction at first launch.
+  ; lets the app finish an interrupted extraction at first launch. The
+  ; sentinel has served its purpose once the install commits.
   Delete "$INSTDIR\resources\win-resources.tar"
   Delete "$INSTDIR\resources\unpack-cfmind.cjs"
+  Delete "$INSTDIR\resources\.unpack-cfmind-ok"
   Goto TarExtractDone
 
   TarExtractFailed:
@@ -2049,10 +2098,18 @@ FunctionEnd
   StrCpy $lobsterNewInstallValidationReason "app-asar-missing"
   IfFileExists "$INSTDIR\resources\app.asar" 0 NewInstallPrevalidateFailed
 
-  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" NewInstallPrevalidateSucceeded
-  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" NewInstallPrevalidateSucceeded
+  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" NewInstallPrevalidateSkills
+  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" NewInstallPrevalidateSkills
   StrCpy $lobsterNewInstallValidationReason "runtime-entry-missing"
   Goto NewInstallPrevalidateFailed
+
+  NewInstallPrevalidateSkills:
+    StrCpy $lobsterNewInstallValidationReason "skills-content-missing"
+    IfFileExists "$INSTDIR\resources\SKILLs\*.*" 0 NewInstallPrevalidateFailed
+    StrCpy $lobsterNewInstallValidationReason "python-entry-missing"
+    IfFileExists "$INSTDIR\resources\python-win\python.exe" NewInstallPrevalidateSucceeded
+    IfFileExists "$INSTDIR\resources\python-win\python3.exe" NewInstallPrevalidateSucceeded
+    Goto NewInstallPrevalidateFailed
 
   NewInstallPrevalidateSucceeded:
     StrCpy $lobsterNewInstallValidationStatus "success"

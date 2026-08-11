@@ -13,6 +13,10 @@ import {
 import { ProviderAuthType, ProviderName, ProviderRegistry } from '../shared/providers';
 import { CoworkView } from './components/cowork';
 import { CoworkShortcutDirection, CoworkUiEvent } from './components/cowork/constants';
+import {
+  ConversationSearchShortcutTarget,
+  resolveConversationSearchShortcutTarget,
+} from './components/cowork/conversationSearchShortcut';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
@@ -886,9 +890,18 @@ const App: React.FC = () => {
     return activeElement instanceof HTMLInputElement;
   };
 
+  const isCoworkSearchEligibleEditorActive = () => {
+    const activeElement = document.activeElement;
+    if (!(activeElement instanceof HTMLElement)) return false;
+    return Boolean(activeElement.closest([
+      '[data-skin-prompt-input="true"]',
+      '[data-cowork-conversation-search="true"]',
+    ].join(',')));
+  };
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat || isShortcutInputActive() || isTextEditingActive()) return;
+      if (event.repeat || event.defaultPrevented || isShortcutInputActive()) return;
 
       const { shortcuts } = configService.getConfig();
       const activeShortcuts = {
@@ -899,6 +912,7 @@ const App: React.FC = () => {
       const matchesAction = (action: ShortcutAction) => matchesShortcut(event, activeShortcuts[action]);
 
       if (showSettings) {
+        if (isTextEditingActive()) return;
         if (matchesAction(ShortcutAction.ShowShortcuts)) {
           event.preventDefault();
           handleShowSettings({ initialTab: 'shortcuts' });
@@ -908,15 +922,28 @@ const App: React.FC = () => {
 
       if (showUpdateModal || isPermissionModalOpen || isUpdateInteractionBlocked) return;
 
-      if (matchesAction(ShortcutAction.NewChat)) {
-        event.preventDefault();
-        handleNewChat();
+      if (matchesAction(ShortcutAction.Search)) {
+        const shortcutTarget = resolveConversationSearchShortcutTarget({
+          isCoworkView: mainView === 'cowork',
+          hasCurrentSession: Boolean(currentSessionId),
+          isTextEditing: isTextEditingActive(),
+          isCoworkSearchEligibleEditor: isCoworkSearchEligibleEditorActive(),
+        });
+        if (shortcutTarget === ConversationSearchShortcutTarget.Conversation) {
+          event.preventDefault();
+          window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutConversationSearch));
+        } else if (shortcutTarget === ConversationSearchShortcutTarget.History) {
+          event.preventDefault();
+          window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutSearch));
+        }
         return;
       }
 
-      if (matchesAction(ShortcutAction.Search)) {
+      if (isTextEditingActive()) return;
+
+      if (matchesAction(ShortcutAction.NewChat)) {
         event.preventDefault();
-        window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutSearch));
+        handleNewChat();
         return;
       }
 
@@ -1537,4 +1564,4 @@ const App: React.FC = () => {
   );
 };
 
-export default App; 
+export default App;

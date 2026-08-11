@@ -7,6 +7,13 @@ import {
 } from '../../../shared/enterpriseAccount/constants';
 import type { EnterpriseAccountContext } from '../../../shared/enterpriseAccount/types';
 import { ProviderName } from '../../../shared/providers/constants';
+import { selectCurrentMessagesWithDetachedTail } from '../../store/selectors/coworkSelectors';
+import coworkReducer, {
+  addMessage,
+  setCurrentSession,
+  setMessageWindow,
+  updateSessionStatus,
+} from '../../store/slices/coworkSlice';
 import type { CoworkMessage, CoworkSession } from '../../types/cowork';
 import { CoworkSessionStatusValue } from '../../types/cowork';
 import {
@@ -92,6 +99,12 @@ const createEnterpriseContext = (
   },
 });
 
+const selectAuthoritativeMessages = (
+  coworkState: ReturnType<typeof coworkReducer>,
+): CoworkMessage[] => selectCurrentMessagesWithDetachedTail({
+  cowork: coworkState,
+} as unknown as Parameters<typeof selectCurrentMessagesWithDetachedTail>[0]);
+
 describe('findCurrentEnterpriseQuotaSignal', () => {
   test('returns the structured reason from the latest terminal error', () => {
     const signal = findCurrentEnterpriseQuotaSignal(createSession(
@@ -157,6 +170,83 @@ describe('findCurrentEnterpriseQuotaSignal', () => {
     });
 
     expect(findCurrentEnterpriseQuotaSignal(session)).toBeNull();
+  });
+
+  test('retains a detached tail quota signal and clears it after a live user turn', () => {
+    const oldMessage: CoworkMessage = {
+      id: 'old-user',
+      type: 'user',
+      content: 'Earlier turn',
+      timestamp: 1,
+    };
+    const quotaMessage = createToolErrorMessage(
+      'media-quota-error',
+      EnterpriseQuotaReason.MemberMonthlyQuotaExhausted,
+    );
+    const session = createSession(CoworkSessionStatusValue.Running, [oldMessage, quotaMessage]);
+    let state = coworkReducer(undefined, setCurrentSession(session));
+    state = coworkReducer(state, setMessageWindow({
+      sessionId: session.id,
+      messages: [oldMessage],
+      messagesOffset: 0,
+      totalMessages: 2,
+    }));
+
+    expect(findCurrentEnterpriseQuotaSignal(
+      state.currentSession,
+      selectAuthoritativeMessages(state),
+    )).toEqual({
+      messageId: 'media-quota-error',
+      reason: EnterpriseQuotaReason.MemberMonthlyQuotaExhausted,
+    });
+
+    state = coworkReducer(state, addMessage({
+      sessionId: session.id,
+      message: {
+        id: 'live-user',
+        type: 'user',
+        content: 'Try again',
+        timestamp: 3,
+      },
+    }));
+    expect(findCurrentEnterpriseQuotaSignal(
+      state.currentSession,
+      selectAuthoritativeMessages(state),
+    )).toBeNull();
+  });
+
+  test('clears a detached quota signal after a live non-quota terminal error', () => {
+    const oldMessage: CoworkMessage = {
+      id: 'old-user',
+      type: 'user',
+      content: 'Earlier turn',
+      timestamp: 1,
+    };
+    const quotaMessage = createErrorMessage(
+      'quota-error',
+      EnterpriseQuotaReason.EnterprisePoolExhausted,
+    );
+    const session = createSession(CoworkSessionStatusValue.Error, [oldMessage, quotaMessage]);
+    let state = coworkReducer(undefined, setCurrentSession(session));
+    state = coworkReducer(state, setMessageWindow({
+      sessionId: session.id,
+      messages: [oldMessage],
+      messagesOffset: 0,
+      totalMessages: 2,
+    }));
+    state = coworkReducer(state, addMessage({
+      sessionId: session.id,
+      message: createErrorMessage('network-error'),
+    }));
+    state = coworkReducer(state, updateSessionStatus({
+      sessionId: session.id,
+      status: CoworkSessionStatusValue.Error,
+    }));
+
+    expect(findCurrentEnterpriseQuotaSignal(
+      state.currentSession,
+      selectAuthoritativeMessages(state),
+    )).toBeNull();
   });
 });
 

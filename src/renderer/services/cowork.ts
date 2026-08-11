@@ -31,6 +31,7 @@ import {
   addPendingSteer,
   addSession,
   appendBtwEntry,
+  appendNewerMessages,
   appendSessions,
   clearCurrentSession,
   clearPendingPermissions,
@@ -92,6 +93,12 @@ import { i18nService } from './i18n';
 
 const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
 
+interface LoadMessageWindowAroundIndexOptions {
+  pageSize?: number;
+  expectedMessageId?: string;
+  isRequestCurrent?: () => boolean;
+}
+
 const classifyError = (error: string): string => {
   const key = classifyErrorKey(error);
   return key ? i18nService.t(key) : error;
@@ -152,6 +159,9 @@ class CoworkService {
   private openClawEngineListenerAttached = false;
   private latestLoadSessionsRequestId = 0;
   private latestLoadSessionRequestId = 0;
+  // Only the current session can request a history window, so one monotonic
+  // generation invalidates stale responses without retaining session ids.
+  private messageWindowRequestGeneration = 0;
   private contextUsageRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private contextUsageInFlightBySessionId = new Map<string, Promise<CoworkContextUsage | null>>();
   private contextUsageAutoSuppressedUntilBySessionId = new Map<string, number>();
@@ -753,6 +763,7 @@ class CoworkService {
     this.contextUsageInFlightBySessionId.clear();
     this.contextUsageAutoSuppressedUntilBySessionId.clear();
     this.contextUsageBackoffUntil.clear();
+    this.messageWindowRequestGeneration += 1;
     this.btwAbortRunIds.clear();
   }
 
@@ -1691,16 +1702,25 @@ class CoworkService {
     return [];
   }
 
-  async loadMessageWindowAroundIndex(sessionId: string, absoluteIndex: number, pageSize = 50): Promise<boolean> {
+  async loadMessageWindowAroundIndex(
+    sessionId: string,
+    absoluteIndex: number,
+    optionsOrPageSize: LoadMessageWindowAroundIndexOptions | number = {},
+  ): Promise<boolean> {
     const cowork = window.electron?.cowork;
     if (!cowork?.getSessionMessages) return false;
 
     const state = store.getState().cowork;
     if (state.currentSession?.id !== sessionId) return false;
+    const options = typeof optionsOrPageSize === 'number'
+      ? { pageSize: optionsOrPageSize }
+      : optionsOrPageSize;
+    const requestGeneration = ++this.messageWindowRequestGeneration;
 
     const totalMessages = state.currentSession.totalMessages;
     const safeAbsoluteIndex = Number.isFinite(absoluteIndex) ? Math.max(0, Math.floor(absoluteIndex)) : 0;
-    const safePageSize = Number.isFinite(pageSize) ? Math.floor(pageSize) : 50;
+    const requestedPageSize = options.pageSize ?? 50;
+    const safePageSize = Number.isFinite(requestedPageSize) ? Math.floor(requestedPageSize) : 50;
     const boundedPageSize = Math.max(COWORK_MESSAGE_PAGE_SIZE, Math.min(100, safePageSize));
     const offset = Math.max(0, Math.min(
       Math.max(0, totalMessages - boundedPageSize),
@@ -1714,11 +1734,33 @@ class CoworkService {
 
     const result = await cowork.getSessionMessages({ sessionId, limit: boundedPageSize, offset });
     if (result.success && result.messages && result.messages.length > 0) {
+      if (
+        store.getState().cowork.currentSession?.id !== sessionId
+        || this.messageWindowRequestGeneration !== requestGeneration
+        || (options.isRequestCurrent && !options.isRequestCurrent())
+      ) {
+        this.logDiagnostic(
+          'debug',
+          `ignored stale message window for session ${sessionId}; absoluteIndex=${safeAbsoluteIndex}.`,
+        );
+        return false;
+      }
+      if (
+        options.expectedMessageId
+        && !result.messages.some(message => message.id === options.expectedMessageId)
+      ) {
+        this.logDiagnostic(
+          'warn',
+          `message window for session ${sessionId} did not include the expected target; absoluteIndex=${safeAbsoluteIndex}.`,
+        );
+        return false;
+      }
       store.dispatch(setMessageWindow({
         sessionId,
         messages: result.messages,
         messagesOffset: result.offset ?? offset,
         totalMessages: result.total ?? totalMessages,
+        preserveCurrentTotal: store.getState().cowork.currentSession!.totalMessages > totalMessages,
       }));
       return true;
     }
@@ -1746,6 +1788,7 @@ class CoworkService {
     const limit = currentOffset - newOffset;
     const currentMessageCount = state.currentSession.messages.length;
     const totalMessages = state.currentSession.totalMessages;
+    const expectedFirstMessageId = state.currentSession.messages[0]?.id ?? null;
 
     this.logDiagnostic(
       'info',
@@ -1754,6 +1797,20 @@ class CoworkService {
 
     const result = await cowork.getSessionMessages({ sessionId, limit, offset: newOffset });
     if (result.success && result.messages && result.messages.length > 0) {
+      const latestSession = store.getState().cowork.currentSession;
+      const latestFirstMessageId = latestSession?.messages[0]?.id ?? null;
+      if (
+        latestSession?.id !== sessionId
+        || latestSession.messagesOffset !== currentOffset
+        || latestSession.messages.length !== currentMessageCount
+        || latestFirstMessageId !== expectedFirstMessageId
+      ) {
+        this.logDiagnostic(
+          'debug',
+          `ignored stale older message page for session ${sessionId}; requested offset=${newOffset}.`,
+        );
+        return false;
+      }
       store.dispatch(prependMessages({ sessionId, messages: result.messages, newOffset }));
       const nextCount = store.getState().cowork.currentSession?.messages.length ?? currentMessageCount;
       this.logDiagnostic(
@@ -1766,6 +1823,92 @@ class CoworkService {
       this.logDiagnostic('info', `older message page for session ${sessionId} was empty at offset ${newOffset}.`);
     } else {
       this.logDiagnostic('warn', `failed to load older messages for session ${sessionId}: ${result.error ?? 'unknown error'}`);
+    }
+    return false;
+  }
+
+  /** Load the page immediately after the active message window. */
+  async loadNewerMessages(sessionId: string): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.getSessionMessages) return false;
+
+    const state = store.getState().cowork;
+    if (state.currentSession?.id !== sessionId) return false;
+
+    const currentOffset = state.currentSession.messagesOffset;
+    const currentMessageCount = state.currentSession.messages.length;
+    const totalMessages = state.currentSession.totalMessages;
+    const nextOffset = currentOffset + currentMessageCount;
+    if (nextOffset >= totalMessages) return false;
+
+    const limit = Math.min(50, totalMessages - nextOffset);
+    const expectedLastMessageId = state.currentSession.messages[currentMessageCount - 1]?.id ?? null;
+    this.logDiagnostic(
+      'info',
+      `loading newer messages for session ${sessionId}; current view has ${currentMessageCount} of ${totalMessages} messages from offset ${currentOffset}.`,
+    );
+
+    const result = await cowork.getSessionMessages({ sessionId, limit, offset: nextOffset });
+    if (result.success && result.messages && result.messages.length > 0) {
+      const latestSession = store.getState().cowork.currentSession;
+      const latestLastMessageId = latestSession
+        ? latestSession.messages[latestSession.messages.length - 1]?.id ?? null
+        : null;
+      if (
+        latestSession?.id !== sessionId
+        || latestSession.messagesOffset !== currentOffset
+        || latestSession.messages.length !== currentMessageCount
+        || latestLastMessageId !== expectedLastMessageId
+      ) {
+        this.logDiagnostic(
+          'debug',
+          `ignored stale newer message page for session ${sessionId}; requested offset=${nextOffset}.`,
+        );
+        return false;
+      }
+      store.dispatch(appendNewerMessages({
+        sessionId,
+        messages: result.messages,
+        totalMessages: result.total ?? totalMessages,
+        preserveCurrentTotal: latestSession.totalMessages > totalMessages,
+      }));
+      const nextCount = store.getState().cowork.currentSession?.messages.length ?? currentMessageCount;
+      const appendedCount = Math.max(0, nextCount - currentMessageCount);
+      if (appendedCount === 0) {
+        this.logDiagnostic(
+          'warn',
+          `newer message page made no progress for session ${sessionId} at offset ${nextOffset}; ignored ${result.messages.length} duplicate messages.`,
+        );
+        return false;
+      }
+      this.logDiagnostic(
+        'info',
+        `appended newer messages for session ${sessionId}; added ${appendedCount} messages from offset ${nextOffset}, and the view now has ${nextCount} of ${result.total ?? totalMessages} messages.`,
+      );
+      return true;
+    }
+    if (result.success) {
+      const latestSession = store.getState().cowork.currentSession;
+      const latestLastMessageId = latestSession
+        ? latestSession.messages[latestSession.messages.length - 1]?.id ?? null
+        : null;
+      if (
+        result.messages
+        && latestSession?.id === sessionId
+        && latestSession.messagesOffset === currentOffset
+        && latestSession.messages.length === currentMessageCount
+        && latestLastMessageId === expectedLastMessageId
+      ) {
+        store.dispatch(appendNewerMessages({
+          sessionId,
+          messages: [],
+          totalMessages: result.total ?? totalMessages,
+          preserveCurrentTotal: latestSession.totalMessages > totalMessages,
+        }));
+      }
+      this.logDiagnostic('info', `newer message page for session ${sessionId} was empty at offset ${nextOffset}.`);
+    } else {
+      this.logDiagnostic('warn', `failed to load newer messages for session ${sessionId}: ${result.error ?? 'unknown error'}`);
     }
     return false;
   }

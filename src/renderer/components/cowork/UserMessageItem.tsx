@@ -292,11 +292,13 @@ const UserMessageItem: React.FC<{
                   </div>
                 )}
                 {displayContent?.trim() && (
-                  <UserMessageContent
-                    content={displayContent}
-                    className="max-w-none"
-                    onImageClick={handleImagePreviewOpen}
-                  />
+                  <div data-cowork-search-message-id={message.id}>
+                    <UserMessageContent
+                      content={displayContent}
+                      className="max-w-none"
+                      onImageClick={handleImagePreviewOpen}
+                    />
+                  </div>
                 )}
                 {displayImageAttachments.length > 0 && (
                   <div className={`flex flex-wrap gap-2 ${displayContent?.trim() ? 'mt-2' : ''}`}>

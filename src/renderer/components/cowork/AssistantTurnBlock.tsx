@@ -288,6 +288,7 @@ const AssistantTurnBlock: React.FC<{
   showCopyButtons?: boolean;
   completedGoal?: CoworkGoal | null;
   hiddenSystemMessageId?: string | null;
+  searchTargetMessageId?: string | null;
 }> = ({
   turn,
   artifacts,
@@ -307,6 +308,7 @@ const AssistantTurnBlock: React.FC<{
   showCopyButtons = true,
   completedGoal,
   hiddenSystemMessageId,
+  searchTargetMessageId,
 }) => {
   const [artifactCardsExpanded, setArtifactCardsExpanded] = useState(false);
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
@@ -526,6 +528,7 @@ const AssistantTurnBlock: React.FC<{
                     planConfirmationMessageId={planConfirmationMessageId}
                     onConfirmPlan={onConfirmPlan}
                     onAdjustPlan={onAdjustPlan}
+                    forceSearchExpanded={searchTargetMessageId === item.message.id}
                   />
                 );
               }

@@ -13,6 +13,7 @@ import remarkMath from 'remark-math';
 
 import { i18nService } from '../services/i18n';
 import { type ShellActionResult, showShellFailureToast, showToast } from '../utils/localFileActions';
+import { transformMarkdownTextSegments } from '../utils/markdownCodeSegments';
 import CodeBlock from './CodeBlock';
 
 const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file', 'localfile', 'kit']);
@@ -122,6 +123,32 @@ const encodeFileUrlsInMarkdown = (content: string): string => {
     cursor = destEnd + 1;
   }
   return result;
+};
+
+/**
+ * Convert LaTeX-style math delimiters into the dollar delimiters that
+ * remark-math understands: `\[...\]` becomes a `$$` display block and
+ * `\(...\)` becomes `$...$` inline math. LLMs frequently emit the LaTeX
+ * delimiters, which remark-math ignores, so the raw markup leaked into the
+ * rendered message. Fenced code blocks and inline code spans are left
+ * untouched, and `\\[...]` (a LaTeX line break with spacing) is not treated
+ * as an opening delimiter.
+ */
+const convertSegmentLatexDelimiters = (segment: string): string => segment
+  .replace(/(?<!\\)\\\[([\s\S]*?)\\\]/g, (match, inner: string) => {
+    const trimmed = inner.trim();
+    return trimmed ? `\n$$\n${trimmed}\n$$\n` : match;
+  })
+  .replace(/(?<!\\)\\\(([\s\S]*?)\\\)/g, (match, inner: string) => {
+    const trimmed = inner.trim();
+    return trimmed ? `$${trimmed}$` : match;
+  });
+
+export const convertLatexMathDelimiters = (content: string): string => {
+  if (!content.includes('\\[') && !content.includes('\\(')) {
+    return content;
+  }
+  return transformMarkdownTextSegments(content, convertSegmentLatexDelimiters);
 };
 
 /**
@@ -659,6 +686,7 @@ interface MarkdownContentProps {
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   showRevealInFolderAction?: boolean;
   enableLargePreview?: boolean;
+  forceExpanded?: boolean;
   onImageClick?: (image: { src: string; alt?: string | null }) => void;
 }
 
@@ -669,11 +697,12 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   resolveLocalFilePath,
   showRevealInFolderAction = false,
   enableLargePreview = true,
+  forceExpanded = false,
   onImageClick,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const canUseLargePreview = enableLargePreview && shouldUseLargeMarkdownPreview(content);
-  const useLargePreview = canUseLargePreview && !isExpanded;
+  const useLargePreview = canUseLargePreview && !isExpanded && !forceExpanded;
   const components = useMemo(
     () => createMarkdownComponents(resolveLocalFilePath, showRevealInFolderAction, onImageClick, spacing),
     [resolveLocalFilePath, showRevealInFolderAction, onImageClick, spacing]
@@ -683,7 +712,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
     if (useLargePreview) {
       return '';
     }
-    return normalizeDisplayMath(encodeFileUrlsInMarkdown(content));
+    return normalizeDisplayMath(convertLatexMathDelimiters(encodeFileUrlsInMarkdown(content)));
   }, [content, useLargePreview]);
 
   if (useLargePreview) {
@@ -712,7 +741,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
 
   return (
     <div className={`markdown-content min-w-0 max-w-full ${markdownTextClassName} ${className}`}>
-      {canUseLargePreview && (
+      {canUseLargePreview && isExpanded && (
         <div className="mb-2 flex justify-end">
           <button
             type="button"

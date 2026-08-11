@@ -16,6 +16,10 @@ import {
   OpenClawSessionReasoningLevel,
 } from '../../../common/openclawSession';
 import {
+  PromptAnalyticsConversationState,
+  type PromptAnalyticsConversationState as PromptAnalyticsConversationStateValue,
+} from '../../../shared/analytics/constants';
+import {
   buildBrowserAnnotationPromptSection,
   type CoworkBrowserAnnotationMessageBatch,
 } from '../../../shared/cowork/browserAnnotations';
@@ -82,6 +86,7 @@ import { setCoworkProxySessionId } from '../coworkOpenAICompatProxy';
 import { extractOpenClawAssistantStreamParts,extractOpenClawAssistantStreamText } from '../openclawAssistantText';
 import {
   buildManagedSessionKey,
+  extractAgentIdFromKey,
   isCronSessionKey,
   isManagedSessionKey,
   type OpenClawChannelSessionSync,
@@ -465,6 +470,12 @@ type ChannelSessionLifecycleRun = {
 
 type OpenClawRuntimeAdapterOptions = {
   normalizeModelRef?: (modelRef: string) => string;
+  onChannelPromptSubmit?: (event: {
+    agentId: string;
+    conversationState: PromptAnalyticsConversationStateValue;
+    isMainAgent: boolean;
+    platform: string;
+  }) => void;
   onGatewayClientReady?: () => void;
 };
 
@@ -648,6 +659,8 @@ type ActiveTurn = {
   startedAtMs: number;
   firstResponseTiming: FirstResponseTiming;
   knownRunIds: Set<string>;
+  /** Prevents duplicate IM prompt analytics when a later event supplies the real run id. */
+  promptAnalyticsReported?: boolean;
   assistantMessageId: string | null;
   committedAssistantText: string;
   /** Last visible assistant segment finalized before a tool call. */
@@ -2463,10 +2476,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * cannot immediately overwrite their loading state with `completed`.
    */
   private readonly channelLifecycleRunBySessionKey = new Map<string, ChannelSessionLifecycleRun>();
+  private readonly reportedChannelPromptRunIds = new Set<string>();
   private channelPollingTimer: ReturnType<typeof setInterval> | null = null;
 
   private static readonly CHANNEL_POLL_INTERVAL_MS = 10_000;
   private static readonly CHANNEL_LIFECYCLE_RUN_GRACE_MS = 60_000;
+  private static readonly REPORTED_CHANNEL_PROMPT_RUN_ID_LIMIT = 2_000;
   private static readonly GATEWAY_SESSION_SUBSCRIBE_TIMEOUT_MS = 5_000;
   /** Delay before pulling a cron delivery mirror into the mapped conversation,
    *  giving the gateway time to flush the transcript append. */
@@ -7229,6 +7244,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         runId,
         observedAtMs: Date.now(),
       });
+      if (activeTurn && runId) {
+        activeTurn.knownRunIds.add(runId);
+        this.sessionIdByRunId.set(runId, sessionId);
+      }
       if (this.deletedChannelKeys.delete(sessionKey)) {
         this.fullySyncedSessions.add(sessionId);
         this.reCreatedChannelSessionIds.add(sessionId);
@@ -7269,6 +7288,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
     if (isNewlyKnownSession) {
       this.notifySessionsChanged(sessionId);
+    }
+    if (phase === AgentLifecyclePhase.Start && runId) {
+      this.reportChannelPromptSubmit(sessionId, sessionKey, runId, activeTurn);
     }
   }
 
@@ -11490,13 +11512,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         return;
       }
     }
-    const turnRunId = runId || randomUUID();
-    const turnToken = this.nextTurnToken(sessionId);
     const isChannel = this.channelSessionSync
       && !isManagedSessionKey(sessionKey)
       && this.channelSessionSync.isChannelSessionKey(sessionKey);
+    const trackedLifecycleRunId = isChannel
+      ? this.getFreshChannelLifecycleRun(sessionKey)?.runId.trim() ?? ''
+      : '';
+    const turnRunId = runId || trackedLifecycleRunId || randomUUID();
+    const turnToken = this.nextTurnToken(sessionId);
     console.log('[Debug:ensureActiveTurn] creating turn — sessionId:', sessionId, 'sessionKey:', sessionKey, 'runId:', turnRunId, 'isChannel:', !!isChannel, 'pendingUserSync:', !!isChannel);
-    this.activeTurns.set(sessionId, {
+    const activeTurn: ActiveTurn = {
       sessionId,
       sessionKey,
       runId: turnRunId,
@@ -11529,7 +11554,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       pendingUserSync: !!isChannel,
       bufferedChatPayloads: [],
       bufferedAgentPayloads: [],
-    });
+    };
+    this.activeTurns.set(sessionId, activeTurn);
     if (runId) {
       this.sessionIdByRunId.set(runId, sessionId);
     }
@@ -11539,7 +11565,73 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     // For channel sessions, prefetch user messages before streaming starts
     if (isChannel) {
+      this.reportChannelPromptSubmit(sessionId, sessionKey, turnRunId, activeTurn);
       void this.prefetchChannelUserMessages(sessionId, sessionKey);
+    }
+  }
+
+  private rememberReportedChannelPromptRunId(runId: string): void {
+    if (!runId) return;
+    this.reportedChannelPromptRunIds.add(runId);
+    while (
+      this.reportedChannelPromptRunIds.size
+      > OpenClawRuntimeAdapter.REPORTED_CHANNEL_PROMPT_RUN_ID_LIMIT
+    ) {
+      const oldestRunId = this.reportedChannelPromptRunIds.values().next().value;
+      if (typeof oldestRunId !== 'string') break;
+      this.reportedChannelPromptRunIds.delete(oldestRunId);
+    }
+  }
+
+  private reportChannelPromptSubmit(
+    sessionId: string,
+    sessionKey: string,
+    runId: string,
+    activeTurn?: ActiveTurn,
+  ): void {
+    const onChannelPromptSubmit = this.options.onChannelPromptSubmit;
+    if (!onChannelPromptSubmit || !this.channelSessionSync) return;
+
+    try {
+      if (this.heartbeatSessionKeys.has(sessionKey)) return;
+
+      const channel = parseChannelSessionKey(sessionKey);
+      if (!channel || !this.channelSessionSync.isCurrentBindingKey(sessionKey)) return;
+
+      const normalizedRunId = runId.trim();
+      if (activeTurn?.promptAnalyticsReported) {
+        this.rememberReportedChannelPromptRunId(normalizedRunId);
+        return;
+      }
+      if (normalizedRunId && this.reportedChannelPromptRunIds.has(normalizedRunId)) {
+        if (activeTurn) activeTurn.promptAnalyticsReported = true;
+        return;
+      }
+
+      const session = this.store.getSession(sessionId);
+      if (!session) return;
+
+      const agentId = session.agentId?.trim() || extractAgentIdFromKey(sessionKey) || 'main';
+      const conversationState = session.messages.some(message => message.type === 'assistant')
+        ? PromptAnalyticsConversationState.ContinueSession
+        : PromptAnalyticsConversationState.NewTask;
+
+      this.rememberReportedChannelPromptRunId(normalizedRunId);
+      if (activeTurn) activeTurn.promptAnalyticsReported = true;
+
+      onChannelPromptSubmit({
+        agentId,
+        conversationState,
+        isMainAgent: agentId === 'main',
+        platform: channel.platform,
+      });
+    } catch (error) {
+      const errorName = error instanceof Error && error.name.trim()
+        ? error.name.trim()
+        : 'UnknownError';
+      console.warn(
+        `[OpenClawRuntime] failed to report IM prompt submission analytics (${errorName})`,
+      );
     }
   }
 

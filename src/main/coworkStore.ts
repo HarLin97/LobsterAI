@@ -10,6 +10,10 @@ import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentId, normalizeAgentAvatarIcon } from '../shared/agent';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
+  COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
+  COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES,
+  COWORK_SEARCH_MESSAGE_PAGE_MAX_SIZE,
+  COWORK_SEARCH_MESSAGE_PAGE_SIZE,
   COWORK_SESSION_PAGE_SIZE,
   CoworkForkMode,
   type CoworkForkMode as CoworkForkModeType,
@@ -24,6 +28,11 @@ import {
   type CoworkMessageRailIndexItem,
   getCoworkRailPreview,
 } from '../shared/cowork/rail';
+import type {
+  CoworkSearchMessage,
+  CoworkSearchMessageCursor,
+  CoworkSearchMessagePage,
+} from '../shared/cowork/search';
 import {
   type CoworkSelectedTextSnippet,
   CoworkSelectedTextSource,
@@ -1711,6 +1720,196 @@ export class CoworkStore {
       timestamp: row.created_at,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
     }));
+  }
+
+  /**
+   * Read a bounded, search-only projection over the full mixed-message order.
+   *
+   * The page cursor advances over every stored message so each returned
+   * user/assistant message keeps the same absolute index used by the ordinary
+   * history API. Tool/system content and all metadata stay in the main process;
+   * only the assistant thinking flag is evaluated in SQLite.
+   */
+  getSessionSearchMessagePage(
+    sessionId: string,
+    limit: number,
+    offset: number,
+    cursor?: CoworkSearchMessageCursor,
+    knownTotal?: number,
+  ): CoworkSearchMessagePage {
+    const safeLimit = Number.isFinite(limit)
+      ? Math.max(1, Math.min(COWORK_SEARCH_MESSAGE_PAGE_MAX_SIZE, Math.floor(limit)))
+      : COWORK_SEARCH_MESSAGE_PAGE_SIZE;
+    const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+    if (safeOffset > 0 && !cursor) {
+      throw new Error('Conversation search cursor is required after the first page');
+    }
+    if (cursor && ![
+      cursor.sortValue,
+      cursor.createdAt,
+      cursor.rowId,
+    ].every(value => Number.isFinite(value))) {
+      throw new Error('Invalid conversation search cursor');
+    }
+    const safeKnownTotal = knownTotal !== undefined
+      && Number.isFinite(knownTotal)
+      && knownTotal >= safeOffset
+      ? Math.floor(knownTotal)
+      : undefined;
+    // The first page establishes the snapshot size. Later keyset pages carry
+    // it forward, avoiding an O(history-size) COUNT scan for every page.
+    const total = safeKnownTotal ?? this.countSessionMessages(sessionId);
+    type SearchProjectionIndexRow = {
+      id: string;
+      type: string;
+      search_content_byte_length: number;
+      created_at: number;
+      is_thinking: number;
+      sort_value: number;
+      row_id: number;
+    };
+    const projection = `
+      SELECT
+        id,
+        type,
+        CASE
+          WHEN type = 'user' THEN LENGTH(CAST(content AS BLOB))
+          WHEN type = 'assistant'
+            AND NOT (
+              metadata IS NOT NULL
+              AND json_valid(metadata) = 1
+              AND COALESCE(json_extract(metadata, '$.isThinking'), 0) = 1
+            )
+          THEN LENGTH(CAST(content AS BLOB))
+          ELSE 0
+        END AS search_content_byte_length,
+        created_at,
+        COALESCE(sequence, created_at) AS sort_value,
+        ROWID AS row_id,
+        CASE
+          WHEN type = 'assistant'
+            AND metadata IS NOT NULL
+            AND json_valid(metadata) = 1
+            AND json_extract(metadata, '$.isThinking') = 1
+          THEN 1
+          ELSE 0
+        END AS is_thinking
+      FROM cowork_messages
+      WHERE session_id = ?
+    `;
+    const rows = cursor
+      ? this.getAll<SearchProjectionIndexRow>(
+        `${projection}
+          AND COALESCE(sequence, created_at) >= ?
+          AND (
+            COALESCE(sequence, created_at) > ?
+            OR created_at > ?
+            OR (created_at = ? AND ROWID > ?)
+          )
+          ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC
+          LIMIT ?
+        `,
+        [
+          sessionId,
+          cursor.sortValue,
+          cursor.sortValue,
+          cursor.createdAt,
+          cursor.createdAt,
+          cursor.rowId,
+          safeLimit,
+        ],
+      )
+      : this.getAll<SearchProjectionIndexRow>(
+        `${projection}
+      ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC
+          LIMIT ?
+        `,
+        [
+          sessionId,
+          safeLimit,
+        ],
+      );
+
+    const isSearchableRow = (row: SearchProjectionIndexRow): boolean => (
+      (row.type === 'user' || row.type === 'assistant')
+      && row.is_thinking !== 1
+    );
+    const searchableRows = rows.filter(isSearchableRow);
+    let searchContentByteLength = 0;
+    for (const row of searchableRows) {
+      searchContentByteLength += row.search_content_byte_length;
+      if (searchContentByteLength > COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES) break;
+    }
+
+    let messages: CoworkSearchMessage[];
+    if (searchContentByteLength > COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES) {
+      const sentinelRowIndex = rows.findIndex(isSearchableRow);
+      if (sentinelRowIndex < 0) {
+        throw new Error('Conversation search payload exceeded its budget without content');
+      }
+      const sentinelRow = rows[sentinelRowIndex];
+      messages = [{
+        id: sentinelRow.id,
+        type: sentinelRow.type as 'user' | 'assistant',
+        content: 'x'.repeat(COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS + 1),
+        timestamp: sentinelRow.created_at,
+        absoluteMessageIndex: safeOffset + sentinelRowIndex,
+      }];
+    } else {
+      type SearchProjectionContentRow = {
+        row_id: number;
+        search_content: string;
+      };
+      const contentRows = searchableRows.length > 0
+        ? this.getAll<SearchProjectionContentRow>(
+          `
+            SELECT
+              ROWID AS row_id,
+              SUBSTR(content, 1, ?) AS search_content
+            FROM cowork_messages
+            WHERE session_id = ?
+              AND ROWID IN (${searchableRows.map(() => '?').join(', ')})
+          `,
+          [
+            COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS + 1,
+            sessionId,
+            ...searchableRows.map(row => row.row_id),
+          ],
+        )
+        : [];
+      const contentByRowId = new Map(
+        contentRows.map(row => [row.row_id, row.search_content]),
+      );
+      messages = rows.flatMap((row, index) => {
+        if (!isSearchableRow(row)) return [];
+        const content = contentByRowId.get(row.row_id);
+        if (content === undefined) {
+          throw new Error('Conversation search content changed while reading its page');
+        }
+        if (!content.trim()) return [];
+        return [{
+          id: row.id,
+          type: row.type as 'user' | 'assistant',
+          content,
+          timestamp: row.created_at,
+          absoluteMessageIndex: safeOffset + index,
+        }];
+      });
+    }
+
+    return {
+      messages,
+      offset: safeOffset,
+      nextOffset: safeOffset + rows.length,
+      nextCursor: rows.length > 0
+        ? {
+          sortValue: rows[rows.length - 1].sort_value,
+          createdAt: rows[rows.length - 1].created_at,
+          rowId: rows[rows.length - 1].row_id,
+        }
+        : cursor,
+      total,
+    };
   }
 
   /**

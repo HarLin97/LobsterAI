@@ -6,7 +6,9 @@ import { describe, expect, test } from 'vitest';
 
 const {
   buildGitEnv,
+  buildNpmPackInvocation,
   buildNpmPackEnv,
+  buildPluginInstallEnv,
   copyDirRecursive,
   copyInstalledPluginToCache,
   findInstalledPluginDir,
@@ -92,6 +94,21 @@ describe('ensure-openclaw-plugins', () => {
     delete process.env.NPM_CONFIG_PREFER_ONLINE;
   });
 
+  test('passes a spaced npm pack destination as one argument without a shell', () => {
+    const outputDir = path.join(os.tmpdir(), 'Lobster AI plugin staging');
+    const invocation = buildNpmPackInvocation(
+      '@scope/openclaw-plugin@1.2.3',
+      'https://registry.example.test',
+      outputDir,
+    );
+
+    expect(invocation.command).toBe(process.execPath);
+    expect(invocation.args).toContain(outputDir);
+    expect(invocation.args.filter((arg: string) => arg === outputDir)).toHaveLength(1);
+    expect(invocation.args[0]).toMatch(/npm-cli\.js$/);
+    expect(invocation.args).toContain('--registry=https://registry.example.test');
+  });
+
   test('disables interactive git prompts for clone', () => {
     expect(buildGitEnv()).toMatchObject({
       GIT_TERMINAL_PROMPT: '0',
@@ -119,6 +136,35 @@ describe('ensure-openclaw-plugins', () => {
       kind: 'direct',
       installSpec: '/tmp/local-plugin',
       pinnedDisplaySpec: '/tmp/local-plugin',
+    });
+  });
+
+  test('packs public npm packages before OpenClaw installation', () => {
+    expect(resolvePluginInstallSource({
+      id: 'openclaw-weixin',
+      npm: '@tencent-weixin/openclaw-weixin',
+      version: '2.4.3',
+    })).toEqual({
+      kind: 'packed',
+      packSpec: '@tencent-weixin/openclaw-weixin@2.4.3',
+      pinnedDisplaySpec: '@tencent-weixin/openclaw-weixin@2.4.3',
+    });
+  });
+
+  test('allows transitive Git dependencies only for the NetEase Bee plugin', () => {
+    expect(buildPluginInstallEnv({
+      id: 'netease-bee-alias',
+      npm: 'openclaw-netease-bee',
+    })).toEqual({
+      npm_config_legacy_peer_deps: 'true',
+      npm_config_allow_git: 'all',
+    });
+
+    expect(buildPluginInstallEnv({
+      id: 'openclaw-weixin',
+      npm: '@tencent-weixin/openclaw-weixin',
+    })).toEqual({
+      npm_config_legacy_peer_deps: 'true',
     });
   });
 

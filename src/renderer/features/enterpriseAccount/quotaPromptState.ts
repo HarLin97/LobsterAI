@@ -4,6 +4,7 @@ import { isEnterpriseQuotaReason } from '../../../shared/enterpriseAccount/quota
 import type { EnterpriseAccountContext } from '../../../shared/enterpriseAccount/types';
 import type { Model } from '../../store/slices/modelSlice';
 import {
+  type CoworkMessage,
   type CoworkSession,
   CoworkSessionStatusValue,
 } from '../../types/cowork';
@@ -16,11 +17,12 @@ export interface EnterpriseQuotaSignal {
 
 export const findCurrentEnterpriseQuotaSignal = (
   session: CoworkSession | null,
+  messages: CoworkMessage[] = session?.messages ?? [],
 ): EnterpriseQuotaSignal | null => {
   if (!session) return null;
 
-  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
-    const message = session.messages[index];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
     if (message.type === 'user') return null;
 
     if (message.type === 'tool_result' && message.metadata?.isError === true) {

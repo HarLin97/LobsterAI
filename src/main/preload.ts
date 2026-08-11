@@ -35,6 +35,7 @@ import {
   CoworkIpcChannel,
   type CoworkSessionsChangedPayload,
 } from '../shared/cowork/constants';
+import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import { DataMigrationIpc } from '../shared/dataMigration/constants';
 import { DialogIpc } from '../shared/dialog/constants';
 import {
@@ -495,6 +496,14 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:list', options),
     getSessionMessages: (options: { sessionId: string; limit?: number; offset?: number }) =>
       ipcRenderer.invoke('cowork:session:getMessages', options),
+    getSessionSearchMessages: (options: {
+      sessionId: string;
+      limit?: number;
+      offset?: number;
+      cursor?: CoworkSearchMessageCursor;
+      knownTotal?: number;
+    }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.GetSessionSearchMessages, options),
     getSessionMessageRailIndex: (sessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.GetSessionMessageRailIndex, sessionId),
     getContextUsage: (sessionId: string) =>

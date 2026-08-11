@@ -84,6 +84,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorGatewayDisconnected: 'AI 引擎连接中断，请重试。',
     coworkErrorServiceRestart: 'AI 引擎正在重启，请稍后重试。',
     coworkErrorGatewayDraining: 'AI 引擎正在重启中，请稍等片刻后重试。',
+    openClawConfigApplyPending: 'OpenClaw 正在应用配置，请稍后重试。',
+    openClawConfigApplyOverdue:
+      'OpenClaw 正在等待活动任务结束后应用配置。请完成或停止活动任务，然后重试。',
     coworkErrorModelResponseTimeout: '模型响应超时，请稍后重试。',
     coworkErrorNetworkError: '网络连接失败，请检查网络设置。',
     coworkErrorRateLimit: '请求过于频繁，请稍后再试。',
@@ -417,6 +420,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorGatewayDisconnected: 'AI engine connection lost. Please retry.',
     coworkErrorServiceRestart: 'AI engine is restarting. Please try again later.',
     coworkErrorGatewayDraining: 'AI engine is restarting. Please wait a moment and try again.',
+    openClawConfigApplyPending: 'OpenClaw is applying configuration. Please try again shortly.',
+    openClawConfigApplyOverdue:
+      'OpenClaw is waiting for active tasks to finish before applying configuration. Complete or stop the active tasks, then try again.',
     coworkErrorModelResponseTimeout: 'The model response timed out. Please try again.',
     coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
     coworkErrorRateLimit: 'Too many requests. Please try again later.',

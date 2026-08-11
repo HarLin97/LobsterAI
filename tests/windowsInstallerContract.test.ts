@@ -6,6 +6,7 @@ import { describe, expect, test } from 'vitest';
 const repoFile = (path: string): string => readFileSync(resolve(process.cwd(), path), 'utf8');
 
 const installerInclude = repoFile('scripts/nsis-installer.nsh');
+const unpackScript = repoFile('scripts/unpack-cfmind.cjs');
 const installSection = repoFile(
   'node_modules/app-builder-lib/templates/nsis/installSection.nsh',
 );
@@ -359,6 +360,77 @@ describe('Windows installer hardening contracts', () => {
       'StrCmp $R4 "process-timeout" 0 TarExtractNumericResult',
     );
     expect(watchdog).toContain('StrCmp $R2 "124" TarExtractTimeout');
+
+    // A null exit code consults the child's success sentinel before being
+    // classified as invalid output (exit-code query is permanently broken by
+    // some security tooling while the child itself succeeds). The marker
+    // values below are PowerShell-escaped because the sentinel verdict is
+    // deliberately absent from the NSIS StrCmp dispatch (exit 0 flows through
+    // the numeric branch into TarExtractVerify).
+    expect(watchdog).toContain(String.raw`\"exit-code-null-sentinel-ok\"`);
+    expect(watchdog).toContain('Test-Path -LiteralPath $$sentinel');
+    expect(
+      watchdog.indexOf(String.raw`\"exit-code-null-sentinel-ok\"`),
+    ).toBeLessThan(watchdog.indexOf(String.raw`\"output-validation-failed\"`));
+  });
+
+  test('rescues a null watchdog exit code with the extractor success sentinel', () => {
+    // The Node extractor publishes the sentinel only after every expected
+    // root directory verified, keeping it strictly stronger than exit 0.
+    expect(unpackScript).toContain("'.unpack-cfmind-ok'");
+    expect(unpackScript).toContain('missingDirs === 0');
+    expect(unpackScript).toContain('required resources missing after extraction');
+    expect(unpackScript).toContain("name: 'cfmind-entry'");
+    expect(unpackScript).toContain("name: 'skills-content'");
+    expect(unpackScript).toContain("name: 'python-entry'");
+    expect(unpackScript).toContain('phase=sentinel-written');
+    expect(unpackScript).toContain('phase=sentinel-write-failed');
+    expect(unpackScript.indexOf('phase=verify-missing')).toBeLessThan(
+      unpackScript.indexOf("'.unpack-cfmind-ok'"),
+    );
+
+    // A stale sentinel must never vouch for a new attempt, and a committed
+    // install leaves no sentinel behind (pre-launch delete + success delete).
+    const sentinelDelete = String.raw`Delete "$INSTDIR\resources\.unpack-cfmind-ok"`;
+    const preLaunchDelete = installerInclude.indexOf(sentinelDelete);
+    expect(preLaunchDelete).toBeGreaterThan(-1);
+    expect(preLaunchDelete).toBeLessThan(
+      installerInclude.indexOf('LOBSTERAI_WATCHDOG_MARKER_PATH'),
+    );
+    expect(
+      installerInclude.match(/Delete "\$INSTDIR\\resources\\\.unpack-cfmind-ok"/g),
+    ).toHaveLength(2);
+
+    // Exit 127 re-enters the on-disk verification when the sentinel exists
+    // instead of aborting outright; the fatal path stays intact.
+    const branchStart = installerInclude.indexOf('TarExtractOutputValidationFailed:');
+    const branchEnd = installerInclude.indexOf('TarExtractNonZero:', branchStart);
+    const branch = installerInclude.slice(branchStart, branchEnd);
+    expect(branch).toContain(
+      String.raw`IfFileExists "$INSTDIR\resources\.unpack-cfmind-ok" 0 TarExtractOutputValidationFatal`,
+    );
+    expect(branch).toContain('phase=tar-extract-sentinel-rescue');
+    expect(branch).toContain('Goto TarExtractVerify');
+    expect(branch).toContain('reason=watchdog-output-validation-failed');
+    expect(branch).toContain('will not commit a partial application');
+  });
+
+  test('requires OpenClaw, Skills, and Python before committing an installation', () => {
+    const extractVerifyStart = installerInclude.indexOf('TarExtractVerify:');
+    const extractVerifyEnd = installerInclude.indexOf('TarExtractProcessFailed:', extractVerifyStart);
+    const extractVerify = installerInclude.slice(extractVerifyStart, extractVerifyEnd);
+    expect(extractVerify).toContain('TarExtractVerifySkills:');
+    expect(extractVerify).toContain(String.raw`resources\SKILLs\*.*`);
+    expect(extractVerify).toContain(String.raw`resources\python-win\python.exe`);
+    expect(extractVerify).toContain(String.raw`resources\python-win\python3.exe`);
+    expect(extractVerify).toContain('TarExtractRequiredResourceMissing:');
+
+    const prevalidateStart = installerInclude.indexOf('NewInstallPrevalidateSkills:');
+    const prevalidateEnd = installerInclude.indexOf('NewInstallPrevalidateSucceeded:', prevalidateStart);
+    const prevalidate = installerInclude.slice(prevalidateStart, prevalidateEnd);
+    expect(prevalidate).toContain(String.raw`resources\SKILLs\*.*`);
+    expect(prevalidate).toContain(String.raw`resources\python-win\python.exe`);
+    expect(prevalidate).toContain(String.raw`resources\python-win\python3.exe`);
   });
 
   test('binds Skills backup and restore to the current attempt manifest', () => {
