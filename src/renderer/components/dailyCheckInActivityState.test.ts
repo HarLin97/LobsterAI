@@ -16,7 +16,7 @@ import {
   isDailyCheckInContext,
   isDailyCheckInDescriptor,
   isDailyCheckInState,
-  shouldShowDailyCheckInSidebar,
+  shouldShowDailyCheckInEntry,
 } from './dailyCheckInActivityState';
 
 const context = (
@@ -45,15 +45,28 @@ const context = (
 describe('dailyCheckInActivityState', () => {
   test('allows an authenticated active user to claim', () => {
     expect(canClaimDailyCheckIn(context())).toBe(true);
-    expect(shouldShowDailyCheckInSidebar(context())).toBe(true);
+    expect(shouldShowDailyCheckInEntry(context())).toBe(true);
   });
 
-  test('hides the sidebar after today is claimed but keeps valid profile state', () => {
+  test('hides the entry after today is claimed but keeps valid activity state', () => {
     const claimed = context({ claimedToday: true });
 
     expect(canClaimDailyCheckIn(claimed)).toBe(false);
-    expect(shouldShowDailyCheckInSidebar(claimed)).toBe(false);
+    expect(shouldShowDailyCheckInEntry(claimed)).toBe(false);
     expect(isDailyCheckInState(claimed.state)).toBe(true);
+  });
+
+  test('shows the entry to guests but hides completed campaigns', () => {
+    expect(shouldShowDailyCheckInEntry({
+      ...context(),
+      authenticated: false,
+    })).toBe(true);
+    expect(shouldShowDailyCheckInEntry(context({
+      completed: true,
+      claimedToday: false,
+      remainingDays: 0,
+      claimedDays: 7,
+    }))).toBe(false);
   });
 
   test('rejects malformed remote state and formats decimal credits', () => {

@@ -37,6 +37,7 @@ import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
 import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import CreditsResetCampaignFloat from '../CreditsResetCampaignFloat';
+import { DailyCheckInHeaderEntry } from '../DailyCheckInActivity';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import { ModelAccessPromptKind, ModelAccessPromptModal } from '../ModelSelector';
@@ -756,6 +757,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({
             </span>
           </button>
         )}
+        <DailyCheckInHeaderEntry
+          suppressed={!startupCreditEntry.resolved
+            || startupCreditEntry.available}
+        />
       </div>
     </div>
   );

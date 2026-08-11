@@ -30,6 +30,7 @@ import {
   type StartupCreditCampaignSource as StartupCreditCampaignSourceType,
 } from './startupCreditCampaignAnalytics';
 import {
+  resetStartupCreditCampaignEntry,
   setStartupCreditCampaignEntry,
   STARTUP_CREDIT_OPEN_EVENT,
 } from './startupCreditCampaignBridge';
@@ -521,7 +522,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     return () => {
       mountedRef.current = false;
       loadRequestRef.current += 1;
-      setStartupCreditCampaignEntry(null);
+      resetStartupCreditCampaignEntry();
     };
   }, []);
 
@@ -580,6 +581,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
       setModalOpen(false);
       return;
     }
+    resetStartupCreditCampaignEntry();
     if (isLoggedIn && readPendingStartupCreditClaim(localStorage)) {
       void resumePendingClaim();
       return;
