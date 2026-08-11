@@ -191,6 +191,7 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
       {hostnameDialogTarget ? (
         <Modal
           onClose={closeHostnameDialog}
+          onEscape={closeHostnameDialog}
           overlayClassName="fixed inset-0 z-[60] flex items-center justify-center bg-black/25"
           className="w-full max-w-[420px] rounded-2xl border border-border bg-background p-5 shadow-modal"
         >

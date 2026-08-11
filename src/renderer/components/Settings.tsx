@@ -93,6 +93,7 @@ import {
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
+import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import SkinPresentationScope from './skin/SkinPresentationScope';
 import SkinSettingsSection from './skin/SkinSettingsSection';
@@ -4002,6 +4003,40 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
+  // Escape dismisses the innermost stacked layer and closes the panel last.
+  // Dialogs rendered through Modal handle Escape themselves.
+  const handleEscape = () => {
+    const resolution = resolveSettingsEscapeAction({
+      isBlocked: isBackingUpOpenClawData
+        || isRestoringOpenClawData
+        || isRepairingOpenClaw
+        || isCleaningTempStorage
+        || isShortcutInputActive(),
+      layers: [
+        { isOpen: pendingDeleteProvider !== null, dismiss: () => setPendingDeleteProvider(null) },
+        { isOpen: isAddingModel || isEditingModel, dismiss: handleCancelModelEdit },
+        { isOpen: isTestResultModalOpen, dismiss: () => setIsTestResultModalOpen(false) },
+        { isOpen: showOpenClawRepairConfirm, dismiss: () => setShowOpenClawRepairConfirm(false) },
+        { isOpen: showTempCleanConfirm, dismiss: () => setShowTempCleanConfirm(false) },
+        {
+          isOpen: showOpenClawDataRestoreConfirm,
+          dismiss: () => setShowOpenClawDataRestoreConfirm(false),
+        },
+        { isOpen: showMemoryModal, dismiss: resetCoworkMemoryEditor },
+      ],
+    });
+
+    switch (resolution.action) {
+      case SettingsEscapeAction.DismissLayer:
+        resolution.dismiss();
+        return;
+      case SettingsEscapeAction.ClosePanel:
+        guardedClose();
+        return;
+      default:
+    }
+  };
+
   const showTestResultModal = (
     result: Omit<ProviderConnectionTestResult, 'provider'>,
     provider: ProviderType
@@ -5481,6 +5516,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <Modal
                       isOpen
                       onClose={() => setCoworkMemoryRawMode(false)}
+                      onEscape={() => setCoworkMemoryRawMode(false)}
                       overlayClassName="fixed inset-0 z-[60] flex items-center justify-center bg-black/10 dark:bg-black/50 p-6"
                       className="flex h-[min(720px,calc(100vh-48px))] w-[min(960px,calc(100vw-48px))] flex-col overflow-hidden rounded-xl border border-surface bg-surface shadow-[0_12px_40px_rgba(0,0,0,0.16)]"
                     >
@@ -5897,6 +5933,7 @@ const Settings: React.FC<SettingsProps> = ({
   return (
     <Modal
       onClose={guardedClose}
+      onEscape={handleEscape}
       overlayClassName="fixed inset-0 z-50 modal-backdrop flex items-center justify-center p-3 sm:p-4"
       className="w-[calc(100vw-1.5rem)] max-w-[900px] min-w-0 sm:w-[calc(100vw-2rem)]"
     >
