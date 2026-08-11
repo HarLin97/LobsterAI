@@ -467,14 +467,17 @@ const IMSettings: React.FC = () => {
     };
 
     const handleWeixinDmPolicyMenuKeydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsWeixinDmPolicyMenuOpen(false);
+      if (event.key !== 'Escape') return;
+      // Claim the press during capture so the settings panel stays open.
+      event.preventDefault();
+      setIsWeixinDmPolicyMenuOpen(false);
     };
 
     document.addEventListener('pointerdown', closeWeixinDmPolicyMenu);
-    document.addEventListener('keydown', handleWeixinDmPolicyMenuKeydown);
+    document.addEventListener('keydown', handleWeixinDmPolicyMenuKeydown, true);
     return () => {
       document.removeEventListener('pointerdown', closeWeixinDmPolicyMenu);
-      document.removeEventListener('keydown', handleWeixinDmPolicyMenuKeydown);
+      document.removeEventListener('keydown', handleWeixinDmPolicyMenuKeydown, true);
     };
   }, [isWeixinDmPolicyMenuOpen]);
 
@@ -3221,6 +3224,9 @@ const IMSettings: React.FC = () => {
         {deleteConfirmTarget && deleteConfirmInstance && (
           <Modal
             onClose={() => {
+              if (!isDeletingInstance) setDeleteConfirmTarget(null);
+            }}
+            onEscape={() => {
               if (!isDeletingInstance) setDeleteConfirmTarget(null);
             }}
             overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
