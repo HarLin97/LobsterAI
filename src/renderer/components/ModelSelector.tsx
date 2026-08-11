@@ -9,6 +9,7 @@ import {
 import {
   getModelThinkingLevels,
   ModelRuntimeProfile,
+  type ModelThinkingConfig,
   type ModelThinkingLevel as ModelThinkingLevelType,
   ProviderName,
 } from '@shared/providers';
@@ -19,6 +20,10 @@ import { useDispatch, useSelector } from 'react-redux';
 import { getProviderIcon, ProviderIconId } from '../providers/uiRegistry';
 import { authService } from '../services/auth';
 import { i18nService } from '../services/i18n';
+import {
+  readRememberedModelThinkingLevel,
+  rememberModelThinkingLevel,
+} from '../services/modelThinkingLevelMemory';
 import { RootState } from '../store';
 import type { Model } from '../store/slices/modelSlice';
 import { getModelIdentityKey, isSameModelIdentity, setSelectedModel } from '../store/slices/modelSlice';
@@ -64,12 +69,18 @@ const DROPDOWN_TABS_BLOCK_HEIGHT = 49; // group tabs block: p-2 + p-0.5 + py-1.5
 const DROPDOWN_FOOTER_HEIGHT = 33; // current-model footer: py-2 + leading-4 + border-t
 const DROPDOWN_BORDER_HEIGHT = 2;
 const HOVER_CARD_WIDTH = 220;
-const HOVER_CARD_GAP = 8;
 const HOVER_CARD_VIEWPORT_MARGIN = 8;
 const HOVER_CLOSE_DELAY = 180;
 const THINKING_MENU_WIDTH = 210;
-const THINKING_MENU_GAP = 8;
+// Cascaded popovers sit flush against their anchor: no gap that makes the stack
+// look disconnected, and no overlap that makes the panels look stacked.
+const CASCADE_OVERLAP = 0;
 const MODEL_ICON_CLASS_NAME = 'h-[18px] w-[18px]';
+export const CascadeSide = {
+  Left: 'left',
+  Right: 'right',
+} as const;
+export type CascadeSide = typeof CascadeSide[keyof typeof CascadeSide];
 export const ModelSelectorGroup = {
   Server: 'server',
   User: 'user',
@@ -207,6 +218,70 @@ export function resolveHoverCardTop(
   return Math.min(Math.max(desiredTop, viewportMargin), maxTop);
 }
 
+/**
+ * Places a cascaded popover (hover card, thinking menu) next to its anchor.
+ * The popover keeps flowing towards `preferredSide` so the stack never
+ * zig-zags back across the panel it came from, and only flips when the
+ * preferred side cannot fit inside the viewport.
+ */
+export function resolveCascadePlacement(options: {
+  anchorLeft: number;
+  anchorRight: number;
+  width: number;
+  viewportWidth: number;
+  preferredSide: CascadeSide;
+  overlap?: number;
+  viewportMargin?: number;
+}): { left: number; side: CascadeSide } {
+  const {
+    anchorLeft,
+    anchorRight,
+    width,
+    viewportWidth,
+    preferredSide,
+    overlap = CASCADE_OVERLAP,
+    viewportMargin = HOVER_CARD_VIEWPORT_MARGIN,
+  } = options;
+  const rightSideLeft = anchorRight - overlap;
+  const leftSideLeft = anchorLeft + overlap - width;
+  const fitsRight = rightSideLeft + width + viewportMargin <= viewportWidth;
+  const fitsLeft = leftSideLeft >= viewportMargin;
+  const side = preferredSide === CascadeSide.Right
+    ? (fitsRight || !fitsLeft ? CascadeSide.Right : CascadeSide.Left)
+    : (fitsLeft || !fitsRight ? CascadeSide.Left : CascadeSide.Right);
+  const desiredLeft = side === CascadeSide.Right ? rightSideLeft : leftSideLeft;
+  const maxLeft = Math.max(viewportMargin, viewportWidth - width - viewportMargin);
+  return { left: Math.min(Math.max(desiredLeft, viewportMargin), maxLeft), side };
+}
+
+/**
+ * Thinking level the picker should show for one model, in precedence order:
+ *
+ * 1. the level being requested right now (the user just clicked it);
+ * 2. the level persisted for the agent/session, but only for the model that is
+ *    actually selected — that record holds a single level, so it says nothing
+ *    about the other models in the list;
+ * 3. the level the user last picked for this specific model;
+ * 4. the model's built-in default.
+ *
+ * Step 3 is what keeps two models from sharing one level: without it, every
+ * model except the selected one falls back to its default, so switching models
+ * silently discards the level chosen for the previous one.
+ */
+export function resolvePickerThinkingLevel(options: {
+  config: ModelThinkingConfig;
+  requestedLevel?: ModelThinkingLevelType;
+  selectedModelLevel?: ModelThinkingLevelType | null;
+  rememberedLevel?: ModelThinkingLevelType;
+}): ModelThinkingLevelType {
+  const { config, requestedLevel, selectedModelLevel, rememberedLevel } = options;
+  const levels = getModelThinkingLevels(config);
+  const candidates = [requestedLevel, selectedModelLevel, rememberedLevel];
+  return candidates.find(
+    (level): level is ModelThinkingLevelType => !!level && levels.includes(level),
+  ) ?? config.defaultLevel;
+}
+
 export function isModelAgenticBlocked(
   model: Pick<Model, 'agenticReady' | 'isServerModel' | 'runtimeProfile'> | null | undefined,
 ): boolean {
@@ -263,6 +338,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const selectedItemRef = React.useRef<HTMLButtonElement>(null);
   const [hoveredModel, setHoveredModel] = React.useState<Model | null>(null);
   const [hoverCardStyle, setHoverCardStyle] = React.useState<React.CSSProperties>({});
+  const [hoverCardSide, setHoverCardSide] = React.useState<CascadeSide>(CascadeSide.Right);
   const [isThinkingMenuOpen, setIsThinkingMenuOpen] = React.useState(false);
   const [thinkingMenuStyle, setThinkingMenuStyle] = React.useState<React.CSSProperties>({});
   const [restrictedPrompt, setRestrictedPrompt] = React.useState<ModelAccessPromptKind | null>(null);
@@ -451,14 +527,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   ): ModelThinkingLevelType | undefined => {
     const config = model.thinkingConfig;
     if (!config) return undefined;
-    const levels = getModelThinkingLevels(config);
-    if (requestedLevel && levels.includes(requestedLevel)) {
-      return requestedLevel;
-    }
-    if (isSelected(model) && thinkingLevel && levels.includes(thinkingLevel)) {
-      return thinkingLevel;
-    }
-    return config.defaultLevel;
+    return resolvePickerThinkingLevel({
+      config,
+      requestedLevel,
+      selectedModelLevel: isSelected(model) ? thinkingLevel : undefined,
+      rememberedLevel: readRememberedModelThinkingLevel(getModelIdentityKey(model)),
+    });
   };
 
   const handleModelSelect = (model: Model | null) => {
@@ -498,6 +572,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const resolvedThinkingLevel = resolveThinkingLevel(model, requestedThinkingLevel);
     if (!resolvedThinkingLevel) return;
 
+    // Each model keeps its own level, so picking one here must not be lost when
+    // the user switches to another model and back.
+    rememberModelThinkingLevel(getModelIdentityKey(model), resolvedThinkingLevel);
     onChange(model, {
       group: getModelGroup(model) ?? visibleGroup,
       thinkingLevel: resolvedThinkingLevel,
@@ -631,18 +708,20 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       const dropdownEl = dropdownRef.current;
       if (!dropdownEl) return;
       const dropdownRect = dropdownEl.getBoundingClientRect();
-      const spaceRight = window.innerWidth - dropdownRect.right;
-      const style: React.CSSProperties = {
+      const placement = resolveCascadePlacement({
+        anchorLeft: dropdownRect.left,
+        anchorRight: dropdownRect.right,
+        width: HOVER_CARD_WIDTH,
+        viewportWidth: window.innerWidth,
+        preferredSide: CascadeSide.Right,
+      });
+      setHoverCardSide(placement.side);
+      setHoverCardStyle({
         position: 'fixed',
+        left: placement.left,
         top: itemRect.top,
         zIndex: 10001,
-      };
-      if (spaceRight >= HOVER_CARD_WIDTH + HOVER_CARD_GAP) {
-        style.left = dropdownRect.right + HOVER_CARD_GAP;
-      } else {
-        style.right = window.innerWidth - dropdownRect.left + HOVER_CARD_GAP;
-      }
-      setHoverCardStyle(style);
+      });
       setIsThinkingMenuOpen(false);
       setHoveredModel(model);
     }, delay);
@@ -661,23 +740,30 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     }, HOVER_CLOSE_DELAY);
   };
 
-  const openThinkingMenu = () => {
+  const openThinkingMenu = (trigger: HTMLElement) => {
     if (!thinkingSelectionEnabled || !canConfigureModelThinking(hoveredModel)) {
       setIsThinkingMenuOpen(false);
       return;
     }
+    // Already open for this model: keep the current placement so re-entering
+    // the trigger row does not make the menu jump.
+    if (isThinkingMenuOpen) return;
     const card = hoverCardRef.current;
     if (!card) return;
     const cardRect = card.getBoundingClientRect();
-    const fitsRight = window.innerWidth - cardRect.right
-      >= THINKING_MENU_WIDTH + THINKING_MENU_GAP + HOVER_CARD_VIEWPORT_MARGIN;
-    const left = fitsRight
-      ? cardRect.right + THINKING_MENU_GAP
-      : cardRect.left - THINKING_MENU_WIDTH - THINKING_MENU_GAP;
+    const { left } = resolveCascadePlacement({
+      anchorLeft: cardRect.left,
+      anchorRight: cardRect.right,
+      width: THINKING_MENU_WIDTH,
+      viewportWidth: window.innerWidth,
+      preferredSide: hoverCardSide,
+    });
     setThinkingMenuStyle({
       position: 'fixed',
-      left: Math.max(HOVER_CARD_VIEWPORT_MARGIN, left),
-      top: cardRect.top,
+      left,
+      // Cascade from the row that opened the menu, not from the card top, so the
+      // two panels stay visually attached.
+      top: trigger.getBoundingClientRect().top,
       width: THINKING_MENU_WIDTH,
       zIndex: 10002,
     });
@@ -796,14 +882,16 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             type="button"
             disabled={!thinkingConfigurable}
             aria-disabled={!thinkingConfigurable}
-            onClick={openThinkingMenu}
-            onMouseEnter={openThinkingMenu}
-            onFocus={openThinkingMenu}
+            onClick={(event) => openThinkingMenu(event.currentTarget)}
+            onMouseEnter={(event) => openThinkingMenu(event.currentTarget)}
+            onFocus={(event) => openThinkingMenu(event.currentTarget)}
             aria-haspopup="menu"
             aria-expanded={isThinkingMenuOpen}
-            className={`mt-2.5 flex w-full items-center justify-between rounded-lg bg-surface-raised px-2.5 py-2 text-left text-[12px] transition-colors ${
+            // Bleeds into the card padding so the label still lines up with the
+            // text above it while the hover highlight keeps some breathing room.
+            className={`-mx-1.5 mt-1.5 flex w-[calc(100%+12px)] items-center justify-between rounded-lg px-1.5 py-2 text-left text-[12px] transition-colors ${
               thinkingConfigurable
-                ? 'text-foreground hover:bg-border/60'
+                ? `text-foreground ${isThinkingMenuOpen ? 'bg-surface-raised' : 'hover:bg-surface-raised'}`
                 : 'cursor-not-allowed text-secondary opacity-60'
             }`}
           >

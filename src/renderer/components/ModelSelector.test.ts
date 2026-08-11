@@ -1,10 +1,14 @@
+import { ModelThinkingLevel } from '@shared/providers/modelThinking';
 import { expect, test } from 'vitest';
 
 import {
   canConfigureModelThinking,
+  CascadeSide,
   isModelAgenticBlocked,
+  resolveCascadePlacement,
   resolveDropdownListMaxHeight,
   resolveHoverCardTop,
+  resolvePickerThinkingLevel,
 } from './ModelSelector';
 
 test('keeps model hover card above the viewport bottom', () => {
@@ -23,6 +27,56 @@ test('pins model hover card to the margin when it is taller than the viewport', 
   expect(resolveHoverCardTop(160, 1000, 900)).toBe(8);
 });
 
+test('places a cascaded popover flush against its anchor, without gap or overlap', () => {
+  expect(resolveCascadePlacement({
+    anchorLeft: 400,
+    anchorRight: 700,
+    width: 220,
+    viewportWidth: 1200,
+    preferredSide: CascadeSide.Right,
+  })).toEqual({ left: 700, side: CascadeSide.Right });
+});
+
+test('flips a cascaded popover to the left when the right side does not fit', () => {
+  expect(resolveCascadePlacement({
+    anchorLeft: 700,
+    anchorRight: 1000,
+    width: 220,
+    viewportWidth: 1100,
+    preferredSide: CascadeSide.Right,
+  })).toEqual({ left: 480, side: CascadeSide.Left });
+});
+
+test('keeps cascading towards the side the previous popover took', () => {
+  expect(resolveCascadePlacement({
+    anchorLeft: 300,
+    anchorRight: 520,
+    width: 210,
+    viewportWidth: 1100,
+    preferredSide: CascadeSide.Left,
+  })).toEqual({ left: 90, side: CascadeSide.Left });
+});
+
+test('falls back to the opposite side when the preferred side has no room', () => {
+  expect(resolveCascadePlacement({
+    anchorLeft: 40,
+    anchorRight: 260,
+    width: 210,
+    viewportWidth: 1100,
+    preferredSide: CascadeSide.Left,
+  })).toEqual({ left: 260, side: CascadeSide.Right });
+});
+
+test('clamps a cascaded popover inside the viewport when neither side fits', () => {
+  expect(resolveCascadePlacement({
+    anchorLeft: 20,
+    anchorRight: 260,
+    width: 210,
+    viewportWidth: 280,
+    preferredSide: CascadeSide.Right,
+  })).toEqual({ left: 62, side: CascadeSide.Right });
+});
+
 test('caps the model list at its default height when space allows', () => {
   expect(resolveDropdownListMaxHeight(600, true, true)).toBe(288);
 });
@@ -38,6 +92,56 @@ test('keeps at least three model rows visible when space is extremely tight', ()
 
 test('uses the full available space when tabs and footer are hidden', () => {
   expect(resolveDropdownListMaxHeight(200, false, false)).toBe(198);
+});
+
+const THINKING_CONFIG = {
+  options: [
+    { level: ModelThinkingLevel.Off, openclawLevel: 'off' as const },
+    { level: ModelThinkingLevel.High, openclawLevel: 'high' as const },
+    { level: ModelThinkingLevel.Max, openclawLevel: 'xhigh' as const },
+  ],
+  defaultLevel: ModelThinkingLevel.High,
+};
+
+test('shows the level the user is picking right now', () => {
+  expect(resolvePickerThinkingLevel({
+    config: THINKING_CONFIG,
+    requestedLevel: ModelThinkingLevel.Max,
+    selectedModelLevel: ModelThinkingLevel.Off,
+    rememberedLevel: ModelThinkingLevel.High,
+  })).toBe(ModelThinkingLevel.Max);
+});
+
+test('shows the persisted level for the model that is actually selected', () => {
+  expect(resolvePickerThinkingLevel({
+    config: THINKING_CONFIG,
+    selectedModelLevel: ModelThinkingLevel.Max,
+    rememberedLevel: ModelThinkingLevel.High,
+  })).toBe(ModelThinkingLevel.Max);
+});
+
+test('keeps each unselected model on its own remembered level', () => {
+  expect(resolvePickerThinkingLevel({
+    config: THINKING_CONFIG,
+    rememberedLevel: ModelThinkingLevel.Max,
+  })).toBe(ModelThinkingLevel.Max);
+  expect(resolvePickerThinkingLevel({
+    config: THINKING_CONFIG,
+    selectedModelLevel: null,
+    rememberedLevel: ModelThinkingLevel.Off,
+  })).toBe(ModelThinkingLevel.Off);
+});
+
+test('falls back to the model default when nothing was picked before', () => {
+  expect(resolvePickerThinkingLevel({ config: THINKING_CONFIG })).toBe(ModelThinkingLevel.High);
+});
+
+test('ignores levels the model does not offer', () => {
+  expect(resolvePickerThinkingLevel({
+    config: THINKING_CONFIG,
+    requestedLevel: ModelThinkingLevel.Minimal,
+    rememberedLevel: ModelThinkingLevel.Low,
+  })).toBe(ModelThinkingLevel.High);
 });
 
 test('blocks only explicitly unready server models from agent selection', () => {
