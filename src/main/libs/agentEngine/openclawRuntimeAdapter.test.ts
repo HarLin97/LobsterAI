@@ -30,6 +30,7 @@ import {
 } from '../../../shared/cowork/btw';
 import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
+import { t } from '../../i18n';
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
@@ -41,6 +42,7 @@ import {
   ensurePlanModeProposedPlanBlock,
   estimateOpenClawChatSendFrameBytes,
   isIncompleteStopReason,
+  isOpenClawToolLoopBlockedResultText,
   isPlanModeResponseComplete,
   isPlanModeSafeExecCommand,
   isSignificantAssistantStreamReset,
@@ -49,6 +51,7 @@ import {
   OpenClawRuntimeAdapter,
   pickPersistedAssistantSegment,
   resolveOpenClawRuntimeErrorMessage,
+  resolveOpenClawToolLoopErrorOverride,
   resolveToolEventIsError,
 } from './openclawRuntimeAdapter';
 
@@ -813,6 +816,73 @@ test('buildOpenClawRuntimeErrorDetail falls back to the turn model ref when meta
     modelSource: 'coding-plan',
   });
   expect(detail?.providerDisplayName).toBeUndefined();
+});
+
+// Real veto strings produced by the pinned OpenClaw runtime's loop detection.
+const TOOL_LOOP_POLL_BLOCK_TEXT =
+  'CRITICAL: Called process with identical arguments and no progress 10 times. '
+  + 'This appears to be a stuck polling loop. Session execution blocked to prevent resource waste.';
+const TOOL_LOOP_BREAKER_BLOCK_TEXT =
+  'CRITICAL: process has repeated identical no-progress outcomes 30 times. '
+  + 'Session execution blocked by global circuit breaker to prevent runaway loops.';
+const TOOL_LOOP_ABORTED_BLOCK_TEXT =
+  'CRITICAL: exec has returned aborted outcomes 8 times for identical arguments. '
+  + 'Session execution blocked to prevent runaway retry loops.';
+const OPENCLAW_INCOMPLETE_TURN_ERROR_TEXT =
+  '⚠️ Agent couldn\'t generate a response. '
+  + 'Note: some tool actions may have already been executed — please verify before retrying.';
+
+// zz-openclaw-tool-loop-soft-vetoes.patch texts: soft vetoes no longer claim a
+// session block (the run continues), while escalated vetoes append the
+// hard-stop copy before terminating.
+const TOOL_LOOP_SOFT_VETO_TEXT =
+  'CRITICAL: Called process with identical arguments and no progress 10 times, '
+  + 'so this call was blocked as a stuck polling loop. Wait significantly longer before checking '
+  + 'again, try a different approach, or report the current status to the user. '
+  + 'Repeating the same blocked call will end this run.';
+const TOOL_LOOP_ESCALATED_VETO_TEXT =
+  `${TOOL_LOOP_SOFT_VETO_TEXT} Session execution blocked to prevent resource waste.`;
+
+test('isOpenClawToolLoopBlockedResultText matches critical loop vetoes only', () => {
+  expect(isOpenClawToolLoopBlockedResultText(TOOL_LOOP_POLL_BLOCK_TEXT)).toBe(true);
+  expect(isOpenClawToolLoopBlockedResultText(TOOL_LOOP_BREAKER_BLOCK_TEXT)).toBe(true);
+  expect(isOpenClawToolLoopBlockedResultText(TOOL_LOOP_ABORTED_BLOCK_TEXT)).toBe(true);
+  expect(isOpenClawToolLoopBlockedResultText(`  ${TOOL_LOOP_POLL_BLOCK_TEXT}  `)).toBe(true);
+  expect(isOpenClawToolLoopBlockedResultText(TOOL_LOOP_ESCALATED_VETO_TEXT)).toBe(true);
+
+  // Soft vetoes leave the run alive, so they must not arm the terminated-turn
+  // error override.
+  expect(isOpenClawToolLoopBlockedResultText(TOOL_LOOP_SOFT_VETO_TEXT)).toBe(false);
+
+  // Warnings and normal tool output must not be treated as a blocking veto.
+  expect(isOpenClawToolLoopBlockedResultText(
+    'WARNING: You have called process 9 times with identical arguments and no progress. '
+    + 'Stop polling and either (1) increase wait time between checks, or (2) report the task as failed.',
+  )).toBe(false);
+  expect(isOpenClawToolLoopBlockedResultText(
+    'CRITICAL: attempted unavailable tool web_search 6 times. Stop retrying that missing tool and answer without it.',
+  )).toBe(false);
+  expect(isOpenClawToolLoopBlockedResultText('build output line 1\nline 2')).toBe(false);
+});
+
+test('resolveOpenClawToolLoopErrorOverride rewrites the generic incomplete-turn error', () => {
+  const override = resolveOpenClawToolLoopErrorOverride(
+    TOOL_LOOP_POLL_BLOCK_TEXT,
+    OPENCLAW_INCOMPLETE_TURN_ERROR_TEXT,
+  );
+
+  expect(override).not.toBeNull();
+  expect(override?.errorMessage).toBe(t('coworkErrorToolLoopBlocked'));
+  // The technical detail keeps both the original copy and the veto reason.
+  expect(override?.detailRawErrorMessage).toContain("Agent couldn't generate a response");
+  expect(override?.detailRawErrorMessage).toContain(TOOL_LOOP_POLL_BLOCK_TEXT);
+});
+
+test('resolveOpenClawToolLoopErrorOverride leaves unrelated errors untouched', () => {
+  // No loop veto seen in the turn.
+  expect(resolveOpenClawToolLoopErrorOverride(undefined, OPENCLAW_INCOMPLETE_TURN_ERROR_TEXT)).toBeNull();
+  // Loop veto seen, but the run failed for a different reason.
+  expect(resolveOpenClawToolLoopErrorOverride(TOOL_LOOP_POLL_BLOCK_TEXT, 'LLM request failed.')).toBeNull();
 });
 
 test('estimateOpenClawChatSendFrameBytes measures the full RPC frame as UTF-8 JSON', () => {
@@ -1907,6 +1977,31 @@ test('patchSession uses the persisted IM channel session key after runtime cache
       },
     },
   ]);
+});
+
+test('patchSession sends model and thinking level atomically', async () => {
+  const { adapter, requests } = createPatchAdapter({
+    isChannelSession: false,
+    persistedSessionKey: null,
+  });
+
+  const result = await adapter.patchSession('session-1', {
+    model: 'lobsterai-server/deepseek-v4-flash',
+    thinkingLevel: 'max',
+  });
+
+  expect(requests[0]).toEqual({
+    method: 'sessions.patch',
+    params: {
+      key: 'agent:main:lobsterai:session-1',
+      model: 'lobsterai-server/deepseek-v4-flash',
+      thinkingLevel: 'max',
+    },
+  });
+  expect(result).toEqual({
+    modelOverride: 'lobsterai-server/deepseek-v4-flash',
+    thinkingLevel: 'max',
+  });
 });
 
 test('patchSession rejects IM channel sessions when the real OpenClaw key is missing', async () => {
@@ -4979,6 +5074,99 @@ test('stale chat error after a successful deferred final completes the turn inst
     expect(session.messages.some((message) => (
       message.type === 'system' && String(message.content).includes('Apply Patch failed')
     ))).toBe(false);
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+test('model idle timeout chat error still surfaces after a deferred final (text-only payload)', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'query bhumi-data', timestamp: 1, metadata: {} },
+    ]);
+    session.status = 'running';
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const errorSpy = vi.fn();
+    adapter.on('error', errorSpy);
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const turn = createActiveTurn(session.id, sessionKey, 'run-idle-timeout');
+    adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+
+    adapter.handleChatEvent({
+      state: 'final',
+      runId: 'run-idle-timeout',
+      sessionKey,
+      message: { role: 'assistant', content: '明白，接下来只走 bhumi-data 的只读查询。' },
+    }, 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(turn.finalCompletionTimer).toBeDefined();
+
+    // OpenClaw's surface_error failover delivers the timeout through the
+    // webchat reply path (broadcastChatError): text only, no metadata, and the
+    // lifecycle ended with isError=false so terminatedRunIds stays empty.
+    const timeoutText = 'LLM request timed out. | The model did not produce a response before the model idle timeout. Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted provider.';
+    adapter.handleChatEvent({
+      state: 'error',
+      runId: 'run-idle-timeout',
+      sessionKey,
+      errorMessage: timeoutText,
+      message: { role: 'assistant', content: [{ type: 'text', text: `Error: ${timeoutText}` }] },
+    }, 2);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(errorSpy).toHaveBeenCalled();
+    expect(session.status).toBe('error');
+    expect(adapter.activeTurns.has(session.id)).toBe(false);
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+test('chat error with provider runtime failure metadata still surfaces after a deferred final', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'query bhumi-data', timestamp: 1, metadata: {} },
+    ]);
+    session.status = 'running';
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const errorSpy = vi.fn();
+    adapter.on('error', errorSpy);
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const turn = createActiveTurn(session.id, sessionKey, 'run-failover-meta');
+    adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+
+    adapter.handleChatEvent({
+      state: 'final',
+      runId: 'run-failover-meta',
+      sessionKey,
+      message: { role: 'assistant', content: 'partial reply' },
+    }, 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(turn.finalCompletionTimer).toBeDefined();
+
+    // The lifecycle-error forwarding path attaches structured observation
+    // fields (extractSafeChatErrorMetadata) to the late chat error.
+    adapter.handleChatEvent({
+      state: 'error',
+      runId: 'run-failover-meta',
+      sessionKey,
+      errorMessage: 'upstream provider failed',
+      provider: 'openai',
+      model: 'gpt-5.6-sol',
+      failoverReason: 'timeout',
+      providerRuntimeFailureKind: 'timeout',
+    }, 2);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(errorSpy).toHaveBeenCalled();
+    expect(session.status).toBe('error');
+    expect(adapter.activeTurns.has(session.id)).toBe(false);
   } finally {
     vi.clearAllTimers();
     vi.useRealTimers();

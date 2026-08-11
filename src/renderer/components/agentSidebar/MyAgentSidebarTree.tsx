@@ -143,6 +143,7 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     retryLoadTasks,
     loadMoreTasks,
     expandAgent,
+    collapseAgent,
     expandTasks,
     collapseTasks,
     toggleAgentExpanded,
@@ -213,8 +214,15 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     };
 
     const handleShowCurrentAgentTasks = () => {
+      // Equivalent to clicking the agent title while collapsed: reveal the preview task list only.
       expandAgent(currentAgentId);
-      void expandTasks(currentAgentId);
+      onShowCowork();
+    };
+
+    const handleCollapseCurrentAgentTasks = () => {
+      // Fold every expansion under the agent: the "show more" state and the agent node itself.
+      collapseTasks(currentAgentId);
+      collapseAgent(currentAgentId);
       onShowCowork();
     };
 
@@ -251,13 +259,15 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
 
     window.addEventListener(CoworkUiEvent.ShortcutSwitchAgent, handleSwitchAgent);
     window.addEventListener(CoworkUiEvent.ShortcutShowCurrentAgentTasks, handleShowCurrentAgentTasks);
+    window.addEventListener(CoworkUiEvent.ShortcutCollapseCurrentAgentTasks, handleCollapseCurrentAgentTasks);
     window.addEventListener(CoworkUiEvent.ShortcutOpenAgentTaskSlot, handleOpenAgentTaskSlot);
     return () => {
       window.removeEventListener(CoworkUiEvent.ShortcutSwitchAgent, handleSwitchAgent);
       window.removeEventListener(CoworkUiEvent.ShortcutShowCurrentAgentTasks, handleShowCurrentAgentTasks);
+      window.removeEventListener(CoworkUiEvent.ShortcutCollapseCurrentAgentTasks, handleCollapseCurrentAgentTasks);
       window.removeEventListener(CoworkUiEvent.ShortcutOpenAgentTaskSlot, handleOpenAgentTaskSlot);
     };
-  }, [agentNodes, currentAgentId, expandAgent, expandTasks, onShowCowork]);
+  }, [agentNodes, collapseAgent, collapseTasks, currentAgentId, expandAgent, expandTasks, onShowCowork]);
 
   const handleDeleteTask = async (task: AgentSidebarTaskNode) => {
     const deleted = await coworkService.deleteSession(task.id);

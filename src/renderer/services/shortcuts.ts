@@ -109,6 +109,15 @@ export const parseShortcut = (shortcut?: string): ParsedShortcut | null => {
   return parsed;
 };
 
+// A shortcut carrying a Cmd/Ctrl modifier cannot be produced by plain typing,
+// so it is safe to run while a text field is focused. Alt alone is excluded
+// because Option+key inserts special characters on macOS.
+export const isTextEditingSafeShortcut = (shortcut?: string): boolean => {
+  const parsed = parseShortcut(shortcut);
+  if (!parsed) return false;
+  return parsed.commandOrControl || parsed.ctrl || parsed.meta;
+};
+
 export const matchesShortcut = (event: KeyboardEvent, shortcut?: string): boolean => {
   const parsed = parseShortcut(shortcut);
   if (!parsed) return false;

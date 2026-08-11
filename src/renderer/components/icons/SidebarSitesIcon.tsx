@@ -8,6 +8,9 @@ const SidebarSitesIcon: React.FC<SidebarSitesIconProps> = ({ className = 'h-4 w-
   <svg
     viewBox="-1 -1 18 18"
     fill="none"
+    stroke="currentColor"
+    strokeWidth="0.22"
+    strokeLinejoin="round"
     className={className}
     aria-hidden="true"
   >

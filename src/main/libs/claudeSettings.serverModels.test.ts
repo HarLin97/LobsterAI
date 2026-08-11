@@ -28,6 +28,7 @@ describe('server model metadata cache', () => {
       supportsImage: true,
       supportsVideo: true,
       supportsThinking: true,
+      thinkingConfig: undefined,
       supportsToolCalling: true,
       agenticReady: true,
       contextWindow: 1_048_576,
@@ -96,6 +97,49 @@ describe('server model metadata cache', () => {
 
     expect(updateServerModelMetadata(metadata)).toBe(true);
     expect(updateServerModelMetadata(metadata)).toBe(false);
+  });
+
+  test('preserves valid thinking configuration and detects config changes', () => {
+    const base = {
+      modelId: 'deepseek-v4-flash',
+      supportsThinking: true,
+      thinkingConfig: {
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
+        defaultLevel: 'high',
+      },
+      requestCapabilities: ['lobsterai-options-v1', 'future-options-v2'],
+    };
+
+    expect(updateServerModelMetadata([base])).toBe(true);
+    expect(getAllServerModelMetadata()[0].thinkingConfig).toEqual(base.thinkingConfig);
+    expect(getAllServerModelMetadata()[0].requestCapabilities).toEqual([
+      'lobsterai-options-v1',
+    ]);
+    expect(updateServerModelMetadata([base])).toBe(false);
+    expect(updateServerModelMetadata([{
+      ...base,
+      thinkingConfig: { ...base.thinkingConfig, defaultLevel: 'max' },
+    }])).toBe(true);
+  });
+
+  test('ignores invalid thinking configuration', () => {
+    updateServerModelMetadata([{
+      modelId: 'deepseek-v4-flash',
+      supportsThinking: true,
+      thinkingConfig: {
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+        ],
+        defaultLevel: 'max',
+      },
+    }]);
+
+    expect(getAllServerModelMetadata()[0].thinkingConfig).toBeUndefined();
   });
 
   test('rejects an unknown runtime profile without exposing it to config consumers', () => {

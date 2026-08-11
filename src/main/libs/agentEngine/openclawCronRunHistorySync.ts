@@ -1,3 +1,4 @@
+import { OpenClawCronRunMetadataKey } from '../../../shared/cowork/openclawCronSessionKey';
 import type { CoworkMessage } from '../../coworkStore';
 import {
   extractGatewayHistoryEntries,
@@ -14,18 +15,13 @@ export type CronRunLocalHistoryEntry = CronRunHistoryEntry & {
   id: string;
 };
 
-const CronRunHistoryMetadataKey = {
-  SessionKey: 'openclawCronRunSessionKey',
-  EntryIndex: 'openclawCronRunEntryIndex',
-} as const;
-
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 };
 
 export const getCronRunHistorySessionKey = (metadata: unknown): string | null => {
   if (!isRecord(metadata)) return null;
-  const value = metadata[CronRunHistoryMetadataKey.SessionKey];
+  const value = metadata[OpenClawCronRunMetadataKey.SessionKey];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 };
 
@@ -37,8 +33,8 @@ const withCronRunHistoryMetadata = (
   ...entry,
   metadata: {
     ...(entry.metadata ?? {}),
-    [CronRunHistoryMetadataKey.SessionKey]: sessionKey,
-    [CronRunHistoryMetadataKey.EntryIndex]: entryIndex,
+    [OpenClawCronRunMetadataKey.SessionKey]: sessionKey,
+    [OpenClawCronRunMetadataKey.EntryIndex]: entryIndex,
   },
 });
 

@@ -13,6 +13,12 @@ import {
   parseModelProfileMap,
   resolveModelProfileTransportDecision,
 } from './profileMapping';
+import {
+  createLobsterAIRequestOptionsWrapper,
+  resolveLobsterAIRequestThinkingLevel,
+} from './requestOptions';
+import { LOBSTERAI_REQUEST_OPTIONS_VERSION } from './requestOptionsProtocol';
+import { parseThinkingProfileMap } from './thinkingProfileMapping';
 
 const PLUGIN_ID = 'lobsterai-model-compat';
 const OPENAI_COMPLETIONS_API = 'openai-completions';
@@ -24,6 +30,7 @@ const OPENAI_COMPATIBLE_APIS = new Set([
 
 const register = (api: OpenClawPluginApi): void => {
   const modelProfiles = parseModelProfileMap(api.pluginConfig?.modelProfiles);
+  const thinkingProfiles = parseThinkingProfileMap(api.pluginConfig?.thinkingProfiles);
   const isKimiK3Profile = (provider: string, modelId: string): boolean => (
     hasModelRuntimeProfile(
       modelProfiles,
@@ -88,20 +95,41 @@ const register = (api: OpenClawPluginApi): void => {
     },
     wrapStreamFn: (ctx) => {
       const decision = assertSupportedTransport(ctx.provider, ctx.modelId, ctx.model?.api);
-      if (decision.kind === ModelProfileTransportDecision.Passthrough) {
-        return ctx.streamFn;
+      const baseStreamFn = decision.kind === ModelProfileTransportDecision.Passthrough
+        ? ctx.streamFn
+        : createMoonshotKimiK3Wrapper(ctx.streamFn);
+      const thinkingProfile = thinkingProfiles[`${ctx.provider}/${ctx.modelId}`];
+      if (thinkingProfile?.requestOptionsVersion === LOBSTERAI_REQUEST_OPTIONS_VERSION) {
+        return createLobsterAIRequestOptionsWrapper(
+          baseStreamFn,
+          resolveLobsterAIRequestThinkingLevel(thinkingProfile, ctx.thinkingLevel),
+        );
       }
-      return createMoonshotKimiK3Wrapper(ctx.streamFn);
+      return baseStreamFn;
     },
-    resolveThinkingProfile: ({ provider, modelId }) => (
-      isKimiK3Profile(provider, modelId)
-        ? {
-            levels: [{ id: 'max', label: 'max' }],
-            defaultLevel: 'max',
-            preserveWhenCatalogReasoningFalse: true,
-          }
-        : undefined
-    ),
+    resolveThinkingProfile: ({ provider, modelId }) => {
+      if (isKimiK3Profile(provider, modelId)) {
+        return {
+          levels: [{ id: 'max', label: 'max' }],
+          defaultLevel: 'max',
+          preserveWhenCatalogReasoningFalse: true,
+        };
+      }
+      const profile = thinkingProfiles[`${provider}/${modelId}`];
+      if (!profile) return undefined;
+      const defaultOpenClawLevel = profile.options.find(
+        option => option.level === profile.defaultLevel,
+      )?.openclawLevel;
+      if (!defaultOpenClawLevel) return undefined;
+      return {
+        levels: profile.options.map(option => ({
+          id: option.openclawLevel,
+          label: option.level,
+        })),
+        defaultLevel: defaultOpenClawLevel,
+        preserveWhenCatalogReasoningFalse: true,
+      };
+    },
     isModernModelRef: ({ provider, modelId }) => (
       isKimiK3Profile(provider, modelId) || undefined
     ),

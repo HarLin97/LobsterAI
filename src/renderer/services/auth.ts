@@ -5,7 +5,12 @@ import {
   type AuthSessionChangedEvent,
   AuthSessionStatus,
 } from '@shared/auth/constants';
-import { ProviderName } from '@shared/providers';
+import {
+  type ModelThinkingConfig,
+  parseModelThinkingConfig,
+  ProviderName,
+} from '@shared/providers';
+import type { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
 import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles';
 
 import { store } from '../store';
@@ -42,6 +47,7 @@ export interface PricingCatalogTextModel {
   description?: string;
   supportsImage?: boolean;
   supportsThinking?: boolean;
+  thinkingConfig?: ModelThinkingConfig;
   contextWindow?: number | null;
   costMultiplier?: number;
 }
@@ -61,6 +67,8 @@ export interface AvailableServerModelEntry {
   supportsImage?: boolean;
   supportsVideo?: boolean;
   supportsThinking?: boolean;
+  thinkingConfig?: ModelThinkingConfig;
+  requestCapabilities?: LobsterAIRequestCapability[];
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
@@ -135,6 +143,9 @@ export function mapPricingCatalogTextModelsToServerModels(
       || 'LobsterAI';
     const contextWindow = readPositiveNumber(model.contextWindow);
     const costMultiplier = readPositiveNumber(model.costMultiplier);
+    const thinkingConfig = model.supportsThinking === true
+      ? parseModelThinkingConfig(model.thinkingConfig)
+      : undefined;
 
     return [{
       id: modelId,
@@ -144,6 +155,7 @@ export function mapPricingCatalogTextModelsToServerModels(
       isServerModel: true,
       supportsImage: model.supportsImage === true,
       supportsThinking: model.supportsThinking === true,
+      thinkingConfig,
       description: readString(model.description) || undefined,
       costMultiplier,
       contextWindow,
@@ -163,27 +175,33 @@ export function mapPricingCatalogToPublicServerModels(
 export function mapAvailableServerModelsToModels(
   models: AvailableServerModelEntry[],
 ): Model[] {
-  return models.map(model => ({
-    id: model.modelId,
-    name: model.modelName,
-    provider: model.provider,
-    providerKey: ProviderName.LobsteraiServer,
-    isServerModel: true,
-    serverApiFormat: model.apiFormat,
-    runtimeProfile: model.runtimeProfile,
-    supportsImage: model.supportsImage ?? false,
-    supportsVideo: model.supportsVideo ?? false,
-    supportsThinking: model.supportsThinking ?? false,
-    supportsToolCalling: model.supportsToolCalling,
-    agenticReady: model.agenticReady,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    explicitContextCache: model.explicitContextCache ?? false,
-    description: model.description,
-    costMultiplier: model.costMultiplier,
-    accessible: model.accessible ?? true,
-    restrictionHint: model.restrictionHint ?? undefined,
-  }));
+  return models.map(model => {
+    const thinkingConfig = model.supportsThinking === true
+      ? parseModelThinkingConfig(model.thinkingConfig)
+      : undefined;
+    return {
+      id: model.modelId,
+      name: model.modelName,
+      provider: model.provider,
+      providerKey: ProviderName.LobsteraiServer,
+      isServerModel: true,
+      serverApiFormat: model.apiFormat,
+      runtimeProfile: model.runtimeProfile,
+      supportsImage: model.supportsImage ?? false,
+      supportsVideo: model.supportsVideo ?? false,
+      supportsThinking: model.supportsThinking ?? false,
+      thinkingConfig,
+      supportsToolCalling: model.supportsToolCalling,
+      agenticReady: model.agenticReady,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      explicitContextCache: model.explicitContextCache ?? false,
+      description: model.description,
+      costMultiplier: model.costMultiplier,
+      accessible: model.accessible ?? true,
+      restrictionHint: model.restrictionHint ?? undefined,
+    };
+  });
 }
 
 class AuthService {

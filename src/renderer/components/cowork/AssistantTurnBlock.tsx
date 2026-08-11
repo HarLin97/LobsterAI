@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronUpIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { classifyErrorKey } from '../../../common/coworkErrorClassify';
@@ -20,24 +20,36 @@ import { ArtifactPreviewCard } from '../artifacts';
 import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
 import InformationCircleIcon from '../icons/InformationCircleIcon';
 import MarkdownContent from '../MarkdownContent';
+import ActivityGroupBlock from './ActivityGroupBlock';
 import AssistantMessageItem from './AssistantMessageItem';
+import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
 import { MessageCopyButton } from './MessageActionButton';
 import {
+  chunkConsolidatedItemsForDisplay,
   collectMediaPollCounts,
+  type ConsolidatedItem,
   consolidateMediaPolling,
   type ConversationTurn,
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
+  formatElapsedDuration,
+  formatTurnDuration,
+  getActivityIndicatorStatusText,
   getContextCompactionMessageLabel,
   getMediaCompletionDisplayText,
   getRetainedMediaPollCount,
   getToolResultDisplay,
   getToolResultLineCount,
   getToolResultLineCountSummary,
+  getTurnActivityFingerprint,
+  getTurnAnswerStartIndex,
+  getTurnEndTimestamp,
+  getTurnStartTimestamp,
   getVideoPathArtifacts,
   getVisibleAssistantItems,
   hasText,
+  isActivityConsolidatedItem,
   isContextCompactionMessage,
   isDuplicateGeneratedVideoAssistantMessage,
   type ToolGroupItem,
@@ -124,15 +136,61 @@ const ContextCompactionDivider: React.FC<{ label: string; active?: boolean }> = 
   </div>
 );
 
-// ── TypingDots ───────────────────────────────────────────────────────────────
+// ── ActivityIndicator ────────────────────────────────────────────────────────
+// Persistent busy-state line at the insertion point of the last turn
+// (Codex / ChatGPT style): breathing dot + shimmering status text + elapsed
+// time, visible for the whole run. The label starts as "thinking" and
+// switches to "working" once the turn has shown any content.
 
-const TypingDots: React.FC = () => (
-  <div className="flex items-center space-x-1.5 py-1">
-    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '0ms' }} />
-    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '150ms' }} />
-    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '300ms' }} />
-  </div>
-);
+// One tick: the first value the user sees is "1s", counting up naturally.
+const ACTIVITY_TIMER_APPEAR_DELAY_MS = 1000;
+const ACTIVITY_LONG_WAIT_HINT_DELAY_MS = 30_000;
+
+const ActivityIndicator: React.FC<{
+  fingerprint: string;
+  hasContent: boolean;
+  startTimestamp: number | null;
+  statusTextOverride?: string | null;
+}> = ({ fingerprint, hasContent, startTimestamp, statusTextOverride }) => {
+  const [isLongWaiting, setIsLongWaiting] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  // The long-wait hint resets whenever streamed content grows, so it only
+  // appears after the model has been silent for a while.
+  useEffect(() => {
+    setIsLongWaiting(false);
+    const timeoutId = window.setTimeout(
+      () => setIsLongWaiting(true),
+      ACTIVITY_LONG_WAIT_HINT_DELAY_MS,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [fingerprint]);
+
+  useEffect(() => {
+    setNow(Date.now());
+    const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  // Elapsed time is anchored to message timestamps so it survives remounts
+  // (switching sessions/views); until the turn has a timestamp, show no
+  // counter rather than one restarted from zero.
+  const elapsedMs = startTimestamp != null ? Math.max(0, now - startTimestamp) : null;
+  const statusText = statusTextOverride
+    ?? getActivityIndicatorStatusText(false, isLongWaiting, hasContent);
+
+  return (
+    <div className="flex items-center gap-2 py-1 animate-fade-in" role="status" aria-live="polite">
+      <span className="activity-indicator-dot h-2 w-2 rounded-full bg-primary flex-shrink-0" aria-hidden="true" />
+      <span className="shimmer-text text-sm text-secondary min-w-0 truncate">{statusText}</span>
+      {elapsedMs != null && elapsedMs >= ACTIVITY_TIMER_APPEAR_DELAY_MS && (
+        <span className="text-xs text-muted tabular-nums flex-shrink-0 animate-fade-in">
+          {formatElapsedDuration(elapsedMs)}
+        </span>
+      )}
+    </div>
+  );
+};
 
 const getSystemMessageDisplayContent = (message: CoworkMessage, content: string): string => {
   const errorText = typeof message.metadata?.error === 'string' ? message.metadata.error : null;
@@ -269,6 +327,12 @@ const MediaImageInline: React.FC<{ artifacts: Artifact[] }> = ({ artifacts }) =>
 
 // ── AssistantTurnBlock ───────────────────────────────────────────────────────
 
+const getActivityGroupKey = (item: ConsolidatedItem): string => {
+  if (item.type === 'media_polling_group') return `media-${item.group.taskId}`;
+  if (item.type === 'tool_group') return item.group.toolUse.id;
+  return item.message.id;
+};
+
 const AssistantTurnBlock: React.FC<{
   turn: ConversationTurn;
   artifacts?: Artifact[];
@@ -283,11 +347,17 @@ const AssistantTurnBlock: React.FC<{
   planConfirmationMessageId?: string | null;
   onConfirmPlan?: (messageId: string) => void;
   onAdjustPlan?: (messageId: string) => void;
-  renderToolGroupFooter?: (group: ToolGroupItem) => React.ReactNode;
-  showTypingIndicator?: boolean;
+  /** Replaces a tool_group's rendering entirely (e.g. subagent spawn cards). */
+  renderToolGroupOverride?: (group: ToolGroupItem) => React.ReactNode;
+  showActivityIndicator?: boolean;
+  activityStatusOverride?: string | null;
   showCopyButtons?: boolean;
   completedGoal?: CoworkGoal | null;
   searchTargetMessageId?: string | null;
+  /** True when this turn is the one currently streaming; keeps the latest activity step visible. */
+  isStreamingTurn?: boolean;
+  /** True while subagents spawned in this turn are still running; keeps the process unfolded. */
+  hasRunningSubagents?: boolean;
 }> = ({
   turn,
   artifacts,
@@ -302,13 +372,17 @@ const AssistantTurnBlock: React.FC<{
   planConfirmationMessageId,
   onConfirmPlan,
   onAdjustPlan,
-  renderToolGroupFooter,
-  showTypingIndicator = false,
+  renderToolGroupOverride,
+  showActivityIndicator = false,
+  activityStatusOverride = null,
   showCopyButtons = true,
   completedGoal,
   searchTargetMessageId,
+  isStreamingTurn = false,
+  hasRunningSubagents = false,
 }) => {
   const [artifactCardsExpanded, setArtifactCardsExpanded] = useState(false);
+  const [processExpanded, setProcessExpanded] = useState(false);
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
   const consolidatedItems = useMemo(
     () => consolidateMediaPolling(visibleAssistantItems),
@@ -350,6 +424,7 @@ const AssistantTurnBlock: React.FC<{
 
   useEffect(() => {
     setArtifactCardsExpanded(false);
+    setProcessExpanded(false);
   }, [turn.id]);
 
   const renderSystemMessage = (message: CoworkMessage) => {
@@ -452,116 +527,235 @@ const AssistantTurnBlock: React.FC<{
     );
   };
 
+  // Tool groups with an override (e.g. subagent cards) stay visible on their own.
+  const renderChunks = chunkConsolidatedItemsForDisplay(
+    consolidatedItems,
+    (item) => isActivityConsolidatedItem(item)
+      && !(item.type === 'tool_group' && renderToolGroupOverride?.(item.group)),
+  );
+
+  // Indices that render as standalone timeline rows; the timeline connector
+  // only draws between two consecutive ones (collapsed groups broke the old
+  // next-item heuristic).
+  const timelineToolIndices = new Set(
+    renderChunks
+      .filter((chunk): chunk is Extract<typeof renderChunks[number], { kind: 'item' }> => chunk.kind === 'item')
+      .filter((chunk) => chunk.item.type === 'tool_group' || chunk.item.type === 'media_polling_group')
+      .map((chunk) => chunk.index),
+  );
+
+  const renderConsolidatedItem = (
+    item: ConsolidatedItem,
+    index: number,
+    displayVariant: 'timeline' | 'row' = 'timeline',
+    rowInitiallyExpanded = false,
+  ): React.ReactNode => {
+    const isRowVariant = displayVariant === 'row';
+    if (item.type === 'media_polling_group') {
+      const isLastInSequence = isRowVariant || !timelineToolIndices.has(index + 1);
+      const retainedPollCount = getRetainedMediaPollCount(
+        { taskId: item.group.taskId, upstreamTaskId: item.group.upstreamTaskId },
+        retainedMediaPollCounts,
+      );
+      const indicator = (
+        <MediaPollingIndicator
+          key={`media-poll-${item.group.taskId}`}
+          group={{
+            ...item.group,
+            pollCount: retainedPollCount ?? item.group.pollCount,
+          }}
+          isLastInSequence={isLastInSequence}
+        />
+      );
+      return isRowVariant
+        ? <div key={`media-poll-${item.group.taskId}`} className="px-4 py-1.5">{indicator}</div>
+        : indicator;
+    }
+
+    if (item.type === 'assistant') {
+      if (item.message.metadata?.isThinking) {
+        return (
+          <ThinkingBlock
+            key={item.message.id}
+            message={item.message}
+            mapDisplayText={mapDisplayText}
+            variant={isRowVariant ? 'row' : 'default'}
+            initiallyExpanded={rowInitiallyExpanded}
+          />
+        );
+      }
+
+      if (isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) {
+        return null;
+      }
+
+      // Check if there are image artifacts for this message (inline MEDIA display)
+      const imageArtifacts = artifacts?.filter(a =>
+        a.type === 'image' && a.messageId === item.message.id,
+      );
+      if (imageArtifacts && imageArtifacts.length > 0 && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
+        return (
+          <MediaImageInline key={item.message.id} artifacts={imageArtifacts} />
+        );
+      }
+
+      const hasToolGroupAfter = consolidatedItems
+        .slice(index + 1)
+        .some(laterItem => laterItem.type === 'tool_group' || laterItem.type === 'media_polling_group');
+      const isLastAssistant = showCopyButtons && !hasToolGroupAfter;
+      const hasAssistantAfter = consolidatedItems
+        .slice(index + 1)
+        .some(laterItem => laterItem.type === 'assistant');
+
+      return (
+        <AssistantMessageItem
+          key={item.message.id}
+          message={item.message}
+          resolveLocalFilePath={resolveLocalFilePath}
+          mapDisplayText={mapDisplayText}
+          showCopyButton={isLastAssistant}
+          onFork={isLastAssistant ? onForkMessage : undefined}
+          turnMetadata={isLastAssistant ? (item.message.metadata as CoworkMessageMetadata) : undefined}
+          completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
+          planConfirmationMessageId={planConfirmationMessageId}
+          onConfirmPlan={onConfirmPlan}
+          onAdjustPlan={onAdjustPlan}
+          forceSearchExpanded={searchTargetMessageId === item.message.id}
+        />
+      );
+    }
+
+    if (item.type === 'tool_group') {
+      const override = renderToolGroupOverride?.(item.group);
+      if (override) {
+        return (
+          <div key={`tool-${item.group.toolUse.id}`}>
+            {override}
+          </div>
+        );
+      }
+      const isLastInSequence = isRowVariant || !timelineToolIndices.has(index + 1);
+      return (
+        <ToolCallGroup
+          key={`tool-${item.group.toolUse.id}`}
+          group={item.group}
+          isLastInSequence={isLastInSequence}
+          mapDisplayText={mapDisplayText}
+          retainedMediaPollCounts={retainedMediaPollCounts}
+          variant={displayVariant}
+          initiallyExpanded={rowInitiallyExpanded}
+        />
+      );
+    }
+
+    if (item.type === 'system') {
+      const systemMessage = renderSystemMessage(item.message);
+      if (!systemMessage) {
+        return null;
+      }
+      return (
+        <div key={item.message.id}>
+          {systemMessage}
+        </div>
+      );
+    }
+
+    return (
+      <div key={item.message.id} className={isRowVariant ? 'px-4 py-1.5' : undefined}>
+        {renderOrphanToolResult(item.message)}
+      </div>
+    );
+  };
+
+  const renderChunk = (chunk: (typeof renderChunks)[number], chunkIndex: number): React.ReactNode => {
+    if (chunk.kind === 'item') {
+      return renderConsolidatedItem(chunk.item, chunk.index);
+    }
+    return (
+      <ActivityGroupBlock
+        key={`activity-${getActivityGroupKey(chunk.entries[0].item)}`}
+        entries={chunk.entries}
+        isStreamingTail={isStreamingTurn && chunkIndex === renderChunks.length - 1}
+        renderEntry={(entry, options) =>
+          renderConsolidatedItem(entry.item, entry.index, 'row', options?.initiallyExpanded)}
+      />
+    );
+  };
+
+  // Once the turn completes, everything before the final answer folds behind
+  // a single duration line so the user reads input → answer, expanding only
+  // when they want the process. A turn with subagents still running is not
+  // complete — their working cards must stay visible.
+  const answerStartIndex = getTurnAnswerStartIndex(renderChunks);
+  const processChunks = renderChunks.slice(0, answerStartIndex);
+  const answerChunks = renderChunks.slice(answerStartIndex);
+  const shouldFoldProcess = !isStreamingTurn && !hasRunningSubagents && processChunks.length > 0;
+  const processContainsSearchTarget = Boolean(searchTargetMessageId) && processChunks.some(
+    (chunk) => chunk.kind === 'item'
+      && chunk.item.type === 'assistant'
+      && chunk.item.message.id === searchTargetMessageId,
+  );
+  const isProcessExpanded = processExpanded || processContainsSearchTarget;
+  const turnStartTimestamp = getTurnStartTimestamp(turn);
+  const turnEndTimestamp = getTurnEndTimestamp(turn);
+  const processDurationMs = turnStartTimestamp != null && turnEndTimestamp != null
+    ? turnEndTimestamp - turnStartTimestamp
+    : null;
+  const processLabel = processDurationMs != null && processDurationMs >= 1000
+    ? i18nService.t('coworkTurnProcessDuration').replace('{duration}', formatTurnDuration(processDurationMs))
+    : i18nService.t('coworkTurnProcess');
+
+  const handleProcessToggle = () => {
+    const nextExpanded = !isProcessExpanded;
+    reportConversationBlockAction({
+      actionType: nextExpanded ? 'turn_process_expand' : 'turn_process_collapse',
+      blockType: 'turn_process',
+      params: {
+        processChunkCount: processChunks.length,
+        durationMs: processDurationMs ?? undefined,
+      },
+    });
+    setProcessExpanded(nextExpanded);
+  };
+
   return (
     <div className={`py-2 ${COWORK_DETAIL_GUTTER_CLASS}`}>
       <div className={COWORK_DETAIL_CONTENT_CLASS}>
         <div className="flex items-start gap-3">
           <div className="flex-1 min-w-0 py-3 space-y-3">
-            {consolidatedItems.map((item, index) => {
-              if (item.type === 'media_polling_group') {
-                const nextItem = consolidatedItems[index + 1];
-                const isLastInSequence = !nextItem || (nextItem.type !== 'tool_group' && nextItem.type !== 'media_polling_group');
-                const retainedPollCount = getRetainedMediaPollCount(
-                  { taskId: item.group.taskId, upstreamTaskId: item.group.upstreamTaskId },
-                  retainedMediaPollCounts,
-                );
-                return (
-                  <MediaPollingIndicator
-                    key={`media-poll-${item.group.taskId}`}
-                    group={{
-                      ...item.group,
-                      pollCount: retainedPollCount ?? item.group.pollCount,
-                    }}
-                    isLastInSequence={isLastInSequence}
-                  />
-                );
-              }
-
-              if (item.type === 'assistant') {
-                if (item.message.metadata?.isThinking) {
-                  return (
-                    <ThinkingBlock
-                      key={item.message.id}
-                      message={item.message}
-                      mapDisplayText={mapDisplayText}
+            {shouldFoldProcess ? (
+              <>
+                <div className="py-1">
+                  <button
+                    type="button"
+                    onClick={handleProcessToggle}
+                    className="group flex max-w-full items-center gap-1.5 text-left"
+                    aria-expanded={isProcessExpanded}
+                  >
+                    <span className="min-w-0 truncate text-sm text-secondary transition-colors group-hover:text-foreground">
+                      {processLabel}
+                    </span>
+                    <ChevronRightIcon
+                      className={`h-3.5 w-3.5 flex-shrink-0 text-muted transition-transform duration-200 group-hover:text-secondary ${
+                        isProcessExpanded ? 'rotate-90' : ''
+                      }`}
                     />
-                  );
-                }
-
-                if (isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) {
-                  return null;
-                }
-
-                // Check if there are image artifacts for this message (inline MEDIA display)
-                const imageArtifacts = artifacts?.filter(a =>
-                  a.type === 'image' && a.messageId === item.message.id,
-                );
-                if (imageArtifacts && imageArtifacts.length > 0 && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
-                  return (
-                    <MediaImageInline key={item.message.id} artifacts={imageArtifacts} />
-                  );
-                }
-
-                const hasToolGroupAfter = consolidatedItems
-                  .slice(index + 1)
-                  .some(laterItem => laterItem.type === 'tool_group' || laterItem.type === 'media_polling_group');
-                const isLastAssistant = showCopyButtons && !hasToolGroupAfter;
-                const hasAssistantAfter = consolidatedItems
-                  .slice(index + 1)
-                  .some(laterItem => laterItem.type === 'assistant');
-
-                return (
-                  <AssistantMessageItem
-                    key={item.message.id}
-                    message={item.message}
-                    resolveLocalFilePath={resolveLocalFilePath}
-                    mapDisplayText={mapDisplayText}
-                    showCopyButton={isLastAssistant}
-                    onFork={isLastAssistant ? onForkMessage : undefined}
-                    turnMetadata={isLastAssistant ? (item.message.metadata as CoworkMessageMetadata) : undefined}
-                    completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
-                    planConfirmationMessageId={planConfirmationMessageId}
-                    onConfirmPlan={onConfirmPlan}
-                    onAdjustPlan={onAdjustPlan}
-                    forceSearchExpanded={searchTargetMessageId === item.message.id}
-                  />
-                );
-              }
-
-              if (item.type === 'tool_group') {
-                const nextItem = consolidatedItems[index + 1];
-                const isLastInSequence = !nextItem || (nextItem.type !== 'tool_group' && nextItem.type !== 'media_polling_group');
-                return (
-                  <ToolCallGroup
-                    key={`tool-${item.group.toolUse.id}`}
-                    group={item.group}
-                    isLastInSequence={isLastInSequence}
-                    mapDisplayText={mapDisplayText}
-                    retainedMediaPollCounts={retainedMediaPollCounts}
-                    footer={renderToolGroupFooter?.(item.group)}
-                  />
-                );
-              }
-
-              if (item.type === 'system') {
-                const systemMessage = renderSystemMessage(item.message);
-                if (!systemMessage) {
-                  return null;
-                }
-                return (
-                  <div key={item.message.id}>
-                    {systemMessage}
-                  </div>
-                );
-              }
-
-              return (
-                <div key={item.message.id}>
-                  {renderOrphanToolResult(item.message)}
+                  </button>
                 </div>
-              );
-            })}
-            {showTypingIndicator && <TypingDots />}
+                {isProcessExpanded && processChunks.map((chunk, index) => renderChunk(chunk, index))}
+                {answerChunks.map((chunk, index) => renderChunk(chunk, answerStartIndex + index))}
+              </>
+            ) : (
+              renderChunks.map((chunk, chunkIndex) => renderChunk(chunk, chunkIndex))
+            )}
+            {showActivityIndicator && (
+              <ActivityIndicator
+                fingerprint={getTurnActivityFingerprint(turn)}
+                hasContent={visibleAssistantItems.length > 0}
+                startTimestamp={getTurnStartTimestamp(turn)}
+                statusTextOverride={activityStatusOverride}
+              />
+            )}
             {artifacts && artifacts.length > 0 && (
               <div className="space-y-2 pt-1">
                 <VideoArtifactPathList artifacts={videoPathArtifacts} />

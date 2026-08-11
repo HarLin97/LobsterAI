@@ -342,6 +342,7 @@ contextBridge.exposeInMainWorld('electron', {
       systemPrompt?: string;
       identity?: string;
       model?: string;
+      thinkingLevel?: string;
       workingDirectory?: string;
       icon?: string;
       skillIds?: string[];
@@ -360,6 +361,7 @@ contextBridge.exposeInMainWorld('electron', {
         systemPrompt?: string;
         identity?: string;
         model?: string;
+        thinkingLevel?: string;
         workingDirectory?: string;
         icon?: string;
         skillIds?: string[];
@@ -416,6 +418,7 @@ contextBridge.exposeInMainWorld('electron', {
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       agentId?: string;
       modelOverride?: string;
+      thinkingLevel?: string;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string }; mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
     }) => ipcRenderer.invoke('cowork:session:start', options),
@@ -704,6 +707,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(DialogIpc.StatFile, filePath),
     readTextFile: (filePath: string) =>
       ipcRenderer.invoke(DialogIpc.ReadTextFile, filePath),
+    saveFileCopy: (filePath: string) =>
+      ipcRenderer.invoke(DialogIpc.SaveFileCopy, filePath),
     generateThumbnail: (filePath: string) =>
       ipcRenderer.invoke('dialog:generateThumbnail', filePath),
     showMessageBox: (options: {

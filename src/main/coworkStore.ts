@@ -19,6 +19,7 @@ import {
   type CoworkGoal,
   normalizeCoworkGoal,
 } from '../shared/cowork/goal';
+import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import {
   COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
   type CoworkMessageRailIndexItem,
@@ -32,6 +33,10 @@ import type {
   KitReference,
   ResolvedKitCapabilities,
 } from '../shared/kit/constants';
+import {
+  type ModelThinkingLevel,
+  parseModelThinkingLevel,
+} from '../shared/providers/modelThinking';
 import {
   ContinuityCapsuleSource,
   type CoworkContinuityCapsule,
@@ -146,6 +151,17 @@ function normalizeStringIdList(values: string[] | undefined): string[] {
     result.push(normalized);
   }
   return result;
+}
+
+function normalizeAgentThinkingLevel(
+  value: ModelThinkingLevel | '' | undefined,
+): ModelThinkingLevel | '' {
+  if (!value) return '';
+  const parsed = parseModelThinkingLevel(value);
+  if (!parsed) {
+    throw new Error(`Invalid agent thinking level: ${String(value)}`);
+  }
+  return parsed;
 }
 
 function parseStringIdList(value: string | null | undefined): string[] {
@@ -377,6 +393,7 @@ export interface Agent {
   systemPrompt: string;
   identity: string;
   model: string;
+  thinkingLevel: ModelThinkingLevel | '';
   workingDirectory: string;
   icon: string;
   skillIds: string[];
@@ -399,6 +416,7 @@ export interface CreateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;
   skillIds?: string[];
@@ -413,6 +431,7 @@ export interface UpdateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;
   skillIds?: string[];
@@ -481,12 +500,14 @@ export interface CoworkSession {
   id: string;
   title: string;
   claudeSessionId: string | null;
+  scheduledTaskId: string | null;
   status: CoworkSessionStatus;
   pinned: boolean;
   pinOrder?: number | null;
   cwd: string;
   systemPrompt: string;
   modelOverride: string;
+  thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
   agentId: string;
@@ -521,6 +542,7 @@ export interface UpsertSubagentChildSessionOptions {
 export interface CoworkSessionSummary {
   id: string;
   title: string;
+  scheduledTaskId: string | null;
   status: CoworkSessionStatus;
   pinned: boolean;
   pinOrder?: number | null;
@@ -715,6 +737,7 @@ interface CoworkUserMemoryRow {
 interface CoworkSessionSummaryRow {
   id: string;
   title: string;
+  scheduled_task_id: string | null;
   status: string;
   pinned: number | null;
   pin_order: number | null;
@@ -732,6 +755,11 @@ interface CoworkSessionSearchOptions {
   limit?: number;
   offset?: number;
   agentId?: string;
+}
+
+export interface CreateCoworkSessionOptions {
+  scheduledTaskId?: string | null;
+  thinkingLevel?: ModelThinkingLevel | '';
 }
 
 export class CoworkStore {
@@ -809,6 +837,7 @@ export class CoworkStore {
     return {
       id: row.id,
       title: row.title,
+      scheduledTaskId: row.scheduled_task_id?.trim() || null,
       status: row.status as CoworkSessionStatus,
       pinned: Boolean(row.pinned),
       pinOrder: row.pin_order ?? null,
@@ -841,24 +870,29 @@ export class CoworkStore {
     executionMode: CoworkExecutionMode = 'local',
     activeSkillIds: string[] = [],
     agentId: string = 'main',
-    modelOverride: string = ''
+    modelOverride: string = '',
+    options: CreateCoworkSessionOptions = {},
   ): CoworkSession {
     const id = uuidv4();
     const now = Date.now();
+    const scheduledTaskId = options.scheduledTaskId?.trim() || null;
+    const thinkingLevel = options.thinkingLevel ?? '';
 
     this.db
       .prepare(
         `
-      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, model_override, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
-      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      INSERT INTO cowork_sessions (id, title, claude_session_id, scheduled_task_id, status, cwd, system_prompt, model_override, thinking_level, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
+      VALUES (?, ?, NULL, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
     `,
       )
       .run(
         id,
         title,
+        scheduledTaskId,
         cwd,
         systemPrompt,
         modelOverride,
+        thinkingLevel,
         executionMode,
         JSON.stringify(activeSkillIds),
         agentId,
@@ -870,12 +904,14 @@ export class CoworkStore {
       id,
       title,
       claudeSessionId: null,
+      scheduledTaskId,
       status: 'idle',
       pinned: false,
       pinOrder: null,
       cwd,
       systemPrompt,
       modelOverride,
+      thinkingLevel,
       executionMode,
       activeSkillIds,
       agentId,
@@ -899,12 +935,14 @@ export class CoworkStore {
       id: string;
       title: string;
       claude_session_id: string | null;
+      scheduled_task_id: string | null;
       status: string;
       pinned?: number | null;
       pin_order?: number | null;
       cwd: string;
       system_prompt: string;
       model_override?: string | null;
+      thinking_level?: string | null;
       execution_mode?: string | null;
       active_skill_ids?: string | null;
       agent_id?: string | null;
@@ -915,7 +953,7 @@ export class CoworkStore {
 
     const row = this.getOne<SessionRow>(
       `
-      SELECT id, title, claude_session_id, status, pinned, pin_order, cwd, system_prompt, model_override, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
+      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, thinking_level, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `,
@@ -945,12 +983,14 @@ export class CoworkStore {
       id: row.id,
       title: row.title,
       claudeSessionId: row.claude_session_id,
+      scheduledTaskId: row.scheduled_task_id?.trim() || null,
       status: row.status as CoworkSessionStatus,
       pinned: Boolean(row.pinned),
       pinOrder: row.pin_order ?? null,
       cwd: row.cwd,
       systemPrompt: row.system_prompt,
       modelOverride: row.model_override || '',
+      thinkingLevel: parseModelThinkingLevel(row.thinking_level) ?? '',
       executionMode: (row.execution_mode as CoworkExecutionMode) || 'local',
       activeSkillIds,
       agentId: row.agent_id || 'main',
@@ -1132,13 +1172,13 @@ export class CoworkStore {
     const insertSession = this.db.prepare(
       `
       INSERT INTO cowork_sessions (
-        id, title, claude_session_id, status, cwd, system_prompt, model_override,
+        id, title, claude_session_id, status, cwd, system_prompt, model_override, thinking_level,
         execution_mode, active_skill_ids, agent_id, pinned, pin_order,
         parent_session_id, forked_from_message_id, forked_at, fork_mode,
         fork_workspace_path, fork_git_branch, fork_git_base_ref,
         created_at, updated_at
       )
-      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     );
     const insertMessage = this.db.prepare(
@@ -1155,6 +1195,7 @@ export class CoworkStore {
         cwd,
         source.systemPrompt,
         source.modelOverride,
+        source.thinkingLevel ?? '',
         source.executionMode,
         JSON.stringify(source.activeSkillIds),
         source.agentId,
@@ -1330,6 +1371,8 @@ export class CoworkStore {
       delete sanitized.turnToken;
       delete sanitized.openClawRunId;
       delete sanitized.openClawSessionKey;
+      delete sanitized[OpenClawCronRunMetadataKey.SessionKey];
+      delete sanitized[OpenClawCronRunMetadataKey.EntryIndex];
       if (Array.isArray(sanitized.selectedTextSnippets)) {
         sanitized.selectedTextSnippets = sanitized.selectedTextSnippets.map(snippet => ({
           ...snippet,
@@ -1352,7 +1395,7 @@ export class CoworkStore {
     updates: Partial<
       Pick<
         CoworkSession,
-        'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'modelOverride' | 'executionMode' | 'goal'
+        'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'modelOverride' | 'thinkingLevel' | 'executionMode' | 'goal'
       >
     >,
     options: { touchUpdatedAt?: boolean } = {},
@@ -1399,6 +1442,10 @@ export class CoworkStore {
     if (updates.modelOverride !== undefined) {
       setClauses.push('model_override = ?');
       values.push(updates.modelOverride);
+    }
+    if (updates.thinkingLevel !== undefined) {
+      setClauses.push('thinking_level = ?');
+      values.push(updates.thinkingLevel);
     }
     if (updates.executionMode !== undefined) {
       setClauses.push('execution_mode = ?');
@@ -1519,7 +1566,7 @@ export class CoworkStore {
     if (agentId) {
       rows = this.getAll<CoworkSessionSummaryRow>(
         `
-        SELECT id, title, status, pinned, pin_order, agent_id,
+        SELECT id, title, scheduled_task_id, status, pinned, pin_order, agent_id,
                parent_session_id, forked_at, fork_mode,
                goal_json,
                created_at, updated_at
@@ -1536,7 +1583,7 @@ export class CoworkStore {
     } else {
       rows = this.getAll<CoworkSessionSummaryRow>(
         `
-        SELECT id, title, status, pinned, pin_order, agent_id,
+        SELECT id, title, scheduled_task_id, status, pinned, pin_order, agent_id,
                parent_session_id, forked_at, fork_mode,
                goal_json,
                created_at, updated_at
@@ -1596,7 +1643,7 @@ export class CoworkStore {
     if (options.agentId) {
       rows = this.getAll<CoworkSessionSummaryRow>(
         `
-        SELECT id, title, status, pinned, pin_order, agent_id,
+        SELECT id, title, scheduled_task_id, status, pinned, pin_order, agent_id,
                parent_session_id, forked_at, fork_mode,
                goal_json,
                created_at, updated_at
@@ -1614,7 +1661,7 @@ export class CoworkStore {
     } else {
       rows = this.getAll<CoworkSessionSummaryRow>(
         `
-        SELECT id, title, status, pinned, pin_order, agent_id,
+        SELECT id, title, scheduled_task_id, status, pinned, pin_order, agent_id,
                parent_session_id, forked_at, fork_mode,
                goal_json,
                created_at, updated_at
@@ -2890,6 +2937,7 @@ export class CoworkStore {
       system_prompt: string;
       identity: string;
       model: string;
+      thinking_level?: string | null;
       working_directory?: string | null;
       icon: string;
       skill_ids: string;
@@ -2921,6 +2969,7 @@ export class CoworkStore {
       system_prompt: string;
       identity: string;
       model: string;
+      thinking_level?: string | null;
       working_directory?: string | null;
       icon: string;
       skill_ids: string;
@@ -2965,8 +3014,8 @@ export class CoworkStore {
       this.db
         .prepare(
           `
-        INSERT INTO agents (id, name, description, system_prompt, identity, model, working_directory, icon, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, sort_order, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
+        INSERT INTO agents (id, name, description, system_prompt, identity, model, thinking_level, working_directory, icon, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -2976,6 +3025,7 @@ export class CoworkStore {
           request.systemPrompt || '',
           request.identity || '',
           request.model || '',
+          normalizeAgentThinkingLevel(request.thinkingLevel),
           request.workingDirectory || '',
           normalizeAgentAvatarIcon(request.icon),
           JSON.stringify(normalizeStringIdList(request.skillIds)),
@@ -3033,6 +3083,10 @@ export class CoworkStore {
     if (updates.model !== undefined) {
       setClauses.push('model = ?');
       values.push(updates.model);
+    }
+    if (updates.thinkingLevel !== undefined) {
+      setClauses.push('thinking_level = ?');
+      values.push(normalizeAgentThinkingLevel(updates.thinkingLevel));
     }
     if (updates.workingDirectory !== undefined) {
       setClauses.push('working_directory = ?');
@@ -3130,6 +3184,7 @@ export class CoworkStore {
     system_prompt: string;
     identity: string;
     model: string;
+    thinking_level?: string | null;
     working_directory?: string | null;
     icon: string;
     skill_ids: string;
@@ -3153,6 +3208,7 @@ export class CoworkStore {
       systemPrompt: row.system_prompt,
       identity: row.identity,
       model: row.model,
+      thinkingLevel: parseModelThinkingLevel(row.thinking_level) ?? '',
       workingDirectory: row.working_directory || '',
       icon: row.icon,
       skillIds,
@@ -3175,6 +3231,24 @@ export class CoworkStore {
     const row = this.getOne<{ id: string }>(
       'SELECT id FROM cowork_sessions WHERE claude_session_id = ? LIMIT 1',
       [normalized],
+    );
+    return row?.id ?? null;
+  }
+
+  getSessionIdByScheduledTaskId(scheduledTaskId: string, agentId: string): string | null {
+    const normalizedTaskId = scheduledTaskId.trim();
+    const normalizedAgentId = agentId.trim() || AgentId.Main;
+    if (!normalizedTaskId) return null;
+
+    const row = this.getOne<{ id: string }>(
+      `SELECT id
+       FROM cowork_sessions
+       WHERE scheduled_task_id = ?
+         AND parent_session_id IS NULL
+         AND COALESCE(NULLIF(TRIM(agent_id), ''), ?) = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [normalizedTaskId, AgentId.Main, normalizedAgentId],
     );
     return row?.id ?? null;
   }

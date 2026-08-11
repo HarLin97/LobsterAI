@@ -1,5 +1,5 @@
 import {
-  KIMI_K3_AGENTIC_CAPABILITY,
+  LOBSTERAI_CLIENT_CAPABILITIES,
   LOBSTERAI_CLIENT_CAPABILITIES_HEADER,
   LOBSTERAI_CLIENT_VERSION_HEADER,
 } from '../../shared/providers/modelRuntimeProfiles';
@@ -31,7 +31,7 @@ export const buildServerModelCapabilityHeaders = (
   clientVersion: string,
 ): Record<string, string> => ({
   Accept: 'application/json',
-  [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: KIMI_K3_AGENTIC_CAPABILITY,
+  [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: LOBSTERAI_CLIENT_CAPABILITIES,
   [LOBSTERAI_CLIENT_VERSION_HEADER]: clientVersion,
 });
 

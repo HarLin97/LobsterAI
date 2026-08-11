@@ -14,6 +14,7 @@ import type { MarketplaceKit } from '../../types/kit';
 import type { Skill } from '../../types/skill';
 import { formatMessageDateTime } from '../../utils/tokenFormat';
 import { parseUserMessageForDisplay } from '../../utils/userMessageDisplay';
+import { extractUserMessageFileAttachments } from '../../utils/userMessageFileAttachments';
 import EditIcon from '../icons/EditIcon';
 import GoalIcon from '../icons/GoalIcon';
 import MessageCopyIcon from '../icons/MessageCopyIcon';
@@ -29,6 +30,7 @@ import {
 } from './messageDisplayUtils';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
 import UserMessageContent from './UserMessageContent';
+import UserMessageFileAttachments from './UserMessageFileAttachments';
 
 // ── CopyButton (local) ──────────────────────────────────────────────────────
 
@@ -200,12 +202,12 @@ const UserMessageItem: React.FC<{
 
   const metadata = message.metadata as CoworkMessageMetadata | undefined;
   const isGoalSettingMessage = hasGoalSettingMessageMetadata(metadata);
-  const displayContent = useMemo(
-    () => parseUserMessageForDisplay(message.content || '', {
+  const { text: displayContent, attachments: fileAttachments } = useMemo(
+    () => extractUserMessageFileAttachments(parseUserMessageForDisplay(message.content || '', {
       localMediaAttachments: Array.isArray(metadata?.localMediaAttachments)
         ? metadata.localMediaAttachments
         : [],
-    }),
+    })),
     [message.content, metadata?.localMediaAttachments]
   );
 
@@ -248,6 +250,12 @@ const UserMessageItem: React.FC<{
     });
     onReEdit?.(message);
   }, [message, onReEdit]);
+  const handleFileAttachmentReveal = useCallback(() => {
+    reportConversationMessageAction({
+      actionType: 'reveal_message_file',
+      message,
+    });
+  }, [message]);
 
   return (
     <div
@@ -264,7 +272,7 @@ const UserMessageItem: React.FC<{
             <div className="w-full min-w-0 flex flex-col items-end">
               <div className="w-fit max-w-full rounded-2xl px-4 py-2.5 bg-surface text-foreground shadow-subtle">
                 {browserAnnotationCount > 0 && (
-                  <div className={(selectedTextSnippets.length > 0 || displayContent?.trim() || displayImageAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
+                  <div className={(selectedTextSnippets.length > 0 || displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
                     <div
                       className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-surface-raised px-2.5 text-xs text-foreground"
                       title={browserAnnotations.flatMap(batch => batch.annotations.map(item => item.comment)).join('\n')}
@@ -275,7 +283,7 @@ const UserMessageItem: React.FC<{
                   </div>
                 )}
                 {selectedTextSnippets.length > 0 && (
-                  <div className={(displayContent?.trim() || displayImageAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
+                  <div className={(displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
                     <SelectedTextSnippetBadge
                       snippets={selectedTextSnippets}
                       align="right"
@@ -284,7 +292,7 @@ const UserMessageItem: React.FC<{
                   </div>
                 )}
                 {hasCapabilityBadges && (
-                  <div className={(displayContent?.trim() || displayImageAttachments.length > 0) ? 'mb-2' : ''}>
+                  <div className={(displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0) ? 'mb-2' : ''}>
                     <UserMessageCapabilityBadges
                       kitReferences={messageKitReferences}
                       skills={messageSkills}
@@ -322,6 +330,13 @@ const UserMessageItem: React.FC<{
                       </div>
                     ))}
                   </div>
+                )}
+                {fileAttachments.length > 0 && (
+                  <UserMessageFileAttachments
+                    attachments={fileAttachments}
+                    className={(displayContent?.trim() || displayImageAttachments.length > 0) ? 'mt-2' : ''}
+                    onReveal={handleFileAttachmentReveal}
+                  />
                 )}
               </div>
               <div className="flex w-full items-center justify-end gap-2">

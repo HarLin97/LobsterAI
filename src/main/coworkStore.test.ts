@@ -23,6 +23,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
 import { CoworkForkMode } from '../shared/cowork/constants';
+import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 
@@ -42,12 +43,14 @@ function setupDb(): void {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       claude_session_id TEXT,
+      scheduled_task_id TEXT,
       status TEXT NOT NULL DEFAULT 'idle',
       pinned INTEGER NOT NULL DEFAULT 0,
       pin_order INTEGER,
       cwd TEXT NOT NULL,
       system_prompt TEXT NOT NULL DEFAULT '',
       model_override TEXT NOT NULL DEFAULT '',
+      thinking_level TEXT NOT NULL DEFAULT '',
       execution_mode TEXT NOT NULL DEFAULT 'local',
       active_skill_ids TEXT,
       agent_id TEXT DEFAULT 'main',
@@ -92,6 +95,7 @@ function setupDb(): void {
       system_prompt TEXT NOT NULL DEFAULT '',
       identity TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
+      thinking_level TEXT NOT NULL DEFAULT '',
       working_directory TEXT NOT NULL DEFAULT '',
       icon TEXT NOT NULL DEFAULT '',
       skill_ids TEXT NOT NULL DEFAULT '[]',
@@ -233,6 +237,54 @@ test('searchSessions finds matching titles beyond the recent page', () => {
 
   expect(results.map((session) => session.id)).toEqual(['deep-match']);
   expect(store.countSearchSessions({ query: 'history search needle' })).toBe(1);
+});
+
+test('scheduled task sessions preserve their task id in session details and list summaries', () => {
+  const session = store.createSession(
+    'Daily summary',
+    '/tmp',
+    '',
+    'local',
+    [],
+    'main',
+    '',
+    { scheduledTaskId: 'job-daily-summary' },
+  );
+
+  expect(session.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.getSession(session.id)?.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.listSessions(10, 0, 'main')[0]?.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.searchSessions({ query: 'Daily summary' })[0]?.scheduledTaskId).toBe(
+    'job-daily-summary',
+  );
+
+  insertSession('newer-fork', 'main', 'Forked daily summary', Date.now() + 10_000);
+  db.prepare(
+    `UPDATE cowork_sessions
+     SET scheduled_task_id = ?, parent_session_id = ?
+     WHERE id = ?`,
+  ).run('job-daily-summary', session.id, 'newer-fork');
+
+  expect(store.getSessionIdByScheduledTaskId('job-daily-summary', 'main')).toBe(session.id);
+  expect(store.getSessionIdByScheduledTaskId('job-daily-summary', 'other-agent')).toBeNull();
+});
+
+test('scheduled task session lookup uses a stable newest-created top-level session', () => {
+  insertSession('older-session', 'main', 'Older daily summary', 1_000);
+  insertSession('newer-session', 'main', 'Newer daily summary', 2_000);
+  db.prepare(
+    `UPDATE cowork_sessions
+     SET scheduled_task_id = ?
+     WHERE id IN (?, ?)`,
+  ).run('job-daily-summary', 'older-session', 'newer-session');
+
+  // A user interaction may update an older history row. It must not change the
+  // canonical destination chosen for future scheduled runs.
+  db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?')
+    .run(3_000, 'older-session');
+
+  expect(store.getSessionIdByScheduledTaskId('job-daily-summary', 'main'))
+    .toBe('newer-session');
 });
 
 test('searchSessions preserves pinned ordering and pagination', () => {
@@ -636,6 +688,24 @@ test('updateSession can patch model override without refreshing the session upda
   expect(session?.updatedAt).toBe(1000);
 });
 
+test('create and update session persist the selected thinking level', () => {
+  const session = store.createSession(
+    'Thinking session',
+    '/tmp',
+    '',
+    'local',
+    [],
+    'main',
+    'lobsterai-server/deepseek-v4-flash',
+    { thinkingLevel: 'high' },
+  );
+
+  expect(store.getSession(session.id)?.thinkingLevel).toBe('high');
+
+  store.updateSession(session.id, { thinkingLevel: 'max' }, { touchUpdatedAt: false });
+  expect(store.getSession(session.id)?.thinkingLevel).toBe('max');
+});
+
 test('updateSession can rename without refreshing the session updated time', () => {
   const sid = 'sess-title-only';
   insertSession(sid);
@@ -665,7 +735,11 @@ test('deleteSession removes messages without relying on foreign key cascade', ()
 test('forkSession copies stable history and records fork metadata', () => {
   const sid = 'sess-fork-source';
   insertSession(sid);
-  insertMessage('msg-user', sid, 'user', 'start here', '{"keep":true}', 1, 1000);
+  insertMessage('msg-user', sid, 'user', 'start here', JSON.stringify({
+    keep: true,
+    [OpenClawCronRunMetadataKey.SessionKey]: 'agent:main:cron:job-1:run:run-1',
+    [OpenClawCronRunMetadataKey.EntryIndex]: 0,
+  }), 1, 1000);
   insertMessage(
     'msg-streaming',
     sid,
@@ -884,20 +958,25 @@ test('forkSession prefers a new compaction bridge over an inherited summary', ()
   expect(summaries[0].content).toBe('Newer compacted context.');
 });
 
-test('agent CRUD stores working directory independently', () => {
+test('agent CRUD stores model preferences and working directory independently', () => {
   const agent = store.createAgent({
     name: 'Docs Agent',
     model: 'openai/gpt-4o',
+    thinkingLevel: 'high',
     workingDirectory: '/tmp/docs-project',
   });
 
+  expect(agent.thinkingLevel).toBe('high');
   expect(agent.workingDirectory).toBe('/tmp/docs-project');
 
   const updated = store.updateAgent(agent.id, {
+    thinkingLevel: 'max',
     workingDirectory: '/tmp/docs-next',
   });
 
+  expect(updated?.thinkingLevel).toBe('max');
   expect(updated?.workingDirectory).toBe('/tmp/docs-next');
+  expect(store.getAgent(agent.id)?.thinkingLevel).toBe('max');
   expect(store.getAgent(agent.id)?.workingDirectory).toBe('/tmp/docs-next');
 });
 

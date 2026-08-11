@@ -1,5 +1,5 @@
-import { ArrowPathIcon, ArrowUpCircleIcon, Cog6ToothIcon,PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
-import { useCallback, useEffect, useImperativeHandle, useRef,useState } from 'react';
+import { ArrowPathIcon, ArrowUpCircleIcon, Cog6ToothIcon, PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
@@ -410,16 +410,65 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
     }
   };
 
+  // This overlay must be shared by both the plugin list and config sub-view.
+  const unsavedChangesDialog = showUnsavedConfirm ? (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="plugins-unsaved-title"
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/35 px-4"
+    >
+      <div className="w-full max-w-sm rounded-2xl bg-background border border-border shadow-modal p-5">
+        <h4 id="plugins-unsaved-title" className="text-sm font-semibold text-foreground mb-2">
+          {i18nService.t('pluginsUnsavedTitle')}
+        </h4>
+        <p className="text-sm text-secondary mb-4">
+          {i18nService.t('pluginsUnsavedMessage')}
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setShowUnsavedConfirm(false);
+              pendingLeaveActionRef.current = null;
+            }}
+            className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+          >
+            {i18nService.t('pluginsUnsavedStay')}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowUnsavedConfirm(false);
+              // Reset dirty state so subsequent navigation is not blocked
+              setPendingToggles(new Map());
+              setPendingConfigs(new Map());
+              const action = pendingLeaveActionRef.current;
+              pendingLeaveActionRef.current = null;
+              action?.();
+            }}
+            className="px-4 py-2 text-sm font-medium rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity"
+          >
+            {i18nService.t('pluginsUnsavedDiscard')}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   // Sub-view: Plugin config page
   if (configPluginId) {
     return (
-      <PluginConfigPage
-        pluginId={configPluginId}
-        onBack={() => setConfigPluginId(null)}
-        initialConfig={pendingConfigs.get(configPluginId)}
-        onConfigChange={handleConfigChange}
-        onConfigLoaded={handleConfigLoaded}
-      />
+      <>
+        <PluginConfigPage
+          pluginId={configPluginId}
+          onBack={() => setConfigPluginId(null)}
+          initialConfig={pendingConfigs.get(configPluginId)}
+          onConfigChange={handleConfigChange}
+          onConfigLoaded={handleConfigLoaded}
+        />
+        {unsavedChangesDialog}
+      </>
     );
   }
 
@@ -909,46 +958,7 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
         </div>
       )}
 
-      {/* Unsaved changes confirmation dialog */}
-      {showUnsavedConfirm && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/35 px-4">
-          <div className="w-full max-w-sm rounded-2xl bg-background border border-border shadow-modal p-5">
-            <h4 className="text-sm font-semibold text-foreground mb-2">
-              {i18nService.t('pluginsUnsavedTitle')}
-            </h4>
-            <p className="text-sm text-secondary mb-4">
-              {i18nService.t('pluginsUnsavedMessage')}
-            </p>
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowUnsavedConfirm(false);
-                  pendingLeaveActionRef.current = null;
-                }}
-                className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-              >
-                {i18nService.t('pluginsUnsavedStay')}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowUnsavedConfirm(false);
-                  // Reset dirty state so subsequent navigation is not blocked
-                  setPendingToggles(new Map());
-                  setPendingConfigs(new Map());
-                  const action = pendingLeaveActionRef.current;
-                  pendingLeaveActionRef.current = null;
-                  action?.();
-                }}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity"
-              >
-                {i18nService.t('pluginsUnsavedDiscard')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {unsavedChangesDialog}
     </div>
   );
 }
