@@ -269,7 +269,6 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
                     className="prose dark:prose-invert max-w-none text-sm text-foreground"
                     spacing="compact"
                     resolveLocalFilePath={resolveLocalFilePath}
-                    showRevealInFolderAction
                   />
                 )}
                 {entry.status === CoworkBtwStatus.Answered && entry.answer && (

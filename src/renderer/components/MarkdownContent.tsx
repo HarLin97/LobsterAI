@@ -1,7 +1,6 @@
 import 'katex/dist/katex.min.css';
 import 'katex/contrib/mhchem';
 
-import { DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
 import React, { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 // @ts-ignore
@@ -12,12 +11,13 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 
 import { i18nService } from '../services/i18n';
-import { type ShellActionResult, showShellFailureToast, showToast } from '../utils/localFileActions';
+import { showShellFailureToast, showToast } from '../utils/localFileActions';
 import CodeBlock from './CodeBlock';
+import LocalFileContextMenu from './common/LocalFileContextMenu';
 
 const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file', 'localfile', 'kit']);
 const INTERNAL_URL_PROTOCOLS = new Set(['kit']);
-const LINK_CLASS_NAME = 'text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary transition-colors break-words [overflow-wrap:anywhere]';
+const LINK_CLASS_NAME = 'text-primary hover:text-primary-hover hover:underline underline-offset-2 transition-colors break-words [overflow-wrap:anywhere]';
 const LARGE_MARKDOWN_RENDER_THRESHOLD = 8 * 1024;
 const LARGE_MARKDOWN_PREVIEW_HEAD_LENGTH = 4 * 1024;
 const LARGE_MARKDOWN_PREVIEW_TAIL_LENGTH = 8 * 1024;
@@ -401,14 +401,92 @@ const findFallbackPathFromContext = (
   return null;
 };
 
+interface LocalFileLinkProps {
+  filePath: string;
+  isDirectory: boolean;
+  linkText: string;
+  resolveLocalFilePath?: (href: string, text: string) => string | null;
+  anchorProps: Record<string, unknown>;
+  children: React.ReactNode;
+}
+
+const LocalFileLink: React.FC<LocalFileLinkProps> = ({
+  filePath,
+  isDirectory,
+  linkText,
+  resolveLocalFilePath,
+  anchorProps,
+  children,
+}) => {
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
+
+  const handleClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    const anchor = e.currentTarget;
+    try {
+      const result = await window.electron.shell.openPath(filePath);
+      if (result?.success) {
+        return;
+      }
+
+      const fallbackPath = findFallbackPathFromContext(
+        anchor,
+        linkText,
+        resolveLocalFilePath
+      );
+      if (fallbackPath) {
+        const fallbackResult = await window.electron.shell.openPath(fallbackPath);
+        if (!fallbackResult?.success) {
+          console.error('Failed to open file (fallback):', fallbackPath, fallbackResult?.error);
+          showShellFailureToast(fallbackResult, 'openFileFailed');
+        }
+      } else {
+        console.error('Failed to open file:', filePath, result?.error);
+        showShellFailureToast(result, 'openFileFailed');
+      }
+    } catch (error) {
+      console.error('Failed to open file:', filePath, error);
+      showToast(i18nService.t('openFileFailed'));
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuPosition({ x: e.clientX, y: e.clientY });
+  };
+
+  return (
+    <>
+      <a
+        href={toFileHref(filePath)}
+        onClick={handleClick}
+        onContextMenu={handleContextMenu}
+        className={`${LINK_CLASS_NAME} cursor-pointer`}
+        title={filePath}
+        {...anchorProps}
+      >
+        {children}
+      </a>
+      {menuPosition && (
+        <LocalFileContextMenu
+          filePath={filePath}
+          isDirectory={isDirectory}
+          position={menuPosition}
+          onClose={() => setMenuPosition(null)}
+        />
+      )}
+    </>
+  );
+};
+
 const createMarkdownComponents = (
   resolveLocalFilePath?: (href: string, text: string) => string | null,
-  showRevealInFolderAction = false,
   onImageClick?: (image: { src: string; alt?: string | null }) => void,
   spacing: MarkdownSpacing = 'normal',
 ) => ({
   p: ({ node: _node, className: _className, children, ...props }: any) => (
-    <p className={`${spacing === 'compact' ? 'my-1' : 'my-3'} first:mt-0 last:mb-0 text-foreground/90`} {...props}>
+    <p className={`${spacing === 'compact' ? 'my-1' : 'my-3'} first:mt-0 last:mb-0 text-foreground`} {...props}>
       {children}
     </p>
   ),
@@ -428,7 +506,7 @@ const createMarkdownComponents = (
     </h2>
   ),
   h3: ({ node: _node, className: _className, children, ...props }: any) => (
-    <h3 className={`${spacing === 'compact' ? 'mt-2 mb-1' : 'mt-4 mb-2'} text-base font-semibold leading-snug first:mt-0 text-foreground`} {...props}>
+    <h3 className={`${spacing === 'compact' ? 'mt-2 mb-1' : 'mt-4 mb-2'} text-[length:var(--lobster-text-markdownH3)] font-semibold leading-snug first:mt-0 text-foreground`} {...props}>
       {children}
     </h3>
   ),
@@ -438,17 +516,17 @@ const createMarkdownComponents = (
     </h4>
   ),
   ul: ({ node: _node, className: _className, children, ...props }: any) => (
-    <ul className={`${spacing === 'compact' ? 'my-1 [li>&]:my-0.5' : 'my-3 [li>&]:my-1.5'} list-disc pl-5 first:mt-0 last:mb-0 marker:text-foreground/40 text-foreground/90`} {...props}>
+    <ul className={`${spacing === 'compact' ? 'my-1 [li>&]:my-0.5' : 'my-3 [li>&]:my-2'} list-disc pl-5 first:mt-0 last:mb-0 marker:text-foreground/60 text-foreground`} {...props}>
       {children}
     </ul>
   ),
   ol: ({ node: _node, className: _className, children, ...props }: any) => (
-    <ol className={`${spacing === 'compact' ? 'my-1 [li>&]:my-0.5' : 'my-3 [li>&]:my-1.5'} list-decimal pl-6 first:mt-0 last:mb-0 marker:text-foreground/55 text-foreground/90`} {...props}>
+    <ol className={`${spacing === 'compact' ? 'my-1 [li>&]:my-0.5' : 'my-3 [li>&]:my-2'} list-decimal pl-6 first:mt-0 last:mb-0 marker:text-foreground/70 text-foreground`} {...props}>
       {children}
     </ol>
   ),
   li: ({ node: _node, className: _className, children, ...props }: any) => (
-    <li className={`${spacing === 'compact' ? 'my-0.5' : 'my-1.5'} pl-1 text-foreground/90`} {...props}>
+    <li className={`${spacing === 'compact' ? 'my-0.5' : 'my-2'} pl-1 text-foreground`} {...props}>
       {children}
     </li>
   ),
@@ -489,7 +567,7 @@ const createMarkdownComponents = (
     </th>
   ),
   td: ({ node: _node, className: _className, children, ...props }: any) => (
-    <td className="px-4 py-2 text-foreground/90" {...props}>
+    <td className="px-4 py-2 text-foreground" {...props}>
       {children}
     </td>
   ),
@@ -539,105 +617,17 @@ const createMarkdownComponents = (
         ?? stripFileProtocol(stripHashAndQuery(hrefValue));
       const decodedPath = safeDecodeURIComponent(rawPath);
       const filePath = decodedPath || rawPath;
-      const isDirectoryLink = looksLikeDirectory(filePath);
-      const shouldShowRevealInFolderAction = showRevealInFolderAction && !isDirectoryLink;
-
-      const handleClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
-        e.preventDefault();
-        const anchor = e.currentTarget;
-        try {
-          const result = await window.electron.shell.openPath(filePath);
-          if (result?.success) {
-            return;
-          }
-
-          const fallbackPath = findFallbackPathFromContext(
-            anchor,
-            linkText,
-            resolveLocalFilePath
-          );
-          if (fallbackPath) {
-            const fallbackResult = await window.electron.shell.openPath(fallbackPath);
-            if (!fallbackResult?.success) {
-              console.error('Failed to open file (fallback):', fallbackPath, fallbackResult?.error);
-              showShellFailureToast(fallbackResult, 'openFileFailed');
-            }
-          } else {
-            console.error('Failed to open file:', filePath, result?.error);
-            showShellFailureToast(result, 'openFileFailed');
-          }
-        } catch (error) {
-          console.error('Failed to open file:', filePath, error);
-          showToast(i18nService.t('openFileFailed'));
-        }
-      };
-
-      const handleRevealInFolder = async (e: React.MouseEvent<HTMLButtonElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const anchor = e.currentTarget.parentElement?.querySelector('a');
-        const linkedAnchor = anchor instanceof HTMLAnchorElement ? anchor : null;
-        let lastResult: ShellActionResult | null = null;
-
-        const tryReveal = async (targetPath: string): Promise<boolean> => {
-          const result = await window.electron.shell.showItemInFolder(targetPath);
-          lastResult = result ?? null;
-          if (result?.success) {
-            return true;
-          }
-          console.error('Failed to show item in folder:', targetPath, result?.error);
-          return false;
-        };
-
-        try {
-          if (await tryReveal(filePath)) {
-            return;
-          }
-
-          const fallbackPath = findFallbackPathFromContext(
-            linkedAnchor,
-            linkText,
-            resolveLocalFilePath
-          );
-          if (fallbackPath && fallbackPath !== filePath && await tryReveal(fallbackPath)) {
-            return;
-          }
-
-          showShellFailureToast(lastResult, 'showInFolderFailed');
-        } catch (error) {
-          console.error('Failed to show item in folder:', filePath, error);
-          showToast(i18nService.t('showInFolderFailed'));
-        }
-      };
 
       return (
-        <span className="group inline-flex max-w-full items-center gap-1 align-baseline">
-          <a
-            href={toFileHref(filePath)}
-            onClick={handleClick}
-            className={`${LINK_CLASS_NAME} cursor-pointer inline-flex max-w-full flex-wrap items-center gap-1`}
-            title={filePath}
-            {...props}
-          >
-            <span className="min-w-0 break-words [overflow-wrap:anywhere]">{children}</span>
-            {isDirectoryLink ? (
-              <FolderIcon className="h-3.5 w-3.5 inline" />
-            ) : (
-              <DocumentIcon className="h-3.5 w-3.5 inline" />
-            )}
-          </a>
-          {shouldShowRevealInFolderAction && (
-            <button
-              type="button"
-              onClick={handleRevealInFolder}
-              className="inline-flex items-center justify-center rounded-md p-0.5 text-secondary hover:text-primary hover:bg-surface-hover opacity-0 pointer-events-none transition-all group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
-              title={i18nService.t('showInFolder')}
-              aria-label={i18nService.t('showInFolder')}
-            >
-              <FolderIcon className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </span>
+        <LocalFileLink
+          filePath={filePath}
+          isDirectory={looksLikeDirectory(filePath)}
+          linkText={linkText}
+          resolveLocalFilePath={resolveLocalFilePath}
+          anchorProps={props}
+        >
+          {children}
+        </LocalFileLink>
       );
     }
 
@@ -688,7 +678,6 @@ interface MarkdownContentProps {
   className?: string;
   spacing?: MarkdownSpacing;
   resolveLocalFilePath?: (href: string, text: string) => string | null;
-  showRevealInFolderAction?: boolean;
   enableLargePreview?: boolean;
   forceExpanded?: boolean;
   onImageClick?: (image: { src: string; alt?: string | null }) => void;
@@ -699,7 +688,6 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   className = '',
   spacing = 'normal',
   resolveLocalFilePath,
-  showRevealInFolderAction = false,
   enableLargePreview = true,
   forceExpanded = false,
   onImageClick,
@@ -708,8 +696,8 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   const canUseLargePreview = enableLargePreview && shouldUseLargeMarkdownPreview(content);
   const useLargePreview = canUseLargePreview && !isExpanded && !forceExpanded;
   const components = useMemo(
-    () => createMarkdownComponents(resolveLocalFilePath, showRevealInFolderAction, onImageClick, spacing),
-    [resolveLocalFilePath, showRevealInFolderAction, onImageClick, spacing]
+    () => createMarkdownComponents(resolveLocalFilePath, onImageClick, spacing),
+    [resolveLocalFilePath, onImageClick, spacing]
   );
   const markdownTextClassName = spacing === 'compact' ? 'text-markdown-body-compact' : 'text-markdown-body';
   const normalizedContent = useMemo(() => {

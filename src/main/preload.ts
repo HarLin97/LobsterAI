@@ -704,6 +704,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(DialogIpc.StatFile, filePath),
     readTextFile: (filePath: string) =>
       ipcRenderer.invoke(DialogIpc.ReadTextFile, filePath),
+    saveFileCopy: (filePath: string) =>
+      ipcRenderer.invoke(DialogIpc.SaveFileCopy, filePath),
     generateThumbnail: (filePath: string) =>
       ipcRenderer.invoke('dialog:generateThumbnail', filePath),
     showMessageBox: (options: {

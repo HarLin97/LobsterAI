@@ -6064,7 +6064,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                               content={item.content}
                               className="prose dark:prose-invert max-w-none text-xs leading-5"
                               resolveLocalFilePath={resolveLocalFilePath}
-                              showRevealInFolderAction
                             />
                           )}
                         </div>

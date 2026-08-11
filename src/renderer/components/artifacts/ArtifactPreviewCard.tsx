@@ -1,10 +1,18 @@
 import { ArrowTopRightOnSquareIcon } from '@heroicons/react/20/solid';
-import { ChevronDownIcon, FolderIcon, ShareIcon } from '@heroicons/react/24/outline';
+import { ArrowUpTrayIcon, ChevronDownIcon, FolderIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch } from 'react-redux';
 
 import { i18nService } from '@/services/i18n';
+import {
+  getCachedAppsForFile,
+  getCachedBrowserApps,
+  normalizeShellFilePath,
+  prefetchAppsForFile,
+  prefetchBrowserApps,
+  type ShellAppInfo,
+} from '@/services/shellAppsCache';
 import { openArtifactPreviewTab } from '@/store/slices/artifactSlice';
 import { type Artifact, ArtifactTypeValue } from '@/types/artifact';
 import { revealLocalPathWithToast, showShellFailureToast } from '@/utils/localFileActions';
@@ -17,7 +25,7 @@ import {
 } from './artifactAnalytics';
 import { useOptionalArtifactFileShare } from './ArtifactFileShareController';
 import { isArtifactFileShareable } from './artifactFileSharePolicy';
-import ArtifactPreviewIdentity, { ArtifactPreviewGlobeIcon } from './ArtifactPreviewIdentity';
+import ArtifactPreviewIdentity from './ArtifactPreviewIdentity';
 import { getPreviewCardDescriptor } from './previewCardPolicy';
 
 const t = (key: string) => i18nService.t(key);
@@ -30,29 +38,7 @@ const AppIcon: React.FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
-function normalizeFilePath(filePath: string): string {
-  let normalized = filePath;
-  if (normalized.startsWith('file:///')) {
-    normalized = normalized.slice(7);
-  } else if (normalized.startsWith('file://')) {
-    normalized = normalized.slice(7);
-  } else if (normalized.startsWith('file:/')) {
-    normalized = normalized.slice(5);
-  }
-  if (/^\/[A-Za-z]:/.test(normalized)) {
-    normalized = normalized.slice(1);
-  }
-  return normalized;
-}
-
 // ── Dropdown Menu for Document Artifacts ──────────────────────────
-
-interface AppInfo {
-  name: string;
-  path: string;
-  isDefault: boolean;
-  icon?: string;
-}
 
 interface OpenDropdownProps {
   anchorRef: React.RefObject<HTMLElement>;
@@ -80,8 +66,13 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
-  const [apps, setApps] = useState<AppInfo[]>([]);
-  const [loading, setLoading] = useState(Boolean(filePath || browserUrl));
+  const cachedApps = filePath
+    ? getCachedAppsForFile(filePath)
+    : browserUrl
+      ? getCachedBrowserApps(browserProjectDirectory)
+      : null;
+  const [apps, setApps] = useState<ShellAppInfo[]>(cachedApps ?? []);
+  const [loading, setLoading] = useState(!cachedApps && Boolean(filePath || browserUrl));
 
   useEffect(() => {
     if (!filePath && !browserUrl) {
@@ -90,24 +81,15 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
       return undefined;
     }
     let cancelled = false;
-    setLoading(true);
+    // Cache hits (normally prefetched on card mount) resolve synchronously,
+    // so the menu renders in its final state on the very first frame.
     const appsPromise = filePath
-      ? window.electron?.shell?.getAppsForFile(normalizeFilePath(filePath))
-      : window.electron?.shell?.getBrowserApps(
-          browserProjectDirectory ? { projectDirectory: browserProjectDirectory } : undefined,
-        );
-    if (!appsPromise) {
-      setLoading(false);
-      return undefined;
-    }
+      ? prefetchAppsForFile(filePath)
+      : prefetchBrowserApps(browserProjectDirectory);
     appsPromise.then(result => {
       if (cancelled) return;
-      if (result?.success && result.apps?.length > 0) {
-        setApps(result.apps);
-      }
+      if (result) setApps(result);
       setLoading(false);
-    }).catch(() => {
-      if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
   }, [browserProjectDirectory, browserUrl, filePath]);
@@ -115,14 +97,18 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
   useEffect(() => {
     if (!anchorRef.current) return;
     const rect = anchorRef.current.getBoundingClientRect();
-    const MAX_MENU_HEIGHT = 320;
-    const systemAppActionCount = filePath || browserUrl ? apps.length : 0;
-    const revealActionCount = revealFolderPath || filePath ? 1 : 0;
-    const actionCount =
-      systemAppActionCount +
-      revealActionCount +
+    const MAX_MENU_HEIGHT = 356;
+    const MENU_ROW_HEIGHT = 36;
+    const systemAppRowCount = filePath || browserUrl
+      ? (loading ? 1 : Math.max(apps.length, filePath && !browserOpenAction ? 1 : 0))
+      : 0;
+    const revealRowCount = revealFolderPath || filePath ? 1 : 0;
+    const rowCount =
+      systemAppRowCount +
+      revealRowCount +
       (browserOpenAction ? 1 : 0);
-    const naturalHeight = loading ? 88 : Math.max(88, actionCount * 36 + 16);
+    const separatorHeight = revealRowCount > 0 && rowCount > revealRowCount ? 9 : 0;
+    const naturalHeight = Math.max(48, rowCount * MENU_ROW_HEIGHT + separatorHeight + 12);
     const estimatedHeight = Math.min(MAX_MENU_HEIGHT, naturalHeight);
     const spaceBelow = window.innerHeight - rect.bottom - 8;
     const spaceAbove = rect.top - 8;
@@ -137,7 +123,13 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
         ? Math.max(8, window.innerHeight - estimatedHeight - 8)
         : 8;
     }
-    const left = Math.min(rect.right, window.innerWidth - 200);
+    // The menu is right-aligned to the anchor via translateX(-100%); keep it
+    // inside the viewport on both sides.
+    const MENU_ESTIMATED_WIDTH = 232;
+    const left = Math.max(
+      MENU_ESTIMATED_WIDTH + 8,
+      Math.min(rect.right, window.innerWidth - 8),
+    );
     setPosition({ top, left });
   }, [anchorRef, apps, browserOpenAction, browserUrl, filePath, loading, revealFolderPath]);
 
@@ -159,7 +151,7 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
     };
   }, [anchorRef, onClose]);
 
-  const handleOpenWithSpecificApp = useCallback(async (app: AppInfo) => {
+  const handleOpenWithSpecificApp = useCallback(async (app: ShellAppInfo) => {
     if (!filePath && !browserUrl) return;
     let success = false;
     try {
@@ -175,7 +167,7 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
           showShellFailureToast(result, 'openFileFailed');
         }
       } else if (filePath) {
-        const result = await window.electron?.shell?.openPathWithApp(normalizeFilePath(filePath), app.path);
+        const result = await window.electron?.shell?.openPathWithApp(normalizeShellFilePath(filePath), app.path);
         success = Boolean(result?.success);
         if (!result?.success) {
           console.warn('[ArtifactPreviewCard] system app open request failed:', {
@@ -206,7 +198,7 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
 
   const handleOpenWithDefault = useCallback(async () => {
     if (!filePath) return;
-    const normalized = normalizeFilePath(filePath);
+    const normalized = normalizeShellFilePath(filePath);
     let success = false;
     try {
       const result = await window.electron?.shell?.openPath(normalized);
@@ -233,7 +225,7 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
   const handleRevealInFolder = useCallback(async () => {
     const pathToReveal = revealFolderPath || filePath;
     if (!pathToReveal) return;
-    const normalized = normalizeFilePath(pathToReveal);
+    const normalized = normalizeShellFilePath(pathToReveal);
     await revealLocalPathWithToast(normalized);
     reportArtifactPreviewAction({
       actionType: 'reveal_in_folder',
@@ -261,25 +253,29 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
 
   if (!position) return null;
 
+  const menuItemClassName = 'flex h-9 w-full flex-shrink-0 items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-foreground hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors text-left';
+  const menuIconClassName = 'h-[18px] w-[18px] flex-shrink-0';
+
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[10000] min-w-[180px] max-h-[320px] overflow-y-auto rounded-lg border border-border bg-surface-raised shadow-lg py-1 animate-in fade-in zoom-in-95 duration-100"
+      className="fixed z-[10000] min-w-[224px] max-w-[300px] max-h-[356px] overflow-y-auto rounded-2xl border border-border bg-surface-raised p-1.5 shadow-[0_12px_36px_rgba(0,0,0,0.14),0_2px_8px_rgba(0,0,0,0.08)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.5),0_2px_8px_rgba(0,0,0,0.4)] animate-in fade-in zoom-in-95 duration-100"
       style={{ top: position.top, left: position.left, transform: 'translateX(-100%)' }}
     >
       {browserOpenAction && (
         <button
           type="button"
           onClick={handleBrowserOpen}
-          className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-foreground hover:bg-black/[0.06] dark:hover:bg-white/[0.08] transition-colors text-left"
+          className={menuItemClassName}
         >
-          <ArtifactPreviewGlobeIcon className="w-4 h-4 text-primary flex-shrink-0" />
+          <img src="logo.png" alt="" className={menuIconClassName} draggable={false} />
           <span className="truncate">{browserOpenAction.label}</span>
         </button>
       )}
       {(filePath || browserUrl) && loading ? (
-        <div className="flex items-center justify-center px-3 py-3">
-          <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+        <div className="flex h-9 items-center gap-2.5 px-2.5 text-[13px] text-secondary">
+          <div className="h-3.5 w-3.5 flex-shrink-0 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+          <span className="truncate">{t('artifactOpenWithLoadingApps')}</span>
         </div>
       ) : (filePath || browserUrl) && apps.length > 0 ? (
         <>
@@ -288,14 +284,16 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
               key={idx}
               type="button"
               onClick={() => handleOpenWithSpecificApp(app)}
-              className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-foreground hover:bg-black/[0.06] dark:hover:bg-white/[0.08] transition-colors text-left"
+              className={menuItemClassName}
             >
               {app.icon ? (
-                <img src={app.icon} alt="" className="w-4 h-4 flex-shrink-0" draggable={false} />
+                <img src={app.icon} alt="" className={menuIconClassName} draggable={false} />
               ) : (
-                <AppIcon className="w-4 h-4 text-secondary flex-shrink-0" />
+                <AppIcon className={`${menuIconClassName} text-secondary`} />
               )}
-              <span className="truncate">{app.name}</span>
+              <span className="truncate">
+                {app.isDefault ? `${app.name}${t('artifactOpenWithDefaultSuffix')}` : app.name}
+              </span>
             </button>
           ))}
         </>
@@ -303,10 +301,10 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
         <button
           type="button"
           onClick={handleOpenWithDefault}
-          className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-foreground hover:bg-black/[0.06] dark:hover:bg-white/[0.08] transition-colors text-left"
+          className={menuItemClassName}
         >
-          <AppIcon className="w-4 h-4 text-secondary flex-shrink-0" />
-          <span>{t('artifactOpenWithApp')}</span>
+          <AppIcon className={`${menuIconClassName} text-secondary`} />
+          <span className="truncate">{t('artifactOpenWithApp')}</span>
         </button>
       ) : null}
       {(revealFolderPath || filePath) && (
@@ -315,10 +313,10 @@ const OpenDropdown: React.FC<OpenDropdownProps> = ({
           <button
             type="button"
             onClick={handleRevealInFolder}
-            className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-foreground hover:bg-black/[0.06] dark:hover:bg-white/[0.08] transition-colors text-left"
+            className={menuItemClassName}
           >
-            <FolderIcon className="w-4 h-4 text-secondary flex-shrink-0" />
-            <span>{t('artifactOpenInFolder')}</span>
+            <FolderIcon className={`${menuIconClassName} text-secondary`} strokeWidth={1.6} />
+            <span className="truncate">{t('artifactOpenInFolder')}</span>
           </button>
         </>
       )}
@@ -418,6 +416,25 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
     ? artifact.localService?.projectDirectory?.trim() || localServiceDirectory?.trim() || ''
     : '';
   const localServiceProjectName = getDirectoryBaseName(effectiveLocalServiceDirectory);
+
+  // Warm the "Open with" app list (and app icons) as soon as the card shows,
+  // so the dropdown opens instantly instead of flashing a loading state.
+  const prefetchFilePath = supportsOpenMenu && artifact.type !== ArtifactTypeValue.LocalService
+    ? artifact.filePath
+    : undefined;
+  const prefetchBrowserDirectory = supportsOpenMenu && artifact.type === ArtifactTypeValue.LocalService
+    ? effectiveLocalServiceDirectory
+    : undefined;
+  const shouldPrefetchBrowserApps = supportsOpenMenu &&
+    artifact.type === ArtifactTypeValue.LocalService &&
+    Boolean(localServiceUrl);
+  useEffect(() => {
+    if (prefetchFilePath) {
+      void prefetchAppsForFile(prefetchFilePath);
+    } else if (shouldPrefetchBrowserApps) {
+      void prefetchBrowserApps(prefetchBrowserDirectory || undefined);
+    }
+  }, [prefetchBrowserDirectory, prefetchFilePath, shouldPrefetchBrowserApps]);
   const displaySubtitle = artifact.type === ArtifactTypeValue.LocalService && localServiceProjectName
     ? `${localServiceProjectName} · ${descriptor.subtitle}`
     : descriptor.subtitle;
@@ -484,7 +501,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             className="inline-flex h-9 min-w-[82px] flex-shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border bg-transparent px-3 text-sm font-medium text-foreground transition-colors hover:bg-surface"
             aria-label={t('htmlShare')}
           >
-            <ShareIcon className="h-4 w-4" />
+            <ArrowUpTrayIcon className="h-4 w-4" />
             <span>{t('htmlShare')}</span>
           </button>
         )}
@@ -554,7 +571,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           className="inline-flex h-9 min-w-[82px] flex-shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border bg-transparent px-3 text-sm font-medium text-foreground transition-colors hover:bg-surface"
           aria-label={t('htmlShare')}
         >
-          <ShareIcon className="h-4 w-4" />
+          <ArrowUpTrayIcon className="h-4 w-4" />
           <span>{t('htmlShare')}</span>
         </button>
       )}

@@ -120,8 +120,9 @@ blockquote {
   --lobster-text-2xl: 24px;
   --lobster-text-3xl: 30px;
   --lobster-text-4xl: 36px;
-  --lobster-text-markdown: 15px;
-  --lobster-text-markdownH2: 17px;
+  --lobster-text-markdown: 14px;
+  --lobster-text-markdownH2: 18px;
+  --lobster-text-markdownH3: 16px;
   --lobster-text-markdownH4: 15px;
   --lobster-text-promptLarge: 15px;
   --lobster-text-sidebarCompact: 13px;
@@ -133,8 +134,8 @@ blockquote {
   --lobster-leading-2xl: 32px;
   --lobster-leading-3xl: 36px;
   --lobster-leading-4xl: 40px;
-  --lobster-leading-markdown: 26px;
-  --lobster-leading-markdownCompact: 23px;
+  --lobster-leading-markdown: 22px;
+  --lobster-leading-markdownCompact: 21px;
   --lobster-leading-prompt: 22px;
   --lobster-leading-promptLarge: 23px;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Helvetica Neue', 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
