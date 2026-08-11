@@ -1174,6 +1174,9 @@ interface IElectronAPI {
       truncated?: boolean;
       error?: string;
     }>;
+    saveFileCopy: (
+      filePath: string,
+    ) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
     generateThumbnail: (
       filePath: string,
     ) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;

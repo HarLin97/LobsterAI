@@ -10619,6 +10619,42 @@ if (!gotTheLock) {
   );
 
   ipcMain.handle(
+    DialogIpc.SaveFileCopy,
+    async (
+      event,
+      filePath?: string,
+    ): Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }> => {
+      try {
+        if (typeof filePath !== 'string' || !filePath.trim()) {
+          return { success: false, error: 'Missing file path' };
+        }
+        const resolvedPath = path.resolve(filePath.trim());
+        const stat = await fs.promises.stat(resolvedPath);
+        if (!stat.isFile()) {
+          return { success: false, error: 'Not a file' };
+        }
+        const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+        const saveOptions = {
+          defaultPath: path.join(app.getPath('downloads'), path.basename(resolvedPath)),
+        };
+        const saveResult = ownerWindow
+          ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+          : await dialog.showSaveDialog(saveOptions);
+        if (saveResult.canceled || !saveResult.filePath) {
+          return { success: true, canceled: true };
+        }
+        await fs.promises.copyFile(resolvedPath, saveResult.filePath);
+        return { success: true, canceled: false, path: saveResult.filePath };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to save file copy',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
     'dialog:generateThumbnail',
     async (
       _event,

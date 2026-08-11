@@ -200,7 +200,6 @@ const ProposedPlanBlock: React.FC<ProposedPlanBlockProps> = ({
             content={content}
             className="prose dark:prose-invert max-w-none"
             resolveLocalFilePath={resolveLocalFilePath}
-            showRevealInFolderAction
             forceExpanded={forceExpanded}
             onImageClick={onImageClick}
           />
