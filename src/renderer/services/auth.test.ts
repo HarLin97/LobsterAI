@@ -651,14 +651,14 @@ describe('auth state restoration', () => {
     expect(dispatchEvent).toHaveBeenCalledOnce();
     const toastEvent = dispatchEvent.mock.calls[0][0] as CustomEvent<string>;
     expect(toastEvent.type).toBe('app:showToast');
-    expect(toastEvent.detail).toBe('你已被移出当前企业，已退出登录。请重新登录并选择可用身份。');
+    expect(toastEvent.detail).toBe('你已被移出当前团队，已退出登录。请重新登录并选择可用身份。');
   });
 
   test('provides the enterprise membership revocation message in English', () => {
     i18nService.setLanguage('en', { persist: false });
 
     expect(i18nService.t('coworkErrorEnterpriseMembershipRevoked')).toBe(
-      'You have been removed from the current enterprise and signed out. '
+      'You have been removed from the current team and signed out. '
       + 'Sign in again to choose an available identity.',
     );
   });

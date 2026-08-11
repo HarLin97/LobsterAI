@@ -650,14 +650,14 @@ test('buildRuntimeErrorMetadata preserves technical details with enterprise quot
   };
 
   expect(buildRuntimeErrorMetadata({
-    message: 'Enterprise credits have been used up.',
+    message: 'Team credits have been used up.',
     enterpriseQuotaError: {
       code: 41607,
       reason: 'enterprise_pool_exhausted',
     },
     errorDetail,
   })).toEqual({
-    error: 'Enterprise credits have been used up.',
+    error: 'Team credits have been used up.',
     errorDetail,
     enterpriseErrorCode: 41607,
     enterpriseQuotaReason: 'enterprise_pool_exhausted',
