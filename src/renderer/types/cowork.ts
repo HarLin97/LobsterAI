@@ -20,6 +20,7 @@ import type {
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
 } from '../../shared/openclawEngine/constants';
+import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 
 // Cowork image attachment for vision-capable models
 export type CoworkImageAttachment = CoworkImageAttachmentPayload;
@@ -153,6 +154,7 @@ export interface CoworkSession {
   cwd: string;
   systemPrompt: string;
   modelOverride: string;
+  thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
   activeKitIds?: string[];
@@ -365,6 +367,7 @@ export interface CoworkStartOptions {
   resolvedKitCapabilities?: ResolvedKitCapabilities;
   agentId?: string;
   modelOverride?: string;
+  thinkingLevel?: ModelThinkingLevel;
   imageAttachments?: CoworkImageAttachment[];
   mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
   mediaReferences?: import('./mediaGeneration').MediaAttachmentRef[];

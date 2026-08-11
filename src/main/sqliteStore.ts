@@ -108,6 +108,7 @@ export class SqliteStore {
         cwd TEXT NOT NULL,
         system_prompt TEXT NOT NULL DEFAULT '',
         model_override TEXT NOT NULL DEFAULT '',
+        thinking_level TEXT NOT NULL DEFAULT '',
         execution_mode TEXT,
         parent_session_id TEXT,
         forked_from_message_id TEXT,
@@ -213,6 +214,7 @@ export class SqliteStore {
         system_prompt TEXT NOT NULL DEFAULT '',
         identity TEXT NOT NULL DEFAULT '',
         model TEXT NOT NULL DEFAULT '',
+        thinking_level TEXT NOT NULL DEFAULT '',
         working_directory TEXT NOT NULL DEFAULT '',
         icon TEXT NOT NULL DEFAULT '',
         skill_ids TEXT NOT NULL DEFAULT '[]',
@@ -383,6 +385,11 @@ export class SqliteStore {
         this.didRunMigration = true;
       }
 
+      if (!colNames.includes('thinking_level')) {
+        this.db.exec("ALTER TABLE cowork_sessions ADD COLUMN thinking_level TEXT NOT NULL DEFAULT '';");
+        this.didRunMigration = true;
+      }
+
       if (!colNames.includes('parent_session_id')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN parent_session_id TEXT;');
         this.didRunMigration = true;
@@ -550,12 +557,16 @@ export class SqliteStore {
       console.warn('[SqliteStore] failed to backfill scheduled task session ids:', error);
     }
 
-    // Migration: Add working_directory column to agents
+    // Migration: Add model preference and layout columns to agents
     try {
       const agentCols = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
       const agentColNames = agentCols.map(c => c.name);
       if (!agentColNames.includes('working_directory')) {
         this.db.exec("ALTER TABLE agents ADD COLUMN working_directory TEXT NOT NULL DEFAULT '';");
+        this.didRunMigration = true;
+      }
+      if (!agentColNames.includes('thinking_level')) {
+        this.db.exec("ALTER TABLE agents ADD COLUMN thinking_level TEXT NOT NULL DEFAULT '';");
         this.didRunMigration = true;
       }
       if (!agentColNames.includes('pinned')) {

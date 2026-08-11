@@ -50,6 +50,7 @@ function setupDb(): void {
       cwd TEXT NOT NULL,
       system_prompt TEXT NOT NULL DEFAULT '',
       model_override TEXT NOT NULL DEFAULT '',
+      thinking_level TEXT NOT NULL DEFAULT '',
       execution_mode TEXT NOT NULL DEFAULT 'local',
       active_skill_ids TEXT,
       agent_id TEXT DEFAULT 'main',
@@ -94,6 +95,7 @@ function setupDb(): void {
       system_prompt TEXT NOT NULL DEFAULT '',
       identity TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
+      thinking_level TEXT NOT NULL DEFAULT '',
       working_directory TEXT NOT NULL DEFAULT '',
       icon TEXT NOT NULL DEFAULT '',
       skill_ids TEXT NOT NULL DEFAULT '[]',
@@ -686,6 +688,24 @@ test('updateSession can patch model override without refreshing the session upda
   expect(session?.updatedAt).toBe(1000);
 });
 
+test('create and update session persist the selected thinking level', () => {
+  const session = store.createSession(
+    'Thinking session',
+    '/tmp',
+    '',
+    'local',
+    [],
+    'main',
+    'lobsterai-server/deepseek-v4-flash',
+    { thinkingLevel: 'high' },
+  );
+
+  expect(store.getSession(session.id)?.thinkingLevel).toBe('high');
+
+  store.updateSession(session.id, { thinkingLevel: 'max' }, { touchUpdatedAt: false });
+  expect(store.getSession(session.id)?.thinkingLevel).toBe('max');
+});
+
 test('updateSession can rename without refreshing the session updated time', () => {
   const sid = 'sess-title-only';
   insertSession(sid);
@@ -938,20 +958,25 @@ test('forkSession prefers a new compaction bridge over an inherited summary', ()
   expect(summaries[0].content).toBe('Newer compacted context.');
 });
 
-test('agent CRUD stores working directory independently', () => {
+test('agent CRUD stores model preferences and working directory independently', () => {
   const agent = store.createAgent({
     name: 'Docs Agent',
     model: 'openai/gpt-4o',
+    thinkingLevel: 'high',
     workingDirectory: '/tmp/docs-project',
   });
 
+  expect(agent.thinkingLevel).toBe('high');
   expect(agent.workingDirectory).toBe('/tmp/docs-project');
 
   const updated = store.updateAgent(agent.id, {
+    thinkingLevel: 'max',
     workingDirectory: '/tmp/docs-next',
   });
 
+  expect(updated?.thinkingLevel).toBe('max');
   expect(updated?.workingDirectory).toBe('/tmp/docs-next');
+  expect(store.getAgent(agent.id)?.thinkingLevel).toBe('max');
   expect(store.getAgent(agent.id)?.workingDirectory).toBe('/tmp/docs-next');
 });
 

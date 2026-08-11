@@ -1412,6 +1412,29 @@ describe('OpenClawConfigSync runtime config output', () => {
         },
       },
     })).toBe(false);
+    expect(modelCompatConfigChangeRequiresRestart(compatConfig, {
+      ...compatConfig,
+      plugins: {
+        entries: {
+          'lobsterai-model-compat': {
+            enabled: true,
+            config: {
+              modelProfiles: compatConfig.plugins.entries['lobsterai-model-compat'].config.modelProfiles,
+              thinkingProfiles: {
+                'lobsterai-server/deepseek-v4-flash': {
+                  options: [
+                    { level: 'off', openclawLevel: 'off' },
+                    { level: 'high', openclawLevel: 'high' },
+                    { level: 'max', openclawLevel: 'xhigh' },
+                  ],
+                  defaultLevel: 'high',
+                },
+              },
+            },
+          },
+        },
+      },
+    })).toBe(true);
   });
 
   test('assigns mixed-provider compatibility ownership independently of model order', async () => {
@@ -1498,6 +1521,98 @@ describe('OpenClawConfigSync runtime config output', () => {
         api: 'openai-completions',
       }),
     );
+  });
+
+  test('writes server thinking profiles without taking over the provider transport', async () => {
+    mockRuntimeState.proxyPort = 56646;
+    mockRuntimeState.serverModels = [{
+      modelId: 'deepseek-v4-flash',
+      modelName: 'DeepSeek V4 Flash',
+      apiFormat: 'openai',
+      supportsThinking: true,
+      thinkingConfig: {
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
+        defaultLevel: 'high',
+      },
+      requestCapabilities: ['lobsterai-options-v1'],
+    }];
+
+    const sync = await createSync();
+    expect(sync.sync('server-thinking-profile')).toMatchObject({ ok: true });
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.models.providers['lobsterai-server'].api).toBe('openai-completions');
+    expect(config.models.providers['lobsterai-server'].models[0]).toEqual(
+      expect.objectContaining({
+        thinkingLevelMap: {
+          off: 'off',
+          minimal: null,
+          low: null,
+          medium: null,
+          high: 'high',
+          xhigh: 'xhigh',
+        },
+        compat: expect.objectContaining({
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ['high', 'xhigh'],
+        }),
+      }),
+    );
+    expect(config.plugins.entries['lobsterai-model-compat']).toEqual({
+      enabled: true,
+      config: {
+        thinkingProfiles: {
+          'lobsterai-server/deepseek-v4-flash': {
+            options: [
+              { level: 'off', openclawLevel: 'off' },
+              { level: 'high', openclawLevel: 'high' },
+              { level: 'max', openclawLevel: 'xhigh' },
+            ],
+            defaultLevel: 'high',
+            requestOptionsVersion: 1,
+          },
+        },
+      },
+    });
+    expect(config.plugins.allow).toContain('lobsterai-model-compat');
+  });
+
+  test('keeps legacy thinking transport when the server does not advertise request options', async () => {
+    mockRuntimeState.proxyPort = 56646;
+    mockRuntimeState.serverModels = [{
+      modelId: 'deepseek-v4-flash',
+      modelName: 'DeepSeek V4 Flash',
+      apiFormat: 'openai',
+      supportsThinking: true,
+      thinkingConfig: {
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
+        defaultLevel: 'high',
+      },
+    }];
+
+    const sync = await createSync();
+    expect(sync.sync('legacy-server-thinking-profile')).toMatchObject({ ok: true });
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(
+      config.plugins.entries['lobsterai-model-compat']
+        .config.thinkingProfiles['lobsterai-server/deepseek-v4-flash'],
+    ).toEqual({
+      options: [
+        { level: 'off', openclawLevel: 'off' },
+        { level: 'high', openclawLevel: 'high' },
+        { level: 'max', openclawLevel: 'xhigh' },
+      ],
+      defaultLevel: 'high',
+    });
   });
 
   test('fails closed when the Kimi K3 compatibility extension is unavailable', async () => {

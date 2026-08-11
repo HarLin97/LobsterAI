@@ -183,7 +183,7 @@ test('migrates legacy agent icons to the default svg avatar', async () => {
   store.close();
 });
 
-test('adds agent pin and sort columns during migration', async () => {
+test('adds agent model preference, pin, and sort columns during migration', async () => {
   const userDataPath = createTempUserDataPath();
   createLegacyDatabase(userDataPath);
 
@@ -192,15 +192,22 @@ test('adds agent pin and sort columns during migration', async () => {
     .pragma('table_info(agents)') as Array<{ name: string }>;
   const columnNames = columns.map((column) => column.name);
   const rows = store.getDatabase()
-    .prepare('SELECT id, pinned, pin_order, sort_order FROM agents ORDER BY id')
-    .all() as Array<{ id: string; pinned: number; pin_order: number | null; sort_order: number | null }>;
+    .prepare('SELECT id, thinking_level, pinned, pin_order, sort_order FROM agents ORDER BY id')
+    .all() as Array<{
+      id: string;
+      thinking_level: string;
+      pinned: number;
+      pin_order: number | null;
+      sort_order: number | null;
+    }>;
 
+  expect(columnNames).toContain('thinking_level');
   expect(columnNames).toContain('pinned');
   expect(columnNames).toContain('pin_order');
   expect(columnNames).toContain('sort_order');
   expect(rows).toEqual([
-    { id: 'docs', pinned: 0, pin_order: null, sort_order: 2 },
-    { id: 'main', pinned: 0, pin_order: null, sort_order: 1 },
+    { id: 'docs', thinking_level: '', pinned: 0, pin_order: null, sort_order: 2 },
+    { id: 'main', thinking_level: '', pinned: 0, pin_order: null, sort_order: 1 },
   ]);
 
   store.close();

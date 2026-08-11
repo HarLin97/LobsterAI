@@ -1,7 +1,12 @@
+import { ModelThinkingLevel } from '@shared/providers/modelThinking';
 import { describe, expect, test } from 'vitest';
 
 import type { Model } from '../../store/slices/modelSlice';
-import { resolveAgentModelSelection, resolveEffectiveModel } from './agentModelSelection';
+import {
+  resolveAgentModelSelection,
+  resolveEffectiveModel,
+  resolveModelThinkingLevel,
+} from './agentModelSelection';
 
 const models: Model[] = [
   { id: 'gpt-4o', name: 'GPT-4o', providerKey: 'openai' },
@@ -14,6 +19,40 @@ const models: Model[] = [
 
 const visionModel: Model = { id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', providerKey: 'qwen', supportsImage: true };
 const nonVisionModel: Model = { id: 'glm-5.1', name: 'GLM 5.1', providerKey: 'zhipu', supportsImage: false };
+const configurableThinkingModel: Model = {
+  id: 'deepseek-v4-flash',
+  name: 'DeepSeek V4 Flash',
+  providerKey: 'lobsterai-server',
+  thinkingConfig: {
+    options: [
+      { level: ModelThinkingLevel.Off, openclawLevel: 'off' },
+      { level: ModelThinkingLevel.High, openclawLevel: 'high' },
+      { level: ModelThinkingLevel.Max, openclawLevel: 'xhigh' },
+    ],
+    defaultLevel: ModelThinkingLevel.High,
+  },
+};
+
+describe('resolveModelThinkingLevel', () => {
+  test('keeps a persisted level supported by the selected model', () => {
+    expect(resolveModelThinkingLevel(
+      configurableThinkingModel,
+      ModelThinkingLevel.Off,
+    )).toBe(ModelThinkingLevel.Off);
+  });
+
+  test('falls back to the model default when persisted data is empty or unsupported', () => {
+    expect(resolveModelThinkingLevel(configurableThinkingModel, '')).toBe(ModelThinkingLevel.High);
+    expect(resolveModelThinkingLevel(
+      configurableThinkingModel,
+      ModelThinkingLevel.Low,
+    )).toBe(ModelThinkingLevel.High);
+  });
+
+  test('does not attach a thinking level to models without configuration', () => {
+    expect(resolveModelThinkingLevel(nonVisionModel, ModelThinkingLevel.Max)).toBeUndefined();
+  });
+});
 
 describe('resolveAgentModelSelection', () => {
   test('uses explicit agent model when present', () => {

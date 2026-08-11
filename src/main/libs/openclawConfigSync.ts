@@ -32,6 +32,12 @@ import {
   ProviderRegistry,
   resolveModelRuntimeProfile,
 } from '../../shared/providers';
+import {
+  LOBSTERAI_REQUEST_OPTIONS_VERSION,
+  type LobsterAIRequestCapability,
+  supportsLobsterAIRequestOptionsV1,
+} from '../../shared/providers/lobsterAIRequestOptions';
+import type { ModelThinkingConfig } from '../../shared/providers/modelThinking';
 import type { Agent, CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { DiscordInstanceConfig, IMSettings, TelegramInstanceConfig } from '../im/types';
 import type { DingTalkInstanceConfig, EmailMultiInstanceConfig, FeishuInstanceConfig, NeteaseBeeChanConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, WecomInstanceConfig, WeixinOpenClawConfig } from '../im/types';
@@ -152,11 +158,16 @@ const buildModelCompatRestartFingerprint = (config: unknown): string => {
   const sortedModelProfiles = Object.fromEntries(
     Object.entries(modelProfiles ?? {}).sort(([left], [right]) => left.localeCompare(right)),
   );
+  const thinkingProfiles = asConfigRecord(compatConfig?.thinkingProfiles);
+  const sortedThinkingProfiles = Object.fromEntries(
+    Object.entries(thinkingProfiles ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+  );
 
   return JSON.stringify({
     ownerProviderIds,
     pluginEnabled: compatEntry?.enabled === true,
     modelProfiles: sortedModelProfiles,
+    thinkingProfiles: sortedThinkingProfiles,
   });
 };
 
@@ -656,6 +667,40 @@ type OpenClawModelCompat = {
   supportedReasoningEfforts?: string[];
 };
 
+type OpenClawThinkingRuntimeConfig = {
+  thinkingLevelMap: OpenClawThinkingLevelMap;
+  supportedReasoningEfforts: string[];
+};
+
+const OPENCLAW_CONFIGURABLE_THINKING_LEVELS = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+] as const;
+
+const buildOpenClawThinkingRuntimeConfig = (
+  thinkingConfig: ModelThinkingConfig | undefined,
+): OpenClawThinkingRuntimeConfig | undefined => {
+  if (!thinkingConfig) return undefined;
+  const configuredLevels = new Set(
+    thinkingConfig.options.map(option => option.openclawLevel),
+  );
+  return {
+    thinkingLevelMap: Object.fromEntries(
+      OPENCLAW_CONFIGURABLE_THINKING_LEVELS.map(level => [
+        level,
+        configuredLevels.has(level) ? level : null,
+      ]),
+    ),
+    supportedReasoningEfforts: thinkingConfig.options
+      .map(option => option.openclawLevel)
+      .filter(level => level !== 'off'),
+  };
+};
+
 type OpenClawProviderSelection = {
   providerId: string;
   legacyModelId: string;
@@ -1102,6 +1147,7 @@ export const buildProviderSelection = (options: {
   contextWindow?: number;
   maxTokens?: number;
   runtimeProfile?: unknown;
+  thinkingConfig?: ModelThinkingConfig;
 }): OpenClawProviderSelection => {
   const providerName = options.providerName ?? '';
   const descriptor = resolveDescriptor(providerName, !!options.codingPlanEnabled, options.authType);
@@ -1141,6 +1187,7 @@ export const buildProviderSelection = (options: {
   const runtimeProfileDefinition = runtimeProfile
     ? getModelRuntimeProfileDefinition(runtimeProfile)
     : undefined;
+  const thinkingRuntimeConfig = buildOpenClawThinkingRuntimeConfig(options.thinkingConfig);
   const resolvedSupportsImage = ProviderRegistry.resolveModelSupportsImage(
     providerName,
     options.modelId,
@@ -1229,14 +1276,26 @@ export const buildProviderSelection = (options: {
           api,
           input: modelInput,
           ...(reasoning !== undefined ? { reasoning } : {}),
-          ...(runtimeProfileDefinition
+          ...(runtimeProfileDefinition || thinkingRuntimeConfig
             ? {
-                thinkingLevelMap: { ...runtimeProfileDefinition.thinkingLevelMap },
+                thinkingLevelMap: {
+                  ...(runtimeProfileDefinition?.thinkingLevelMap ?? {}),
+                  ...(thinkingRuntimeConfig?.thinkingLevelMap ?? {}),
+                },
                 compat: {
-                  ...runtimeProfileDefinition.compat,
-                  supportedReasoningEfforts: [
-                    ...runtimeProfileDefinition.compat.supportedReasoningEfforts,
-                  ],
+                  ...(runtimeProfileDefinition?.compat ?? {}),
+                  ...(thinkingRuntimeConfig
+                    ? {
+                        supportsReasoningEffort: true,
+                        supportedReasoningEfforts: [
+                          ...thinkingRuntimeConfig.supportedReasoningEfforts,
+                        ],
+                      }
+                    : {
+                        supportedReasoningEfforts: [
+                          ...(runtimeProfileDefinition?.compat.supportedReasoningEfforts ?? []),
+                        ],
+                      }),
                 },
               }
             : {}),
@@ -1490,6 +1549,26 @@ const collectCompatibilityOwnerProfile = (
 ): void => {
   if (!selection.compatibilityOwnerProfile) return;
   profiles[selection.primaryModel] = selection.compatibilityOwnerProfile;
+};
+
+type OpenClawThinkingProfile = ModelThinkingConfig & {
+  requestOptionsVersion?: typeof LOBSTERAI_REQUEST_OPTIONS_VERSION;
+};
+
+const collectThinkingProfile = (
+  profiles: Record<string, OpenClawThinkingProfile>,
+  selection: OpenClawProviderSelection,
+  thinkingConfig: ModelThinkingConfig | undefined,
+  requestCapabilities?: readonly LobsterAIRequestCapability[],
+): void => {
+  if (!thinkingConfig) return;
+  profiles[selection.primaryModel] = {
+    options: thinkingConfig.options.map(option => ({ ...option })),
+    defaultLevel: thinkingConfig.defaultLevel,
+    ...(supportsLobsterAIRequestOptionsV1(requestCapabilities)
+      ? { requestOptionsVersion: LOBSTERAI_REQUEST_OPTIONS_VERSION }
+      : {}),
+  };
 };
 
 type ServerModelTransportMetadata = {
@@ -1970,6 +2049,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
     let allProvidersMap: Record<string, OpenClawProviderSelection['providerConfig']> = {};
     const perModelCustomDefaults: Record<string, OpenClawAgentModelDefault> = {};
     const candidateModelProfiles: Record<string, ModelRuntimeProfileType> = {};
+    const candidateThinkingProfiles: Record<string, OpenClawThinkingProfile> = {};
     let primaryModel = '';
     let providerSelection: OpenClawProviderSelection | null = null;
 
@@ -2000,8 +2080,15 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         contextWindow: apiResolution.providerMetadata?.contextWindow,
         maxTokens: apiResolution.providerMetadata?.maxTokens,
         runtimeProfile: apiResolution.providerMetadata?.runtimeProfile,
+        thinkingConfig: apiResolution.providerMetadata?.thinkingConfig,
       });
       collectCompatibilityOwnerProfile(candidateModelProfiles, providerSelection);
+      collectThinkingProfile(
+        candidateThinkingProfiles,
+        providerSelection,
+        apiResolution.providerMetadata?.thinkingConfig,
+        apiResolution.providerMetadata?.requestCapabilities,
+      );
       primaryModel = providerSelection.primaryModel;
       if (providerSelection.providerId === OpenClawProviderId.LobsteraiServer) {
         addExplicitContextCacheDefault(perModelCustomDefaults, providerSelection, {
@@ -2097,8 +2184,15 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
             contextWindow: serverModels[0]?.contextWindow,
             maxTokens: serverModels[0]?.maxTokens,
             runtimeProfile: serverModels[0]?.runtimeProfile,
+            thinkingConfig: serverModels[0]?.thinkingConfig,
           });
           collectCompatibilityOwnerProfile(candidateModelProfiles, firstServerSel);
+          collectThinkingProfile(
+            candidateThinkingProfiles,
+            firstServerSel,
+            serverModels[0]?.thinkingConfig,
+            serverModels[0]?.requestCapabilities,
+          );
           const lobsteraiProviderConfig =
             allProvidersMap[providerId] ?? {
               ...firstServerSel.providerConfig,
@@ -2124,8 +2218,15 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
                 contextWindow: sm.contextWindow,
                 maxTokens: sm.maxTokens,
                 runtimeProfile: sm.runtimeProfile,
+                thinkingConfig: sm.thinkingConfig,
               });
               collectCompatibilityOwnerProfile(candidateModelProfiles, serverSel);
+              collectThinkingProfile(
+                candidateThinkingProfiles,
+                serverSel,
+                sm.thinkingConfig,
+                sm.requestCapabilities,
+              );
               addExplicitContextCacheDefault(perModelCustomDefaults, serverSel, {
                 modelId: sm.modelId,
                 provider: sm.provider,
@@ -2140,12 +2241,17 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
 
     const hasModelCompatPlugin = isBundledPluginAvailable(OPENCLAW_MODEL_COMPAT_PLUGIN_ID);
     const candidateModelRefs = Object.keys(candidateModelProfiles).sort();
-    if (candidateModelRefs.length > 0 && !hasModelCompatPlugin) {
+    const candidateThinkingRefs = Object.keys(candidateThinkingProfiles).sort();
+    const requiredCompatRefs = Array.from(new Set([
+      ...candidateModelRefs,
+      ...candidateThinkingRefs,
+    ])).sort();
+    if (requiredCompatRefs.length > 0 && !hasModelCompatPlugin) {
       return {
         ok: false,
         changed: false,
         configPath,
-        error: `OpenClaw config sync failed: required ${OPENCLAW_MODEL_COMPAT_PLUGIN_ID} extension is unavailable for ${candidateModelRefs.join(', ')}.`,
+        error: `OpenClaw config sync failed: required ${OPENCLAW_MODEL_COMPAT_PLUGIN_ID} extension is unavailable for ${requiredCompatRefs.join(', ')}.`,
       };
     }
     const finalizedCompatibility = finalizeModelCompatibilityOwners(
@@ -2160,6 +2266,11 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         error: `OpenClaw config sync failed: invalid Kimi K3 compatibility ownership for ${finalizedCompatibility.rejectedModelRefs.join(', ')}.`,
       };
     }
+    const finalizedThinkingProfiles = Object.fromEntries(
+      Object.entries(candidateThinkingProfiles).sort(([left], [right]) => left.localeCompare(right)),
+    );
+    const hasModelCompatConfig = Object.keys(finalizedCompatibility.modelProfiles).length > 0
+      || Object.keys(finalizedThinkingProfiles).length > 0;
 
     const sandboxMode = mapExecutionModeToSandboxMode(
       coworkConfig.executionMode || 'local',
@@ -2435,12 +2546,17 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
             : {}),
           ...(hasAskUserPlugin ? { 'ask-user-question': { enabled: true } } : {}),
           ...(hasMediaGenPlugin ? { 'lobster-media-generation': { enabled: true } } : {}),
-          ...(Object.keys(finalizedCompatibility.modelProfiles).length > 0
+          ...(hasModelCompatConfig
             ? {
                 [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]: {
                   enabled: true,
                   config: {
-                    modelProfiles: finalizedCompatibility.modelProfiles,
+                    ...(Object.keys(finalizedCompatibility.modelProfiles).length > 0
+                      ? { modelProfiles: finalizedCompatibility.modelProfiles }
+                      : {}),
+                    ...(Object.keys(finalizedThinkingProfiles).length > 0
+                      ? { thinkingProfiles: finalizedThinkingProfiles }
+                      : {}),
                   },
                 },
               }
@@ -2476,7 +2592,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
           // plugins we rely on must be listed here explicitly or they never
           // load — entries.enabled alone is not enough.
           ...(hasXaiPlugin ? ['xai'] : []),
-          ...(Object.keys(finalizedCompatibility.modelProfiles).length > 0
+          ...(hasModelCompatConfig
             ? [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]
             : []),
           ...preinstalledPlugins.map(plugin => plugin.pluginId),
@@ -3412,6 +3528,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
         systemPrompt: '',
         identity: '',
         model: '',
+        thinkingLevel: '',
         workingDirectory: '',
         icon: '',
         skillIds: [],
