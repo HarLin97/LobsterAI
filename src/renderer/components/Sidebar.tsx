@@ -21,15 +21,19 @@ import {
 } from './agentSidebar/batchSelection';
 import MyAgentSidebarTree from './agentSidebar/MyAgentSidebarTree';
 import SidebarTaskFilterButton from './agentSidebar/SidebarTaskFilterButton';
+import SidebarTaskSearchButton from './agentSidebar/SidebarTaskSearchButton';
 import Modal from './common/Modal';
-import { CoworkUiEvent } from './cowork/constants';
+import {
+  type CoworkTaskSearchRequestEventDetail,
+  CoworkTaskSearchRequestSource,
+  CoworkUiEvent,
+} from './cowork/constants';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
 import Cog6ToothIcon from './icons/Cog6ToothIcon';
 import ComposeIcon from './icons/ComposeIcon';
 import SidebarAutomationIcon from './icons/SidebarAutomationIcon';
 import SidebarKitsIcon from './icons/SidebarKitsIcon';
 import SidebarMcpIcon from './icons/SidebarMcpIcon';
-import SidebarSearchIcon from './icons/SidebarSearchIcon';
 import SidebarSitesIcon from './icons/SidebarSitesIcon';
 import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import SkillIcon from './icons/SkillIcon';
@@ -133,6 +137,20 @@ const reportSidebarAction = (
     taskStatus: options.taskStatus,
     visibleTaskCount: options.visibleTaskCount,
   });
+};
+
+const logTaskSearchRequest = (
+  source: CoworkTaskSearchRequestSource,
+  activeView: SidebarProps['activeView'],
+): void => {
+  try {
+    const message = `task search requested source=${source} activeView=${activeView} platform=${window.electron?.platform ?? 'unknown'}`;
+    console.debug(`[Sidebar] ${message}`);
+    window.electron?.log?.fromRenderer?.('debug', 'Sidebar', message);
+  } catch (error) {
+    // Task search must remain available when renderer diagnostic logging fails.
+    console.debug('[Sidebar] task search diagnostic logging unavailable:', error);
+  }
 };
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -245,16 +263,22 @@ const Sidebar: React.FC<SidebarProps> = ({
       });
   }, [showKitsNewBadge]);
 
+  const openTaskSearch = useCallback((source: CoworkTaskSearchRequestSource) => {
+    logTaskSearchRequest(source, activeView);
+    onShowCowork();
+    setIsSearchOpen(true);
+  }, [activeView, onShowCowork]);
+
   useEffect(() => {
-    const handleSearch = () => {
-      onShowCowork();
-      setIsSearchOpen(true);
+    const handleSearch = (event: Event) => {
+      const detail = (event as CustomEvent<CoworkTaskSearchRequestEventDetail>).detail;
+      openTaskSearch(detail?.source ?? CoworkTaskSearchRequestSource.UiEvent);
     };
     window.addEventListener(CoworkUiEvent.ShortcutSearch, handleSearch);
     return () => {
       window.removeEventListener(CoworkUiEvent.ShortcutSearch, handleSearch);
     };
-  }, [onShowCowork]);
+  }, [openTaskSearch]);
 
   useEffect(() => {
     if (!isCollapsed) return;
@@ -549,14 +573,26 @@ const Sidebar: React.FC<SidebarProps> = ({
                 >
                   <SidebarToggleIcon className="h-4 w-4" isCollapsed={isCollapsed} />
                 </button>
-                {activeView === 'cowork' && !isCollapsed && (
-                  <SidebarTaskFilterButton
-                    isActive={isTaskFilterActive}
-                    hasUnreadCompletedTasks={hasUnreadCompletedTasks}
-                    label={i18nService.t('sidebarFilter')}
-                    onClick={onToggleTaskFilter}
-                    className="non-draggable"
-                  />
+                {!isCollapsed && (
+                  <>
+                    <SidebarTaskSearchButton
+                      onClick={() => {
+                        reportSidebarAction('open_search', { activeView, isCollapsed });
+                        openTaskSearch(CoworkTaskSearchRequestSource.SidebarHeader);
+                      }}
+                      className="non-draggable"
+                      label={i18nService.t('search')}
+                    />
+                    {activeView === 'cowork' && (
+                      <SidebarTaskFilterButton
+                        isActive={isTaskFilterActive}
+                        hasUnreadCompletedTasks={hasUnreadCompletedTasks}
+                        label={i18nService.t('sidebarFilter')}
+                        onClick={onToggleTaskFilter}
+                        className="non-draggable"
+                      />
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -573,18 +609,6 @@ const Sidebar: React.FC<SidebarProps> = ({
           >
             <ComposeIcon className={sidebarCreateIconClassName} />
             {i18nService.t('newChat')}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              reportSidebarAction('open_search', { activeView, isCollapsed });
-              onShowCowork();
-              setIsSearchOpen(true);
-            }}
-            className={sidebarNavItemClassName}
-          >
-            <SidebarSearchIcon className="h-4 w-4 shrink-0" />
-            {i18nService.t('search')}
           </button>
           <button
             type="button"

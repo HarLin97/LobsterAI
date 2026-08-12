@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect } from 'react';
 
 import SidebarTaskFilterButton from '../agentSidebar/SidebarTaskFilterButton';
+import SidebarTaskSearchButton from '../agentSidebar/SidebarTaskSearchButton';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import WindowTitleBar from './WindowTitleBar';
@@ -10,8 +11,10 @@ interface WindowsAppTitleBarProps {
   isSidebarCollapsed?: boolean;
   sidebarWidth?: number;
   onToggleSidebar?: () => void;
+  onSearch?: () => void;
   onNewChat?: () => void;
   sidebarToggleLabel?: string;
+  searchLabel: string;
   showFilterIcon?: boolean;
   filterLabel?: string;
   isFilterActive?: boolean;
@@ -26,8 +29,10 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
   isSidebarCollapsed = false,
   sidebarWidth = 244,
   onToggleSidebar,
+  onSearch,
   onNewChat,
   sidebarToggleLabel,
+  searchLabel,
   showFilterIcon = false,
   filterLabel,
   isFilterActive = false,
@@ -72,18 +77,18 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
         className={`flex h-full shrink-0 items-center ${isSidebarCollapsed ? 'gap-1' : 'justify-between'}`}
         style={isSidebarCollapsed ? undefined : { width: Math.max(0, sidebarWidth - 24) }}
       >
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
           <img
             src="logo.png"
             alt=""
             draggable={false}
             className="h-4 w-4 max-w-none shrink-0"
           />
-          <span className={`${isSidebarCollapsed ? 'hidden' : 'truncate'} text-sm font-medium text-foreground`}>
+          <span className={`${isSidebarCollapsed ? 'hidden' : 'min-w-0 truncate'} text-sm font-medium text-foreground`}>
             LobsterAI
           </span>
         </div>
-        {(onToggleSidebar || showFilterIcon || onNewChat || updateBadge) && (
+        {(onToggleSidebar || onSearch || showFilterIcon || onNewChat || updateBadge) && (
           <div className="non-draggable flex shrink-0 items-center gap-1">
             {onToggleSidebar && (
               <button
@@ -95,6 +100,12 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
               >
                 <SidebarToggleIcon className="h-4 w-4" isCollapsed={isSidebarCollapsed} />
               </button>
+            )}
+            {onSearch && (
+              <SidebarTaskSearchButton
+                onClick={onSearch}
+                label={searchLabel}
+              />
             )}
             {showFilterIcon && onToggleFilter && (
               <SidebarTaskFilterButton
