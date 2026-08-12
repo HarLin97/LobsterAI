@@ -12,7 +12,12 @@ import {
 } from '../shared/appUpdate/constants';
 import { ProviderAuthType, ProviderName, ProviderRegistry } from '../shared/providers';
 import { CoworkView } from './components/cowork';
-import { CoworkShortcutDirection, CoworkUiEvent } from './components/cowork/constants';
+import {
+  CoworkShortcutDirection,
+  type CoworkTaskSearchRequestEventDetail,
+  CoworkTaskSearchRequestSource,
+  CoworkUiEvent,
+} from './components/cowork/constants';
 import {
   ConversationSearchShortcutTarget,
   resolveConversationSearchShortcutTarget,
@@ -703,6 +708,20 @@ const App: React.FC = () => {
     setIsTaskFilterActive(nextActive);
   }, [hasUnreadCompletedTasks, isSidebarCollapsed, isTaskFilterActive, mainView]);
 
+  const handleOpenTaskSearch = useCallback(() => {
+    void reportYdAnalyzer({
+      action: LogReporterAction.SidebarAction,
+      source: 'home_sidebar',
+      actionType: 'open_search',
+      activeView: mainView,
+      isCollapsed: isSidebarCollapsed,
+    });
+    window.dispatchEvent(new CustomEvent<CoworkTaskSearchRequestEventDetail>(
+      CoworkUiEvent.ShortcutSearch,
+      { detail: { source: CoworkTaskSearchRequestSource.WindowsTitleBar } },
+    ));
+  }, [isSidebarCollapsed, mainView]);
+
   const handleNewChat = useCallback(() => {
     // Only clear when already on home (no session) — preserve __home__ draft when returning from a session
     const shouldClearInput = mainView === 'cowork' && !currentSessionId;
@@ -1155,7 +1174,10 @@ const App: React.FC = () => {
           window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutConversationSearch));
         } else if (shortcutTarget === ConversationSearchShortcutTarget.History) {
           event.preventDefault();
-          window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutSearch));
+          window.dispatchEvent(new CustomEvent<CoworkTaskSearchRequestEventDetail>(
+            CoworkUiEvent.ShortcutSearch,
+            { detail: { source: CoworkTaskSearchRequestSource.KeyboardShortcut } },
+          ));
         }
         return;
       }
@@ -1536,8 +1558,12 @@ const App: React.FC = () => {
       isSidebarCollapsed={isSidebarCollapsed}
       sidebarWidth={sidebarWidth}
       onToggleSidebar={canUseWindowsTopBarActions ? handleToggleSidebar : undefined}
+      onSearch={canUseWindowsTopBarActions && !isSidebarCollapsed
+        ? handleOpenTaskSearch
+        : undefined}
       onNewChat={canUseWindowsCollapsedTopBarActions ? handleNewChat : undefined}
       sidebarToggleLabel={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+      searchLabel={i18nService.t('search')}
       showFilterIcon={canUseWindowsTopBarActions && !isSidebarCollapsed && mainView === 'cowork'}
       filterLabel={i18nService.t('sidebarFilter')}
       isFilterActive={isTaskFilterActive}

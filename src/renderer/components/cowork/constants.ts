@@ -15,6 +15,20 @@ export const CoworkUiEvent = {
 
 export type CoworkUiEvent = typeof CoworkUiEvent[keyof typeof CoworkUiEvent];
 
+export const CoworkTaskSearchRequestSource = {
+  SidebarHeader: 'sidebar_header',
+  WindowsTitleBar: 'windows_title_bar',
+  KeyboardShortcut: 'keyboard_shortcut',
+  UiEvent: 'ui_event',
+} as const;
+
+export type CoworkTaskSearchRequestSource =
+  typeof CoworkTaskSearchRequestSource[keyof typeof CoworkTaskSearchRequestSource];
+
+export interface CoworkTaskSearchRequestEventDetail {
+  source?: CoworkTaskSearchRequestSource;
+}
+
 export const CoworkShortcutDirection = {
   Previous: 'previous',
   Next: 'next',
