@@ -10,6 +10,7 @@ import {
   EnterpriseMemberRole,
   EnterpriseQuotaReason,
 } from '../../shared/enterpriseAccount/constants';
+import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/types';
 import { setEnterpriseAccountContext } from '../features/enterpriseAccount/enterpriseAccountSlice';
 import { store } from '../store';
 import { setLoggedIn, setLoggedOut } from '../store/slices/authSlice';
@@ -30,6 +31,7 @@ afterEach(() => {
   store.dispatch(setEnterpriseAccountContext(null));
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   i18nService.setLanguage('zh', { persist: false });
 });
 
@@ -504,6 +506,91 @@ describe('quota checks', () => {
     });
     expect(store.getState().enterpriseAccount.context?.quotaStatus.reason)
       .toBe(EnterpriseQuotaReason.MemberMonthlyQuotaExhausted);
+  });
+});
+
+describe('enterprise quota period boundary refresh', () => {
+  const context = (endExclusive: string): EnterpriseAccountContext => ({
+    accountMode: 'enterprise',
+    enterpriseId: 1001,
+    memberId: 2001,
+    enterpriseName: 'Example enterprise',
+    role: EnterpriseMemberRole.Member,
+    permissions: {
+      manageEnterprise: false,
+      adjustMemberQuota: false,
+      rechargeEnterprise: false,
+    },
+    memberQuota: {
+      limit: 100,
+      used: 100,
+      remaining: 0,
+      refreshCycle: 'natural_week',
+      periodStart: '2026-08-10T00:00:00+08:00',
+      periodEndExclusive: endExclusive,
+    },
+    enterprisePool: { total: 1000, used: 400, remaining: 600 },
+    quotaStatus: {
+      available: false,
+      reason: EnterpriseQuotaReason.MemberMonthlyQuotaExhausted,
+      errorCode: 41606,
+    },
+  });
+
+  test('checks quota once after the current period boundary', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-16T23:59:58+08:00'));
+    store.dispatch(setLoggedIn({
+      user: { yid: 'tester', nickname: 'Tester', avatarUrl: null },
+      quota: null,
+      ownerAccountKey: 'enterprise:tester:1001',
+    }));
+    const enterpriseContext = context('2026-08-17T00:00:00+08:00');
+    store.dispatch(setEnterpriseAccountContext(enterpriseContext));
+    const quotaSpy = vi.spyOn(authService, 'checkQuota').mockResolvedValue({
+      success: true,
+      enterpriseQuotaAvailable: true,
+    });
+    const boundaryService = authService as unknown as {
+      scheduleEnterpriseQuotaBoundary: (
+        value: EnterpriseAccountContext | null,
+      ) => void;
+    };
+
+    boundaryService.scheduleEnterpriseQuotaBoundary(enterpriseContext);
+    await vi.advanceTimersByTimeAsync(3_001);
+
+    expect(quotaSpy).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(quotaSpy).toHaveBeenCalledOnce();
+  });
+
+  test('clears the old boundary timer when enterprise context is removed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-16T23:59:58+08:00'));
+    store.dispatch(setLoggedIn({
+      user: { yid: 'tester', nickname: 'Tester', avatarUrl: null },
+      quota: null,
+      ownerAccountKey: 'enterprise:tester:1001',
+    }));
+    const enterpriseContext = context('2026-08-17T00:00:00+08:00');
+    store.dispatch(setEnterpriseAccountContext(enterpriseContext));
+    const quotaSpy = vi.spyOn(authService, 'checkQuota').mockResolvedValue({
+      success: true,
+      enterpriseQuotaAvailable: true,
+    });
+    const boundaryService = authService as unknown as {
+      scheduleEnterpriseQuotaBoundary: (
+        value: EnterpriseAccountContext | null,
+      ) => void;
+    };
+
+    boundaryService.scheduleEnterpriseQuotaBoundary(enterpriseContext);
+    boundaryService.scheduleEnterpriseQuotaBoundary(null);
+    store.dispatch(setEnterpriseAccountContext(null));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(quotaSpy).not.toHaveBeenCalled();
   });
 });
 

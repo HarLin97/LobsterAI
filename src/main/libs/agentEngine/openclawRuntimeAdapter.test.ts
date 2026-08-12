@@ -634,7 +634,7 @@ test('resolveOpenClawRuntimeError keeps structured enterprise quota reason', () 
     errorCode: '41606',
     rawErrorPreview: '41606 member monthly quota exhausted',
   })).toEqual({
-    message: expect.stringContaining('成员月度额度'),
+    message: expect.stringContaining('成员周期额度'),
     enterpriseQuotaError: {
       code: 41606,
       reason: 'member_monthly_quota_exhausted',

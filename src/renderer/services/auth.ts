@@ -236,6 +236,8 @@ class AuthService {
   } | null = null;
   private lastRefreshTime = 0;
   private loginAttemptSequence = 0;
+  private enterpriseQuotaBoundaryTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastTriggeredEnterpriseQuotaBoundary = '';
 
   private applyAuthenticatedState(
     user: UserProfile,
@@ -275,12 +277,14 @@ class AuthService {
       ownerAccountKey,
     }));
     const context = applyEnterpriseAccountContext(enterpriseContext);
+    this.scheduleEnterpriseQuotaBoundary(context);
     if (context) {
       store.dispatch(clearProfileSummary());
     }
   }
 
   private clearAuthenticatedAccountState(): void {
+    this.clearEnterpriseQuotaBoundaryTimer();
     store.dispatch(setLoggedOut());
     applyEnterpriseAccountContext(null);
     store.dispatch(clearServerModels());
@@ -341,7 +345,12 @@ class AuthService {
     this.unsubWindowState = window.electron.window.onStateChanged((state) => {
       if (state.isFocused && store.getState().auth.isLoggedIn) {
         const now = Date.now();
-        if (now - this.lastRefreshTime > 30_000) {
+        const enterpriseContext = store.getState().enterpriseAccount.context;
+        const periodEnd = enterpriseContext?.memberQuota.periodEndExclusive
+          ? Date.parse(enterpriseContext.memberQuota.periodEndExclusive)
+          : Number.NaN;
+        const quotaBoundaryReached = Number.isFinite(periodEnd) && now >= periodEnd;
+        if (quotaBoundaryReached || now - this.lastRefreshTime > 30_000) {
           this.lastRefreshTime = now;
           void this.checkQuota();
         }
@@ -569,7 +578,8 @@ class AuthService {
           store.dispatch(updateQuota(result.quota));
         }
         if (result.enterpriseContext !== undefined) {
-          applyEnterpriseAccountContext(result.enterpriseContext);
+          const context = applyEnterpriseAccountContext(result.enterpriseContext);
+          this.scheduleEnterpriseQuotaBoundary(context);
         }
         return true;
       }
@@ -705,6 +715,7 @@ class AuthService {
 
   destroy() {
     this.pendingQuotaCheck = null;
+    this.clearEnterpriseQuotaBoundaryTimer();
     this.unsubCallback?.();
     this.unsubCallback = null;
     this.unsubLifecycleEvent?.();
@@ -746,11 +757,63 @@ class AuthService {
       return;
     }
 
+    this.clearEnterpriseQuotaBoundaryTimer();
     store.dispatch(expired ? setAuthExpired() : setLoggedOut());
     applyEnterpriseAccountContext(null);
     store.dispatch(clearServerModels());
     store.dispatch(clearMediaAccountState());
     await this.loadPublicPricingCatalogModels();
+  }
+
+  private clearEnterpriseQuotaBoundaryTimer(): void {
+    if (this.enterpriseQuotaBoundaryTimer !== null) {
+      clearTimeout(this.enterpriseQuotaBoundaryTimer);
+      this.enterpriseQuotaBoundaryTimer = null;
+    }
+  }
+
+  private scheduleEnterpriseQuotaBoundary(
+    context: EnterpriseAccountContext | null | undefined,
+  ): void {
+    this.clearEnterpriseQuotaBoundaryTimer();
+    const endExclusive = context?.memberQuota.periodEndExclusive;
+    const ownerAccountKey = store.getState().auth.ownerAccountKey;
+    if (!context || !endExclusive || !ownerAccountKey) return;
+
+    const boundary = Date.parse(endExclusive);
+    if (!Number.isFinite(boundary)) return;
+    const boundaryKey = `${ownerAccountKey}:${context.enterpriseId}:${endExclusive}`;
+    const maxTimerDelay = 2_147_000_000;
+
+    const fire = () => {
+      this.enterpriseQuotaBoundaryTimer = null;
+      const currentAuth = store.getState().auth;
+      const currentContext = store.getState().enterpriseAccount.context;
+      if (currentAuth.ownerAccountKey !== ownerAccountKey
+        || currentContext?.enterpriseId !== context.enterpriseId) {
+        return;
+      }
+      if (this.lastTriggeredEnterpriseQuotaBoundary === boundaryKey) return;
+      this.lastTriggeredEnterpriseQuotaBoundary = boundaryKey;
+      this.lastRefreshTime = Date.now();
+      void this.checkQuota();
+    };
+
+    const arm = () => {
+      const remaining = boundary - Date.now() + 1_000;
+      if (remaining <= 0) {
+        if (this.lastTriggeredEnterpriseQuotaBoundary !== boundaryKey) {
+          this.enterpriseQuotaBoundaryTimer = setTimeout(fire, 0);
+        }
+        return;
+      }
+      if (remaining > maxTimerDelay) {
+        this.enterpriseQuotaBoundaryTimer = setTimeout(arm, maxTimerDelay);
+        return;
+      }
+      this.enterpriseQuotaBoundaryTimer = setTimeout(fire, remaining);
+    };
+    arm();
   }
 
   /**
