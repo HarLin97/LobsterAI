@@ -8,7 +8,7 @@ import { RootState } from '../../store';
 import { Skill } from '../../types/skill';
 import Cog6ToothIcon from '../icons/Cog6ToothIcon';
 import SearchIcon from '../icons/SearchIcon';
-import SkillIcon from '../icons/SkillIcon';
+import SkillIconTile from './SkillIconTile';
 
 interface SkillsPopoverProps {
   isOpen: boolean;
@@ -143,6 +143,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
     const description = shouldUseFallbackDescription
       ? skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)
       : '';
+    const displayName = skillService.getLocalizedSkillName(skill.id, skill.name);
     return (
       <button
         key={skill.id}
@@ -155,16 +156,11 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
             isActive ? 'dark:bg-primary/10 bg-primary/10' : 'hover:bg-primary/10 dark:hover:bg-primary/10'
           }`}
       >
-        <div className={asSubmenu
-          ? `mt-[3px] flex h-5 w-5 flex-shrink-0 items-center justify-center ${
-            isActive ? 'text-foreground' : 'text-secondary'
-          }`
-          : `mt-0.5 w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${
-            isActive ? 'bg-primary/10 text-primary' : 'bg-surface-raised'
-          }`}
-        >
-          <SkillIcon className={asSubmenu ? 'h-[18px] w-[18px]' : `h-4 w-4 ${isActive ? '' : 'text-secondary'}`} />
-        </div>
+        <SkillIconTile
+          icon={skillService.getSkillIcon(skill.id)}
+          className={asSubmenu ? 'mt-[2px] h-[22px] w-[22px] rounded-md' : 'mt-0.5 h-7 w-7 rounded-lg'}
+          iconClassName={asSubmenu ? 'h-[13px] w-[13px]' : 'h-4 w-4'}
+        />
         <div className="flex-1 min-w-0">
           <div className={asSubmenu ? 'flex min-w-0 items-center gap-1.5' : 'flex items-center gap-2'}>
             <span className={asSubmenu
@@ -173,7 +169,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
                 isActive ? 'text-primary' : 'text-foreground'
               }`}
             >
-              {skill.name}
+              {displayName}
             </span>
             {skill.isOfficial && (
               <span className={asSubmenu
