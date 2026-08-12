@@ -32,11 +32,25 @@ import {
 } from './analytics';
 import SkillSecurityReport from './SkillSecurityReport';
 
-type SkillTab = 'installed' | 'marketplace';
+export const SkillTab = {
+  Mine: 'mine',
+  Marketplace: 'marketplace',
+  BuiltIn: 'builtIn',
+} as const;
+export type SkillTab = typeof SkillTab[keyof typeof SkillTab];
+
 type ImportSourceType = 'github' | 'clawhub';
 type DirectImportSource = 'zip' | 'folder' | 'remote';
 
 const importSourceTypes: ImportSourceType[] = ['github', 'clawhub'];
+
+const SKILL_TAB_ORDER: SkillTab[] = [SkillTab.Mine, SkillTab.Marketplace, SkillTab.BuiltIn];
+
+const SKILL_TAB_LABEL_KEYS: Record<SkillTab, string> = {
+  [SkillTab.Mine]: 'skillGroupMine',
+  [SkillTab.Marketplace]: 'skillMarketplace',
+  [SkillTab.BuiltIn]: 'skillGroupBuiltIn',
+};
 
 const importTabConfig: Record<ImportSourceType, {
   tabLabelKey: string;
@@ -77,7 +91,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   const [isAddSkillMenuOpen, setIsAddSkillMenuOpen] = useState(false);
   const [isRemoteImportOpen, setIsRemoteImportOpen] = useState(false);
   const [importTab, setImportTab] = useState<ImportSourceType>('github');
-  const [activeTab, setActiveTab] = useState<SkillTab>('installed');
+  const [activeTab, setActiveTab] = useState<SkillTab>(SkillTab.Mine);
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
   const [marketTags, setMarketTags] = useState<MarketTag[]>([]);
   const [activeMarketTag, setActiveMarketTag] = useState('all');
@@ -219,14 +233,29 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     };
   }, [selectedSkill, selectedMarketplaceSkill]);
 
+  // User-added skills surface first, newest install/update on top; built-in
+  // skills keep their configured order from the main process.
+  const mySkills = useMemo(
+    () => skills.filter(skill => !skill.isBuiltIn).sort((a, b) => b.updatedAt - a.updatedAt),
+    [skills],
+  );
+  const builtInSkills = useMemo(() => skills.filter(skill => skill.isBuiltIn), [skills]);
+  const enabledBuiltInCount = useMemo(
+    () => builtInSkills.filter(skill => skill.enabled).length,
+    [builtInSkills],
+  );
+
+  const isSkillSearchActive = skillSearchQuery.trim().length > 0;
+  const isInstalledTab = activeTab === SkillTab.Mine || activeTab === SkillTab.BuiltIn;
+
   const filteredSkills = useMemo(() => {
     const query = skillSearchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
-    return skills.filter(skill => {
+    return [...mySkills, ...builtInSkills].filter(skill => {
       const matchesSearch = skill.name.toLowerCase().includes(query)
         || skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description).toLowerCase().includes(query);
       return matchesSearch;
     });
-  }, [skills, skillSearchQuery]);
+  }, [mySkills, builtInSkills, skillSearchQuery]);
 
   const filteredMarketplaceSkills = useMemo(() => {
     const query = skillSearchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -246,7 +275,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   useEffect(() => {
     const query = skillSearchQuery.trim();
     if (!query) return undefined;
-    const resultCount = activeTab === 'marketplace'
+    const resultCount = activeTab === SkillTab.Marketplace
       ? filteredMarketplaceSkills.length
       : filteredSkills.length;
     const timer = window.setTimeout(() => {
@@ -489,11 +518,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
 
     if (!skillCreator) {
       // Not installed → switch to marketplace tab and search
-      setActiveTab('marketplace');
+      setActiveTab(SkillTab.Marketplace);
       setSkillSearchQuery('skill-creator');
       reportSkillAction('create_by_chat_missing_skill', {
         source: 'skills_manager',
-        activeTab: 'marketplace',
+        activeTab: SkillTab.Marketplace,
         skillId: 'skill-creator',
       });
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('skillCreatorNotInstalled') }));
@@ -501,12 +530,13 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     }
 
     if (!skillCreator.enabled) {
-      // Installed but disabled → switch to installed tab and search
-      setActiveTab('installed');
+      // Installed but disabled → switch to the tab that owns it and search
+      const ownerTab = skillCreator.isBuiltIn ? SkillTab.BuiltIn : SkillTab.Mine;
+      setActiveTab(ownerTab);
       setSkillSearchQuery('skill-creator');
       reportSkillAction('create_by_chat_disabled_skill', {
         source: 'skills_manager',
-        activeTab: 'installed',
+        activeTab: ownerTab,
         ...getInstalledSkillAnalyticsParams(skillCreator, marketplaceSkills.find(item => item.id === skillCreator.id)),
       });
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('skillCreatorNotEnabled') }));
@@ -819,6 +849,132 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     }
   };
 
+  const getSkillTabCount = (tab: SkillTab): number | null => {
+    if (tab === SkillTab.Mine) return mySkills.length;
+    if (tab === SkillTab.BuiltIn) return builtInSkills.length;
+    return null;
+  };
+
+  const renderInstalledSkillCard = (skill: Skill, showOriginBadge: boolean) => {
+    const openInstalledDetail = () => {
+      reportSkillAction('open_installed_detail', {
+        source: 'skills_manager',
+        activeTab,
+        resultCount: filteredSkills.length,
+        ...getInstalledSkillAnalyticsParams(
+          skill,
+          marketplaceSkills.find(item => item.id === skill.id),
+        ),
+      });
+      setSelectedSkill(skill);
+    };
+    return (
+      <div
+        key={skill.id}
+        role="button"
+        tabIndex={0}
+        className="flex flex-col cursor-pointer rounded-xl border border-border bg-surface p-3 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        onClick={openInstalledDetail}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openInstalledDetail();
+          }
+        }}
+      >
+        <div className="flex items-start justify-between mb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-7 h-7 rounded-lg bg-primary-muted flex items-center justify-center flex-shrink-0">
+              <SkillIcon className="h-4 w-4 text-primary" />
+            </div>
+            <span className="text-sm font-medium text-foreground truncate">
+              {skill.name}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {!readOnly && !skill.isBuiltIn && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); handleRequestDeleteSkill(skill); }}
+                className="p-1 rounded-lg text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                title={i18nService.t('deleteSkill')}
+              >
+                <TrashIcon className="h-4 w-4" />
+              </button>
+            )}
+            <div
+              className={`w-9 h-5 rounded-full flex items-center transition-colors flex-shrink-0 ${
+                readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+              } ${
+                skill.enabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
+              }`}
+              onClick={(e) => { e.stopPropagation(); if (!readOnly) handleToggleSkill(skill.id); }}
+            >
+              <div
+                className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
+                  skill.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                }`}
+              />
+            </div>
+          </div>
+        </div>
+
+        <p className="text-xs text-secondary line-clamp-2 mb-2">
+          {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
+        </p>
+
+        <div className="mt-auto flex items-center justify-between text-[11px] text-secondary">
+          <div className="flex items-center gap-2">
+          {showOriginBadge ? (
+            <>
+              <span className={`px-1.5 py-0.5 rounded font-medium ${
+                skill.isBuiltIn ? 'bg-surface-raised text-secondary' : 'bg-primary-muted text-primary'
+              }`}>
+                {i18nService.t(skill.isBuiltIn ? 'skillOriginBuiltIn' : 'skillOriginMine')}
+              </span>
+              <span>·</span>
+            </>
+          ) : skill.isOfficial && (
+            <>
+              <span className="px-1.5 py-0.5 rounded bg-primary-muted text-primary font-medium">
+                {i18nService.t('official')}
+              </span>
+              <span>·</span>
+            </>
+          )}
+          {skill.version && (
+            <>
+              <span className="px-1.5 py-0.5 rounded bg-surface-raised font-medium">
+                v{skill.version}
+              </span>
+              <span>·</span>
+            </>
+          )}
+          <span>{formatSkillDate(skill.updatedAt)}</span>
+          </div>
+          {(() => {
+            const mp = marketplaceSkills.find(m => m.id === skill.id);
+            if (mp && mp.version && compareVersions(mp.version, skill.version || '0.0.0') > 0) {
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); handleUpgradeSkill(mp); }}
+                  disabled={upgradeState?.isActive === true}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ArrowPathIcon className="h-3.5 w-3.5" />
+                  {i18nService.t('skillUpgrade')}
+                </button>
+              );
+            }
+            return null;
+          })()}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-4">
       <div>
@@ -859,7 +1015,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                   activeTab,
                   activeMarketTag,
                   searchKeywordLength: skillSearchQuery.trim().length,
-                  resultCount: activeTab === 'marketplace'
+                  resultCount: activeTab === SkillTab.Marketplace
                     ? filteredMarketplaceSkills.length
                     : filteredSkills.length,
                 });
@@ -952,53 +1108,38 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
 
         {/* Tabs */}
         <div className="flex items-center border-b border-border">
-          <button
-            type="button"
-            onClick={() => {
-              reportSkillAction('tab_change', {
-                source: 'skills_manager',
-                activeTab,
-                targetTab: 'installed',
-              });
-              setActiveTab('installed');
-            }}
-            className={`relative px-2.5 pb-2.5 pt-0.5 text-[13px] font-semibold transition-colors ${
-              activeTab === 'installed'
-                ? 'text-foreground'
-                : 'text-secondary hover:text-foreground'
-            }`}
-          >
-            {i18nService.t('skillInstalled')}
-            {skills.length > 0 && (
-              <span className="ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-secondary">
-                {skills.length}
-              </span>
-            )}
-            <div className={`absolute bottom-[-1px] left-0 right-0 h-0.5 rounded-full transition-colors ${
-              activeTab === 'installed' ? 'bg-primary' : 'bg-transparent'
-            }`} />
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              reportSkillAction('tab_change', {
-                source: 'skills_manager',
-                activeTab,
-                targetTab: 'marketplace',
-              });
-              setActiveTab('marketplace');
-            }}
-            className={`relative px-2.5 pb-2.5 pt-0.5 text-[13px] font-semibold transition-colors ${
-              activeTab === 'marketplace'
-                ? 'text-foreground'
-                : 'text-secondary hover:text-foreground'
-            }`}
-          >
-            {i18nService.t('skillMarketplace')}
-            <div className={`absolute bottom-[-1px] left-0 right-0 h-0.5 rounded-full transition-colors ${
-              activeTab === 'marketplace' ? 'bg-primary' : 'bg-transparent'
-            }`} />
-          </button>
+          {SKILL_TAB_ORDER.map((tab) => {
+            const count = getSkillTabCount(tab);
+            return (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => {
+                  reportSkillAction('tab_change', {
+                    source: 'skills_manager',
+                    activeTab,
+                    targetTab: tab,
+                  });
+                  setActiveTab(tab);
+                }}
+                className={`relative px-2.5 pb-2.5 pt-0.5 text-[13px] font-semibold transition-colors ${
+                  activeTab === tab
+                    ? 'text-foreground'
+                    : 'text-secondary hover:text-foreground'
+                }`}
+              >
+                {i18nService.t(SKILL_TAB_LABEL_KEYS[tab])}
+                {count !== null && count > 0 && (
+                  <span className="ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-secondary">
+                    {count}
+                  </span>
+                )}
+                <div className={`absolute bottom-[-1px] left-0 right-0 h-0.5 rounded-full transition-colors ${
+                  activeTab === tab ? 'bg-primary' : 'bg-transparent'
+                }`} />
+              </button>
+            );
+          })}
           {updatableSkills.length > 0 && (
             <div className="ml-auto pr-1 pb-1">
               <button
@@ -1015,7 +1156,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
         </div>
 
         {/* Tag filter pills (Marketplace only) */}
-        {activeTab === 'marketplace' && !isLoadingMarketplace && marketTags.length > 0 && (
+        {activeTab === SkillTab.Marketplace && !isLoadingMarketplace && marketTags.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
@@ -1065,130 +1206,96 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
       </div>
 
       <div>
-      {activeTab === 'installed' && (
-      <>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
-        {filteredSkills.length === 0 ? (
-          <div className="col-span-full text-center py-8 text-sm text-secondary">
-            {i18nService.t('noSkillsAvailable')}
-          </div>
-        ) : (
-          filteredSkills.map((skill) => {
-            const openInstalledDetail = () => {
-              reportSkillAction('open_installed_detail', {
-                source: 'skills_manager',
-                activeTab,
-                resultCount: filteredSkills.length,
-                ...getInstalledSkillAnalyticsParams(
-                  skill,
-                  marketplaceSkills.find(item => item.id === skill.id),
-                ),
-              });
-              setSelectedSkill(skill);
-            };
-            return (
-            <div
-              key={skill.id}
-              role="button"
-              tabIndex={0}
-              className="flex flex-col cursor-pointer rounded-xl border border-border bg-surface p-3 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-              onClick={openInstalledDetail}
-              onKeyDown={(e) => {
-                if (e.target !== e.currentTarget) return;
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  openInstalledDetail();
-                }
-              }}
-            >
-              <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-7 h-7 rounded-lg bg-primary-muted flex items-center justify-center flex-shrink-0">
-                    <SkillIcon className="h-4 w-4 text-primary" />
-                  </div>
-                  <span className="text-sm font-medium text-foreground truncate">
-                    {skill.name}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {!readOnly && !skill.isBuiltIn && (
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); handleRequestDeleteSkill(skill); }}
-                      className="p-1 rounded-lg text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                      title={i18nService.t('deleteSkill')}
-                    >
-                      <TrashIcon className="h-4 w-4" />
-                    </button>
-                  )}
-                  <div
-                    className={`w-9 h-5 rounded-full flex items-center transition-colors flex-shrink-0 ${
-                      readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-                    } ${
-                      skill.enabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
-                    }`}
-                    onClick={(e) => { e.stopPropagation(); if (!readOnly) handleToggleSkill(skill.id); }}
-                  >
-                    <div
-                      className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
-                        skill.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                      }`}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <p className="text-xs text-secondary line-clamp-2 mb-2">
-                {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
-              </p>
-
-              <div className="mt-auto flex items-center justify-between text-[11px] text-secondary">
-                <div className="flex items-center gap-2">
-                {skill.isOfficial && (
-                  <>
-                    <span className="px-1.5 py-0.5 rounded bg-primary-muted text-primary font-medium">
-                      {i18nService.t('official')}
-                    </span>
-                    <span>·</span>
-                  </>
-                )}
-                {skill.version && (
-                  <>
-                    <span className="px-1.5 py-0.5 rounded bg-surface-raised font-medium">
-                      v{skill.version}
-                    </span>
-                    <span>·</span>
-                  </>
-                )}
-                <span>{formatSkillDate(skill.updatedAt)}</span>
-                </div>
-                {(() => {
-                  const mp = marketplaceSkills.find(m => m.id === skill.id);
-                  if (mp && mp.version && compareVersions(mp.version, skill.version || '0.0.0') > 0) {
-                    return (
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); handleUpgradeSkill(mp); }}
-                        disabled={upgradeState?.isActive === true}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <ArrowPathIcon className="h-3.5 w-3.5" />
-                        {i18nService.t('skillUpgrade')}
-                      </button>
-                    );
-                  }
-                  return null;
-                })()}
-              </div>
+      {/* Search spans both installed groups, so hits from the other tab stay reachable. */}
+      {isInstalledTab && isSkillSearchActive && (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+          {filteredSkills.length === 0 ? (
+            <div className="col-span-full text-center py-8 text-sm text-secondary">
+              {i18nService.t('noSkillsAvailable')}
             </div>
-            );
-          })
-        )}
-      </div>
-      </>
+          ) : (
+            filteredSkills.map((skill) => renderInstalledSkillCard(skill, true))
+          )}
+        </div>
       )}
 
-      {activeTab === 'marketplace' && (
+      {activeTab === SkillTab.Mine && !isSkillSearchActive && (
+        mySkills.length === 0 ? (
+          readOnly ? (
+            <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-secondary">
+              {i18nService.t('noSkillsAvailable')}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center">
+              <p className="mb-3 text-sm text-secondary">
+                {i18nService.t('skillGroupMineEmptyHint')}
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    reportSkillAction('empty_guide_action', {
+                      source: 'skills_manager',
+                      targetAction: SkillTab.Marketplace,
+                    });
+                    setActiveTab(SkillTab.Marketplace);
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised transition-colors"
+                >
+                  <ArrowDownTrayIcon className="h-3.5 w-3.5 text-secondary" />
+                  {i18nService.t('skillGroupMineEmptyMarket')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    reportSkillAction('empty_guide_action', {
+                      source: 'skills_manager',
+                      targetAction: 'upload_zip',
+                    });
+                    handleUploadSkillZip();
+                  }}
+                  disabled={isDownloadingSkill}
+                  className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised transition-colors disabled:opacity-50"
+                >
+                  <UploadIcon className="h-3.5 w-3.5 text-secondary" />
+                  {i18nService.t('uploadSkillZip')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    reportSkillAction('empty_guide_action', {
+                      source: 'skills_manager',
+                      targetAction: 'create_by_chat',
+                    });
+                    handleCreateByChat();
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised transition-colors"
+                >
+                  <EditIcon className="h-3.5 w-3.5 text-secondary" />
+                  {i18nService.t('createSkillByChat')}
+                </button>
+              </div>
+            </div>
+          )
+        ) : (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+            {mySkills.map((skill) => renderInstalledSkillCard(skill, false))}
+          </div>
+        )
+      )}
+
+      {activeTab === SkillTab.BuiltIn && !isSkillSearchActive && (
+        <>
+          <p className="mb-3 text-xs text-secondary">
+            {i18nService.t('skillBuiltInTabHint').replace('{count}', String(enabledBuiltInCount))}
+          </p>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+            {builtInSkills.map((skill) => renderInstalledSkillCard(skill, false))}
+          </div>
+        </>
+      )}
+
+      {activeTab === SkillTab.Marketplace && (
         isLoadingMarketplace ? (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3" aria-hidden="true">
             {Array.from({ length: 6 }).map((_, idx) => (

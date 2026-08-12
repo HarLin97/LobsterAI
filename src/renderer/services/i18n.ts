@@ -1912,6 +1912,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillInstalling: '安装中',
     skillInstallFailed: '安装失败',
     skillAlreadyInstalled: '已安装',
+    skillGroupMine: '我的技能',
+    skillGroupBuiltIn: '内置技能',
+    skillBuiltInTabHint: '随应用内置，不可删除，已启用 {count} 个',
+    skillOriginMine: '我的',
+    skillOriginBuiltIn: '内置',
+    skillGroupMineEmptyHint: '还没有自己的技能，可以从这里开始',
+    skillGroupMineEmptyMarket: '从市场安装',
 
     // Security scan
     lobsterGuardEnabled: '安全防护中',
@@ -5334,6 +5341,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillInstalling: 'Installing',
     skillInstallFailed: 'Install failed',
     skillAlreadyInstalled: 'Installed',
+    skillGroupMine: 'My Skills',
+    skillGroupBuiltIn: 'Built-in Skills',
+    skillBuiltInTabHint: 'Bundled with the app, cannot be deleted · {count} enabled',
+    skillOriginMine: 'Mine',
+    skillOriginBuiltIn: 'Built-in',
+    skillGroupMineEmptyHint: 'No skills of your own yet — start here',
+    skillGroupMineEmptyMarket: 'Install from Marketplace',
 
     // Security scan
     lobsterGuardEnabled: 'Security Active',
