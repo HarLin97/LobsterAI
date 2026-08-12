@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import type { ShellGetBrowserAppsInput } from '../shared/shell/constants';
+import { resolveShellAppFileIconSize } from './shellAppIconPolicy';
 
 export interface AppInfo {
   name: string;
@@ -769,10 +770,12 @@ async function extractIcon(appInfo: AppInfo): Promise<string | null> {
       return png;
     }
   }
-  // Fallback (mainly Windows): use Electron's app.getFileIcon
+  // Electron does not support the "large" file icon size on macOS.
   try {
     if (!app.isReady()) return null;
-    const img = await app.getFileIcon(appInfo.path, { size: 'large' });
+    const img = await app.getFileIcon(appInfo.path, {
+      size: resolveShellAppFileIconSize(process.platform),
+    });
     if (!img.isEmpty()) {
       const dataUrl = img.toDataURL();
       iconDataUrlCache.set(cacheKey, dataUrl);
