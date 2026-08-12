@@ -11,6 +11,7 @@ import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { imService } from '../../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
+import { resolveThinkingLevelForModel } from '../../services/modelThinkingLevelMemory';
 import { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
 import type { Agent } from '../../types/agent';
@@ -380,7 +381,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         identity: identity.trim(),
         model: modelRef,
         ...(modelRef !== initialValuesRef.current.model
-          ? { thinkingLevel: model?.thinkingConfig?.defaultLevel ?? '' }
+          ? { thinkingLevel: resolveThinkingLevelForModel(model) }
           : {}),
         workingDirectory: workingDirectory.trim(),
         icon: icon.trim(),
