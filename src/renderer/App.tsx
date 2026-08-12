@@ -81,10 +81,12 @@ import {
   setDraftCollaborationMode,
   setDraftKitIds,
   setDraftPrompt,
+  setDraftSkillIds,
 } from './store/slices/coworkSlice';
 import { setActiveKitIds } from './store/slices/kitSlice';
 import { setAvailableModels, setDefaultSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
+import { setActiveSkillIds } from './store/slices/skillSlice';
 import { CoworkCollaborationMode, type CoworkPermissionResult } from './types/cowork';
 
 const AGENT_TASK_SLOT_SHORTCUT_ACTIONS = [
@@ -668,6 +670,19 @@ const App: React.FC = () => {
   const handleKitUse = useCallback((kitId: string) => {
     openHomeWithKit(kitId);
   }, [openHomeWithKit]);
+
+  const handleSkillUse = useCallback((skillId: string) => {
+    dispatch(setActiveSkillIds([skillId]));
+    coworkService.clearSession({ restoreAgentSkills: true });
+    dispatch(clearSelection());
+    dispatch(setDraftSkillIds({ draftKey: '__home__', skillIds: [skillId] }));
+    setMainView('cowork');
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
+        detail: { clear: false },
+      }));
+    }, 0);
+  }, [dispatch]);
 
   const handleToggleSidebar = useCallback(() => {
     const nextCollapsed = !isSidebarCollapsed;
@@ -1728,6 +1743,7 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 onCreateSkillByChat={handleCreateSkillByChat}
+                onUseSkill={handleSkillUse}
                 updateBadge={collapsedHeaderUpdateBadge}
                 readOnly={enterpriseConfig?.ui?.skills === 'readonly'}
               />
