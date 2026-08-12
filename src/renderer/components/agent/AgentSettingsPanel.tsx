@@ -11,6 +11,7 @@ import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { imService } from '../../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
+import { resolveThinkingLevelForModel } from '../../services/modelThinkingLevelMemory';
 import { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
 import type { Agent } from '../../types/agent';
@@ -372,12 +373,16 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     });
     setSaving(true);
     try {
+      const modelRef = model ? toOpenClawModelRef(model) : '';
       const result = await agentService.updateAgent(agentId, {
         name: name.trim(),
         description: description.trim(),
         systemPrompt: systemPrompt.trim(),
         identity: identity.trim(),
-        model: model ? toOpenClawModelRef(model) : '',
+        model: modelRef,
+        ...(modelRef !== initialValuesRef.current.model
+          ? { thinkingLevel: resolveThinkingLevelForModel(model) }
+          : {}),
         workingDirectory: workingDirectory.trim(),
         icon: icon.trim(),
         skillIds,

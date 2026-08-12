@@ -49,6 +49,7 @@ describe('OpenClaw extension manifests', () => {
   test('declares a strict allowlisted model-profile config for LobsterAI compatibility', () => {
     const manifest = readManifest('lobsterai-model-compat');
     expect(manifest.providers).toEqual(['lobsterai-model-compat']);
+    expect(manifest.activation).toBeUndefined();
     expect(manifest.configSchema).toEqual({
       type: 'object',
       additionalProperties: false,
@@ -64,8 +65,52 @@ describe('OpenClaw extension manifests', () => {
             enum: ['moonshot-kimi-k3'],
           },
         },
+        thinkingProfiles: {
+          type: 'object',
+          minProperties: 1,
+          propertyNames: {
+            pattern: '^[^/\\s]+/[^\\s]+$',
+          },
+          additionalProperties: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              options: {
+                type: 'array',
+                minItems: 1,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    level: {
+                      type: 'string',
+                      enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+                    },
+                    openclawLevel: {
+                      type: 'string',
+                      enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+                    },
+                  },
+                  required: ['level', 'openclawLevel'],
+                },
+              },
+              defaultLevel: {
+                type: 'string',
+                enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+              },
+              requestOptionsVersion: {
+                type: 'integer',
+                enum: [1],
+              },
+            },
+            required: ['options', 'defaultLevel'],
+          },
+        },
       },
-      required: ['modelProfiles'],
+      anyOf: [
+        { required: ['modelProfiles'] },
+        { required: ['thinkingProfiles'] },
+      ],
     });
   });
 });

@@ -1,6 +1,6 @@
-import { CheckIcon } from '@heroicons/react/24/outline';
+import { CheckIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import Lottie from 'lottie-react';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import mediaGeneratingAnimation from '../../assets/lottie/media-generating.json';
@@ -13,6 +13,7 @@ import {
 } from './conversationAnalytics';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
 import {
+  formatElapsedDuration,
   formatToolInput,
   getLargeToolResultSummary,
   getRetainedMediaPollCount,
@@ -21,6 +22,7 @@ import {
   getToolResultCollapsedDisplay,
   getToolResultDisplay,
   getToolResultLineCountSummary,
+  getToolStepDisplay,
   hasText,
   isBashLikeToolName,
   isCronToolName,
@@ -80,21 +82,44 @@ const TodoWriteInputView: React.FC<{ items: ParsedTodoItem[] }> = ({ items }) =>
 
 // ── ToolCallGroup ────────────────────────────────────────────────────────────
 
+// Live elapsed time for a running tool call; appears after a short delay so
+// quick calls don't flash a counter.
+const TOOL_ELAPSED_APPEAR_DELAY_MS = 2000;
+
+const ToolRunningElapsed: React.FC<{ startTimestamp: number }> = ({ startTimestamp }) => {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const elapsedMs = now - startTimestamp;
+  if (elapsedMs < TOOL_ELAPSED_APPEAR_DELAY_MS) return null;
+  return <span className="tabular-nums"> · {formatElapsedDuration(elapsedMs)}</span>;
+};
+
 const ToolCallGroup: React.FC<{
   group: ToolGroupItem;
   isLastInSequence?: boolean;
   mapDisplayText?: (value: string) => string;
   retainedMediaPollCounts?: Map<string, number>;
   footer?: React.ReactNode;
+  /** 'timeline' renders the classic dot row; 'row' renders a compact list row for activity groups. */
+  variant?: 'timeline' | 'row';
+  /** Start expanded (row variant): single-step groups reveal their detail in one click. */
+  initiallyExpanded?: boolean;
 }> = ({
   group,
   isLastInSequence = true,
   mapDisplayText,
   retainedMediaPollCounts,
   footer,
+  variant = 'timeline',
+  initiallyExpanded = false,
 }) => {
   const { toolUse, toolResult } = group;
-  const shouldExpandByDefault = isMediaStatusPoll(group);
+  const shouldExpandByDefault = isMediaStatusPoll(group) || (variant === 'row' && initiallyExpanded);
   const isSessionStreaming = useSelector(selectIsStreaming);
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
   const toolName = getToolDisplayName(rawToolName);
@@ -167,69 +192,19 @@ const ToolCallGroup: React.FC<{
     });
   };
 
-  return (
-    <div className="relative py-1">
-      {!isLastInSequence && (
-        <div className="absolute left-[3.5px] top-[14px] bottom-[-8px] w-px bg-border" />
-      )}
-      <button
-        onClick={() => {
-          const nextExpanded = !isExpanded;
-          reportToolToggle(nextExpanded);
-          setIsExpanded(nextExpanded);
-        }}
-        className="w-full flex items-start gap-2 text-left group relative z-10"
-      >
-        <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
-          !toolResult && isSessionStreaming
-            ? 'bg-blue-500 animate-pulse'
-            : !toolResult
-              ? 'bg-blue-500'
-              : isToolError
-                ? 'bg-red-500'
-                : 'bg-green-500'
-        }`} />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-secondary">
-              {toolName}
-            </span>
-            {toolInputSummary && (
-              <code className="text-code text-muted font-mono truncate max-w-full">
-                {toolInputSummary}
-              </code>
-            )}
-          </div>
-          {toolResult && !isTodoWriteTool && (hasToolResultText || showNoDetailError) && (
-            <div className={`text-xs mt-0.5 ${
-              hasToolResultText
-                ? 'text-muted'
-                : showNoDetailError
-                  ? 'text-red-500/80'
-                  : 'text-muted'
-            }`}>
-              {hasToolResultText
-                ? toolResultSummary
-                : toolResultFallback}
-            </div>
-          )}
-          {!toolResult && isSessionStreaming && (
-            <div className="text-xs text-muted mt-0.5">
-              {i18nService.t('coworkToolRunning')}
-            </div>
-          )}
-        </div>
-      </button>
-      {footer && (
-        <div className="ml-4 mt-2">
-          {footer}
-        </div>
-      )}
+  const handleToggle = () => {
+    const nextExpanded = !isExpanded;
+    reportToolToggle(nextExpanded);
+    setIsExpanded(nextExpanded);
+  };
+
+  const renderMediaRunningIndicators = (containerClass: string) => (
+    <>
       {isMediaGenerateRunning(group) && isSessionStreaming && (() => {
         const streamingInfo = parseMediaStreamingInfo(group);
         const pollCount = streamingInfo.pollCount ?? getRetainedMediaPollCount(streamingInfo, retainedMediaPollCounts);
         return (
-          <div className="ml-4 mt-2 flex items-center gap-2">
+          <div className={`${containerClass} flex items-center gap-2`}>
             <Lottie
               animationData={mediaGeneratingAnimation}
               loop
@@ -257,7 +232,7 @@ const ToolCallGroup: React.FC<{
         const mediaToolName = group.toolUse.metadata?.toolName || '';
         const isVideo = normalizeToolName(mediaToolName) === 'lobsteraivideogenerate';
         return (
-          <div className="ml-4 mt-2 flex items-center gap-2 flex-wrap">
+          <div className={`${containerClass} flex items-center gap-2 flex-wrap`}>
             <Lottie
               animationData={mediaGeneratingAnimation}
               loop
@@ -278,9 +253,12 @@ const ToolCallGroup: React.FC<{
           </div>
         );
       })()}
-      {isExpanded && (
-        <div className="ml-4 mt-2">
-          {isBashTool ? (
+    </>
+  );
+
+  const renderDetailBody = () => (
+    <>
+      {isBashTool ? (
             <div className="rounded-lg overflow-hidden border border-border">
               <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surfaceInset">
                 <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
@@ -378,6 +356,118 @@ const ToolCallGroup: React.FC<{
               )}
             </div>
           )}
+    </>
+  );
+
+  if (variant === 'row') {
+    const rowStep = getToolStepDisplay(rawToolName, toolInput as Record<string, unknown> | undefined);
+    const rowSummary = rowStep.summary ? mapText(rowStep.summary) : null;
+    return (
+      <div>
+        <button
+          onClick={handleToggle}
+          className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-surface-raised/40 transition-colors"
+          aria-expanded={isExpanded}
+        >
+          {!toolResult && isSessionStreaming && (
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse flex-shrink-0" />
+          )}
+          {isToolError && (
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
+          )}
+          <span className={`text-xs text-foreground/90 flex-shrink-0 ${!toolResult && isSessionStreaming ? 'shimmer-text' : ''}`}>
+            {toolName}
+          </span>
+          {rowSummary && (
+            <span className="min-w-0 truncate text-xs text-secondary">
+              {rowSummary}
+            </span>
+          )}
+          {!toolResult && isSessionStreaming && (
+            <span className="text-xs text-muted flex-shrink-0">
+              <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
+            </span>
+          )}
+          <ChevronRightIcon
+            className={`h-3 w-3 text-muted flex-shrink-0 transition-transform duration-200 ${
+              isExpanded ? 'rotate-90' : ''
+            }`}
+          />
+        </button>
+        {footer && (
+          <div className="px-4 pb-3">
+            {footer}
+          </div>
+        )}
+        {renderMediaRunningIndicators('px-4 pb-2')}
+        {isExpanded && (
+          <div className="activity-row-detail px-4 pb-3">
+            {renderDetailBody()}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative py-1">
+      {!isLastInSequence && (
+        <div className="absolute left-[3.5px] top-[14px] bottom-[-8px] w-px bg-border" />
+      )}
+      <button
+        onClick={handleToggle}
+        className="w-full flex items-start gap-2 text-left group relative z-10"
+      >
+        <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
+          !toolResult && isSessionStreaming
+            ? 'bg-blue-500 animate-pulse'
+            : !toolResult
+              ? 'bg-blue-500'
+              : isToolError
+                ? 'bg-red-500'
+                : 'bg-green-500'
+        }`} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`text-sm font-medium text-secondary ${!toolResult && isSessionStreaming ? 'shimmer-text' : ''}`}>
+              {toolName}
+            </span>
+            {toolInputSummary && (
+              <code className="text-code text-muted font-mono truncate max-w-full">
+                {toolInputSummary}
+              </code>
+            )}
+          </div>
+          {toolResult && !isTodoWriteTool && (hasToolResultText || showNoDetailError) && (
+            <div className={`text-xs mt-0.5 ${
+              hasToolResultText
+                ? 'text-muted'
+                : showNoDetailError
+                  ? 'text-red-500/80'
+                  : 'text-muted'
+            }`}>
+              {hasToolResultText
+                ? toolResultSummary
+                : toolResultFallback}
+            </div>
+          )}
+          {!toolResult && isSessionStreaming && (
+            <div className="text-xs text-muted mt-0.5">
+              {i18nService.t('coworkToolRunning')}
+              <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
+            </div>
+          )}
+        </div>
+      </button>
+      {footer && (
+        <div className="ml-4 mt-2">
+          {footer}
+        </div>
+      )}
+      {renderMediaRunningIndicators('ml-4 mt-2')}
+      {isExpanded && (
+        <div className="ml-4 mt-2">
+          {renderDetailBody()}
         </div>
       )}
     </div>

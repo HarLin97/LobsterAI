@@ -8,6 +8,15 @@ afterEach(() => {
 });
 
 describe('AI skin theme binding resolution', () => {
+  test('startup repair refreshes the default without replacing an active skin', async () => {
+    await themeService.applySkinTheme('ocean');
+
+    themeService.applyPersistedSelection({ mode: 'light', themeId: 'sakura' });
+
+    expect(themeService.getEffectiveTheme()).toBe('dark');
+    expect(themeService.getDefaultSelection()).toEqual({ mode: 'light', themeId: 'sakura' });
+  });
+
   test('keeps a valid exact binding instead of following later default changes', () => {
     themeService.setTheme('sakura');
 

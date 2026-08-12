@@ -1,3 +1,5 @@
+import type { ModelThinkingLevel } from '@shared/providers/modelThinking';
+
 export type AgentSource = 'custom' | 'preset';
 
 export interface Agent {
@@ -7,6 +9,7 @@ export interface Agent {
   systemPrompt: string;
   identity: string;
   model: string;
+  thinkingLevel: ModelThinkingLevel | '';
   workingDirectory: string;
   icon: string;
   skillIds: string[];
@@ -44,6 +47,7 @@ export interface CreateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;
   skillIds?: string[];
@@ -58,6 +62,7 @@ export interface UpdateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;
   skillIds?: string[];

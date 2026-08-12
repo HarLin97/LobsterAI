@@ -17,6 +17,10 @@ import {
   AgentSidebarPageSize,
   AgentSidebarPreferenceKey,
 } from './constants';
+import {
+  hasLegacyScheduledTaskTitle,
+  isScheduledTaskSession,
+} from './scheduledTaskSession';
 import type {
   AgentSidebarAgentNode,
   AgentSidebarAgentSummary,
@@ -46,14 +50,25 @@ const logAgentSidebarLoadIssue = (
   }
 };
 
+export const logAgentSidebarDebug = (message: string): void => {
+  console.debug(`[AgentSidebar] ${message}`);
+  try {
+    window.electron?.log?.fromRenderer?.('debug', 'AgentSidebar', message);
+  } catch {
+    // Best-effort renderer diagnostics only.
+  }
+};
+
 const hasSessionChanged = (
   previous: CoworkSessionSummary,
   next: CoworkSessionSummary,
 ): boolean => {
   return previous.title !== next.title
+    || previous.scheduledTaskId !== next.scheduledTaskId
     || previous.status !== next.status
     || previous.pinned !== next.pinned
     || previous.pinOrder !== next.pinOrder
+    || previous.parentSessionId !== next.parentSessionId
     || previous.updatedAt !== next.updatedAt
     || previous.createdAt !== next.createdAt
     || normalizeAgentId(previous.agentId) !== normalizeAgentId(next.agentId);
@@ -125,6 +140,11 @@ export const toAgentSidebarTaskNode = (
     id: session.id,
     agentId: normalizeAgentId(session.agentId),
     title: session.title,
+    isScheduledTask: isScheduledTaskSession(
+      session.scheduledTaskId,
+      session.title,
+      session.parentSessionId,
+    ),
     status: session.status,
     pinned: session.pinned,
     pinOrder: session.pinOrder ?? null,
@@ -204,6 +224,7 @@ export const useAgentSidebarState = ({
   const loadedAgentIdsRef = useRef(new Set<string>());
   const loadingKeysRef = useRef(new Set<string>());
   const activeAgentIdsRef = useRef(new Set<string>());
+  const loggedScheduledMarkerSignatureByAgentIdRef = useRef(new Map<string, string>());
   const initializedDefaultExpansionRef = useRef(false);
 
   useEffect(() => {
@@ -335,6 +356,25 @@ export const useAgentSidebarState = ({
         setAgentFailed(agentId, true);
         return;
       }
+      if (offset === 0) {
+        const loadedSessions = result.sessions ?? [];
+        const explicitMarkerCount = loadedSessions.filter(
+          (session) => !session.parentSessionId && Boolean(session.scheduledTaskId?.trim()),
+        ).length;
+        const legacyMarkerCount = loadedSessions.filter(
+          (session) => !session.parentSessionId
+            && !session.scheduledTaskId?.trim()
+            && hasLegacyScheduledTaskTitle(session.title),
+        ).length;
+        const markerSignature = `${explicitMarkerCount}:${legacyMarkerCount}`;
+        if (
+          loggedScheduledMarkerSignatureByAgentIdRef.current.get(agentId) !== markerSignature
+        ) {
+          const message = `scheduled-task markers resolved; agent=${agentId}; explicit=${explicitMarkerCount}; legacy=${legacyMarkerCount}; pageSize=${loadedSessions.length}.`;
+          logAgentSidebarDebug(message);
+          loggedScheduledMarkerSignatureByAgentIdRef.current.set(agentId, markerSignature);
+        }
+      }
       loadedAgentIdsRef.current.add(agentId);
       setTaskPreviewsByAgentId((previous) => {
         const current = replace ? [] : previous[agentId] ?? [];
@@ -377,6 +417,7 @@ export const useAgentSidebarState = ({
     for (const agentId of Array.from(loadedAgentIdsRef.current)) {
       if (!activeAgentIds.has(agentId)) {
         loadedAgentIdsRef.current.delete(agentId);
+        loggedScheduledMarkerSignatureByAgentIdRef.current.delete(agentId);
       }
     }
     for (const key of Array.from(loadingKeysRef.current)) {
@@ -552,6 +593,12 @@ export const useAgentSidebarState = ({
   const expandAgent = useCallback((agentId: string) => {
     setExpandedAgentIds((previous) => {
       return previous.includes(agentId) ? previous : [...previous, agentId];
+    });
+  }, []);
+
+  const collapseAgent = useCallback((agentId: string) => {
+    setExpandedAgentIds((previous) => {
+      return previous.includes(agentId) ? previous.filter((id) => id !== agentId) : previous;
     });
   }, []);
 
@@ -737,6 +784,7 @@ export const useAgentSidebarState = ({
     retryLoadTasks,
     loadMoreTasks,
     expandAgent,
+    collapseAgent,
     expandTasks,
     collapseTasks,
     toggleAgentExpanded,

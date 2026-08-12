@@ -126,7 +126,12 @@ import ModelSelector, {
   ModelSelectorGroup,
 } from '../ModelSelector';
 import { ActiveSkillBadge, SkillsPopover } from '../skills';
-import { resolveAgentModelSelection, resolveEffectiveModel, useAgentSelectedModel } from './agentModelSelection';
+import {
+  resolveAgentModelSelection,
+  resolveEffectiveModel,
+  resolveModelThinkingLevel,
+  useAgentSelectedModel,
+} from './agentModelSelection';
 import AttachmentCard from './AttachmentCard';
 import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge';
 import { getClipboardAttachmentFiles } from './clipboardAttachments';
@@ -661,6 +666,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     agentSelectedModel,
     globalSelectedModel: currentAgentSelectedModel,
   });
+  const effectiveThinkingLevel = resolveModelThinkingLevel(
+    effectiveSelectedModel,
+    sessionId && currentSession?.id === sessionId
+      ? currentSession.thinkingLevel
+      : currentAgent?.thinkingLevel,
+  );
   const modelSupportsImage = !!effectiveSelectedModel?.supportsImage;
 
   const resolveSubmitModelAccessPrompt = useCallback((): ModelAccessPromptKind | null => {
@@ -2759,6 +2770,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         portal={showReadOnlyContext}
         triggerMaxWidthClassName={largeModelTriggerMaxWidthClassName}
         disabled={isPatchingModel || isPersistingAgentModel}
+        thinkingLevel={effectiveThinkingLevel ?? null}
         value={agentModelIsInvalid && currentSession?.modelOverride
           ? { id: '__invalid__', name: currentSession.modelOverride.split('/').pop() || currentSession.modelOverride } as Model
           : effectiveSelectedModel}
@@ -2773,28 +2785,43 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             )) ?? nextModel
             : nextModel;
           const modelRef = toOpenClawModelRef(selectedModel);
+          const nextThinkingLevel = resolveModelThinkingLevel(
+            selectedModel,
+            meta.thinkingLevel,
+          ) ?? '';
           if (sessionId) {
             const requestId = modelPatchRequestIdRef.current + 1;
             modelPatchRequestIdRef.current = requestId;
             const previousModelOverride = currentSession?.id === sessionId
               ? currentSession.modelOverride
               : '';
+            const previousThinkingLevel = currentSession?.id === sessionId
+              ? currentSession.thinkingLevel ?? ''
+              : '';
 
             setIsPatchingModel(true);
             logPromptModelSelection(
               'debug',
-              `switching session ${sessionId} to ${modelRef}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
+              `switching session ${sessionId} to ${modelRef}; thinking level is ${nextThinkingLevel || 'default'}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
             );
-            dispatch(updateCurrentSessionModelOverride({ sessionId, modelOverride: modelRef }));
+            dispatch(updateCurrentSessionModelOverride({
+              sessionId,
+              modelOverride: modelRef,
+              thinkingLevel: nextThinkingLevel,
+            }));
 
             try {
-              const patchedSession = await coworkService.patchSession(sessionId, { model: modelRef });
+              const patchedSession = await coworkService.patchSession(sessionId, {
+                model: modelRef,
+                thinkingLevel: nextThinkingLevel || null,
+              });
               if (requestId !== modelPatchRequestIdRef.current) return;
 
               if (!patchedSession) {
                 dispatch(updateCurrentSessionModelOverride({
                   sessionId,
                   modelOverride: previousModelOverride,
+                  thinkingLevel: previousThinkingLevel,
                 }));
                 logPromptModelSelection('warn', `model switch for session ${sessionId} returned no session`);
                 window.dispatchEvent(new CustomEvent('app:showToast', {
@@ -2806,7 +2833,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               logPromptModelSelection('debug', `switched session ${sessionId} to ${patchedSession.modelOverride || modelRef}`);
               reportModelSelected(selectedModel, meta.group, 'session', currentAgentId, sessionId);
               if (currentAgent && agentModelIsInvalid) {
-                void agentService.updateAgent(currentAgent.id, { model: modelRef });
+                void agentService.updateAgent(currentAgent.id, {
+                  model: modelRef,
+                  thinkingLevel: nextThinkingLevel,
+                });
               }
               void coworkService.refreshContextUsage(sessionId, { notifyCompaction: false });
             } catch (error) {
@@ -2814,6 +2844,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 dispatch(updateCurrentSessionModelOverride({
                   sessionId,
                   modelOverride: previousModelOverride,
+                  thinkingLevel: previousThinkingLevel,
                 }));
                 console.warn(`[CoworkPromptInput] model switch for session ${sessionId} failed:`, error);
                 window.electron?.log?.fromRenderer?.('warn', 'CoworkPromptInput', `model switch for session ${sessionId} failed`);
@@ -2832,8 +2863,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             'debug',
             `persisting agent ${currentAgentId} model ${modelRef}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
           );
-          await persistAgentModelSelection(selectedModel);
-          reportModelSelected(selectedModel, meta.group, 'agent', currentAgentId);
+          const persisted = await persistAgentModelSelection(selectedModel, nextThinkingLevel);
+          if (persisted) {
+            reportModelSelected(selectedModel, meta.group, 'agent', currentAgentId);
+          }
         }}
       />
       {agentModelIsInvalid && (

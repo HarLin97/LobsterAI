@@ -3,7 +3,7 @@ import {
   AuthSessionChangeReason,
   AuthSessionStatus,
 } from '@shared/auth/constants';
-import { ProviderName } from '@shared/providers';
+import { LobsterAIRequestCapability, ProviderName } from '@shared/providers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
@@ -42,6 +42,14 @@ describe('pricing catalog model mapping', () => {
         description: 'Strong multimodal model',
         supportsImage: true,
         supportsThinking: true,
+        thinkingConfig: {
+          options: [
+            { level: 'off', openclawLevel: 'off' },
+            { level: 'high', openclawLevel: 'high' },
+            { level: 'max', openclawLevel: 'xhigh' },
+          ],
+          defaultLevel: 'high',
+        },
         contextWindow: 1_000_000,
         costMultiplier: 1.6,
       },
@@ -57,6 +65,14 @@ describe('pricing catalog model mapping', () => {
       description: 'Strong multimodal model',
       supportsImage: true,
       supportsThinking: true,
+      thinkingConfig: {
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
+        defaultLevel: 'high',
+      },
       contextWindow: 1_000_000,
       costMultiplier: 1.6,
     });
@@ -100,6 +116,15 @@ describe('authenticated server model mapping', () => {
       supportsImage: true,
       supportsVideo: true,
       supportsThinking: true,
+      thinkingConfig: {
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
+        defaultLevel: 'high',
+      },
+      requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
       supportsToolCalling: true,
       agenticReady: false,
       contextWindow: 1_048_576,
@@ -116,12 +141,57 @@ describe('authenticated server model mapping', () => {
       supportsImage: true,
       supportsVideo: true,
       supportsThinking: true,
+      thinkingConfig: {
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+          { level: 'max', openclawLevel: 'xhigh' },
+        ],
+        defaultLevel: 'high',
+      },
+      requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
       supportsToolCalling: true,
       agenticReady: false,
       contextWindow: 1_048_576,
       maxTokens: 8_192,
       accessible: true,
     });
+  });
+
+  test('ignores malformed thinking configuration without hiding the model', () => {
+    const [model] = mapAvailableServerModelsToModels([{
+      modelId: 'deepseek-v4-flash',
+      modelName: 'DeepSeek V4 Flash',
+      provider: 'LobsterAI',
+      apiFormat: 'openai',
+      supportsThinking: true,
+      thinkingConfig: {
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+        ],
+        defaultLevel: 'max',
+      },
+    }]);
+
+    expect(model.id).toBe('deepseek-v4-flash');
+    expect(model.supportsThinking).toBe(true);
+    expect(model.thinkingConfig).toBeUndefined();
+  });
+
+  test('filters unknown request capabilities from the server response', () => {
+    const [model] = mapAvailableServerModelsToModels([{
+      modelId: 'capability-test',
+      modelName: 'Capability Test',
+      provider: 'LobsterAI',
+      apiFormat: 'openai',
+      requestCapabilities: [
+        LobsterAIRequestCapability.OptionsV1,
+        'future-unknown-capability',
+      ],
+    }]);
+
+    expect(model.requestCapabilities).toEqual([LobsterAIRequestCapability.OptionsV1]);
   });
 });
 

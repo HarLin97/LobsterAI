@@ -5,6 +5,7 @@ import path from 'path';
 import { afterEach, expect, test, vi } from 'vitest';
 
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, DefaultAgentProfile, encodeAgentAvatarIcon } from '../shared/agent';
+import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 
 vi.mock('electron', () => ({
   app: {
@@ -14,6 +15,7 @@ vi.mock('electron', () => ({
 }));
 
 import { DB_FILENAME } from './appConstants';
+import { CoworkStore } from './coworkStore';
 import { SqliteStore } from './sqliteStore';
 
 let tempDirs: string[] = [];
@@ -111,6 +113,58 @@ test('backfills agent working directories from legacy cowork config only once', 
     { id: 'main', working_directory: '/repo/legacy' },
   ]);
 
+  reopenedStore.close();
+});
+
+test('installs required thinking columns independently from best-effort legacy migrations', async () => {
+  const userDataPath = createTempUserDataPath();
+  createLegacyDatabase(userDataPath);
+
+  const legacyDb = new Database(path.join(userDataPath, DB_FILENAME));
+  const now = Date.now();
+  legacyDb.exec(`
+    ALTER TABLE agents ADD COLUMN WORKING_DIRECTORY TEXT NOT NULL DEFAULT '';
+    CREATE TABLE cowork_sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'idle',
+      cwd TEXT NOT NULL,
+      system_prompt TEXT NOT NULL DEFAULT '',
+      EXECUTION_MODE TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  legacyDb.prepare(
+    `INSERT INTO cowork_sessions (
+      id, title, status, cwd, created_at, updated_at
+    ) VALUES ('legacy-session', 'Legacy Session', 'idle', '/repo/legacy', ?, ?)`,
+  ).run(now, now);
+  legacyDb.close();
+
+  const store = await SqliteStore.create(userDataPath);
+  const db = store.getDatabase();
+  const session = db.prepare(
+    "SELECT thinking_level FROM cowork_sessions WHERE id = 'legacy-session'",
+  ).get() as { thinking_level: string };
+  const agents = db.prepare(
+    'SELECT id, thinking_level FROM agents ORDER BY id',
+  ).all() as Array<{ id: string; thinking_level: string }>;
+
+  expect(session.thinking_level).toBe('');
+  expect(agents).toEqual([
+    { id: 'docs', thinking_level: '' },
+    { id: 'main', thinking_level: '' },
+  ]);
+
+  store.close();
+
+  const reopenedStore = await SqliteStore.create(userDataPath);
+  expect(
+    reopenedStore.getDatabase().prepare(
+      "SELECT thinking_level FROM cowork_sessions WHERE id = 'legacy-session'",
+    ).get(),
+  ).toEqual({ thinking_level: '' });
   reopenedStore.close();
 });
 
@@ -249,7 +303,7 @@ test('migrates legacy agent icons to the default svg avatar', async () => {
   store.close();
 });
 
-test('adds agent pin and sort columns during migration', async () => {
+test('adds agent model preference, pin, and sort columns during migration', async () => {
   const userDataPath = createTempUserDataPath();
   createLegacyDatabase(userDataPath);
 
@@ -258,15 +312,22 @@ test('adds agent pin and sort columns during migration', async () => {
     .pragma('table_info(agents)') as Array<{ name: string }>;
   const columnNames = columns.map((column) => column.name);
   const rows = store.getDatabase()
-    .prepare('SELECT id, pinned, pin_order, sort_order FROM agents ORDER BY id')
-    .all() as Array<{ id: string; pinned: number; pin_order: number | null; sort_order: number | null }>;
+    .prepare('SELECT id, thinking_level, pinned, pin_order, sort_order FROM agents ORDER BY id')
+    .all() as Array<{
+      id: string;
+      thinking_level: string;
+      pinned: number;
+      pin_order: number | null;
+      sort_order: number | null;
+    }>;
 
+  expect(columnNames).toContain('thinking_level');
   expect(columnNames).toContain('pinned');
   expect(columnNames).toContain('pin_order');
   expect(columnNames).toContain('sort_order');
   expect(rows).toEqual([
-    { id: 'docs', pinned: 0, pin_order: null, sort_order: 2 },
-    { id: 'main', pinned: 0, pin_order: null, sort_order: 1 },
+    { id: 'docs', thinking_level: '', pinned: 0, pin_order: null, sort_order: 2 },
+    { id: 'main', thinking_level: '', pinned: 0, pin_order: null, sort_order: 1 },
   ]);
 
   store.close();
@@ -344,4 +405,144 @@ test('adds cowork fork columns during migration', async () => {
   });
 
   store.close();
+});
+
+test('adds scheduled task ids and backfills existing cron sessions from message metadata', async () => {
+  const userDataPath = createTempUserDataPath();
+  createLegacyDatabase(userDataPath);
+
+  const legacyDb = new Database(path.join(userDataPath, DB_FILENAME));
+  const now = Date.now();
+  legacyDb.exec(`
+    CREATE TABLE cowork_sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      claude_session_id TEXT,
+      status TEXT NOT NULL DEFAULT 'idle',
+      pinned INTEGER NOT NULL DEFAULT 0,
+      pin_order INTEGER,
+      cwd TEXT NOT NULL,
+      system_prompt TEXT NOT NULL DEFAULT '',
+      model_override TEXT NOT NULL DEFAULT '',
+      execution_mode TEXT,
+      active_skill_ids TEXT,
+      agent_id TEXT NOT NULL DEFAULT 'main',
+      parent_session_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE cowork_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      metadata TEXT,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  legacyDb.prepare(
+    `INSERT INTO cowork_sessions (
+      id, title, status, pinned, cwd, created_at, updated_at
+    ) VALUES (?, ?, 'completed', 0, '/repo/legacy', ?, ?)`,
+  ).run('legacy-cron-session', 'Renamed scheduled session', now, now);
+  legacyDb.prepare(
+    `INSERT INTO cowork_sessions (
+      id, title, status, pinned, cwd, created_at, updated_at
+    ) VALUES (?, ?, 'completed', 0, '/repo/legacy', ?, ?)`,
+  ).run(
+    'legacy-cron-session-newer',
+    'Newer scheduled session',
+    now + 3,
+    now + 3,
+  );
+  legacyDb.prepare(
+    `INSERT INTO cowork_sessions (
+      id, title, status, pinned, cwd, parent_session_id, created_at, updated_at
+    ) VALUES (?, ?, 'completed', 0, '/repo/legacy', ?, ?, ?)`,
+  ).run(
+    'legacy-cron-fork',
+    'Forked scheduled session',
+    'legacy-cron-session',
+    now + 1,
+    now + 1,
+  );
+  legacyDb.prepare(
+    `INSERT INTO cowork_messages (
+      id, session_id, type, content, metadata, created_at
+    ) VALUES (?, ?, 'assistant', 'done', ?, ?)`,
+  ).run(
+    'legacy-cron-message',
+    'legacy-cron-session',
+    JSON.stringify({
+      [OpenClawCronRunMetadataKey.SessionKey]: 'agent:main:cron:job-daily-summary:run:run-1',
+    }),
+    now,
+  );
+  legacyDb.prepare(
+    `INSERT INTO cowork_messages (
+      id, session_id, type, content, metadata, created_at
+    ) VALUES (?, ?, 'assistant', 'newer done', ?, ?)`,
+  ).run(
+    'legacy-cron-newer-message',
+    'legacy-cron-session-newer',
+    JSON.stringify({
+      [OpenClawCronRunMetadataKey.SessionKey]: 'agent:main:cron:job-daily-summary:run:run-2',
+    }),
+    now + 3,
+  );
+  legacyDb.prepare(
+    `INSERT INTO cowork_messages (
+      id, session_id, type, content, metadata, created_at
+    ) VALUES (?, ?, 'assistant', 'malformed metadata', ?, ?)`,
+  ).run(
+    'legacy-cron-malformed-message',
+    'legacy-cron-session',
+    `{"${OpenClawCronRunMetadataKey.SessionKey}":`,
+    now + 2,
+  );
+  legacyDb.prepare(
+    `INSERT INTO cowork_messages (
+      id, session_id, type, content, metadata, created_at
+    ) VALUES (?, ?, 'assistant', 'forked done', ?, ?)`,
+  ).run(
+    'legacy-cron-fork-message',
+    'legacy-cron-fork',
+    JSON.stringify({
+      [OpenClawCronRunMetadataKey.SessionKey]: 'agent:main:cron:job-daily-summary:run:run-1',
+    }),
+    now + 1,
+  );
+  legacyDb.close();
+
+  const store = await SqliteStore.create(userDataPath);
+  const columns = store.getDatabase()
+    .pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
+  const rows = store.getDatabase()
+    .prepare('SELECT id, scheduled_task_id FROM cowork_sessions ORDER BY id')
+    .all() as Array<{ id: string; scheduled_task_id: string | null }>;
+
+  expect(columns.map(column => column.name)).toContain('scheduled_task_id');
+  expect(rows).toEqual([
+    { id: 'legacy-cron-fork', scheduled_task_id: null },
+    { id: 'legacy-cron-session', scheduled_task_id: 'job-daily-summary' },
+    { id: 'legacy-cron-session-newer', scheduled_task_id: 'job-daily-summary' },
+  ]);
+  expect(new CoworkStore(store.getDatabase()).getSessionIdByScheduledTaskId(
+    'job-daily-summary',
+    'main',
+  )).toBe('legacy-cron-session-newer');
+
+  store.close();
+
+  const reopenedStore = await SqliteStore.create(userDataPath);
+  const reopenedRows = reopenedStore.getDatabase()
+    .prepare('SELECT id, scheduled_task_id FROM cowork_sessions ORDER BY id')
+    .all() as Array<{ id: string; scheduled_task_id: string | null }>;
+  expect(reopenedRows).toEqual(rows);
+  expect(new CoworkStore(reopenedStore.getDatabase()).getSessionIdByScheduledTaskId(
+    'job-daily-summary',
+    'main',
+  )).toBe('legacy-cron-session-newer');
+  reopenedStore.close();
 });

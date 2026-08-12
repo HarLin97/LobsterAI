@@ -23,13 +23,10 @@ import {
   getActivityContext,
   getActivitySlot,
 } from '../../libs/activity/activityClient';
-import { resolveActivityServerBaseUrl } from '../../libs/activity/activityDevelopmentConfig';
 import { resolveAuthSessionStatusFromError } from '../../libs/authSessionManager';
 
 export interface ActivityIpcHandlerDeps {
   ipcMain: IpcMain;
-  isDev: boolean;
-  isPackaged: boolean;
   getMainWindow: () => BrowserWindow | null;
   getServerBaseUrl: () => string;
   getClientVersion: () => string;
@@ -37,7 +34,6 @@ export interface ActivityIpcHandlerDeps {
   hasAuthTokens: () => boolean;
   fetchPublic: (url: string, init?: RequestInit) => Promise<Response>;
   fetchWithAuth: (url: string, init?: RequestInit) => Promise<Response>;
-  developmentServerBaseUrl?: string;
 }
 
 const failure = (error: unknown): ActivityResult<never> => ({
@@ -90,13 +86,6 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
     ActivityHostGetContextInput
   >();
 
-  const getActivityServerBaseUrl = () => resolveActivityServerBaseUrl({
-    defaultBaseUrl: deps.getServerBaseUrl(),
-    developmentOverride: deps.developmentServerBaseUrl,
-    isDev: deps.isDev,
-    isPackaged: deps.isPackaged,
-  });
-
   const activityFetch: ActivityFetch = async (url, init, authMode) => {
     if (authMode === ActivityAuthMode.Required) {
       return deps.fetchWithAuth(url, init);
@@ -128,7 +117,7 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
   const loadSlot = async (input: ActivityHostGetSlotInput) => {
     validateSlotInput(input);
     const result = await getActivitySlot(
-      getActivityServerBaseUrl(),
+      deps.getServerBaseUrl(),
       activityFetch,
       {
         placement: input.placement,
@@ -186,7 +175,7 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
         requireMainRenderer(event);
         requireActiveBinding(input);
         return await getActivityContext(
-          getActivityServerBaseUrl(),
+          deps.getServerBaseUrl(),
           activityFetch,
           input.activityCode,
           input.configRevision,
@@ -219,7 +208,7 @@ export function registerActivityIpcHandlers(deps: ActivityIpcHandlerDeps): void 
         actionsInFlight.add(actionKey);
         try {
           return await executeActivityAction(
-            getActivityServerBaseUrl(),
+            deps.getServerBaseUrl(),
             activityFetch,
             input,
           );

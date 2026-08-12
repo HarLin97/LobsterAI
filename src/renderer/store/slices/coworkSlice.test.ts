@@ -49,6 +49,7 @@ const makeSession = (overrides: Partial<Parameters<typeof addSession>[0]> = {}) 
   id: 'session-1',
   title: 'Test Session',
   claudeSessionId: null,
+  scheduledTaskId: null,
   status: CoworkSessionStatusValue.Completed,
   pinned: false,
   cwd: '/tmp',
@@ -250,6 +251,7 @@ test('updateSessionStatus only refreshes the session updated time on a real tran
   const initialState = coworkReducer(undefined, setSessions([{
     id: 'session-1',
     title: 'Running task',
+    scheduledTaskId: null,
     status: CoworkSessionStatusValue.Running,
     pinned: false,
     agentId: 'main',
@@ -857,6 +859,7 @@ test('updateSessionStatus marks completed inactive sessions unread', () => {
   const state = coworkReducer(undefined, setSessions([{
     id: 'session-1',
     title: 'Completed task',
+    scheduledTaskId: null,
     status: CoworkSessionStatusValue.Running,
     pinned: false,
     agentId: 'main',
@@ -880,6 +883,7 @@ test('agent-scoped session refresh preserves unread tasks from other agents', ()
   let state = coworkReducer(undefined, setSessions([{
     id: 'agent-one-session',
     title: 'Agent one task',
+    scheduledTaskId: null,
     status: CoworkSessionStatusValue.Running,
     pinned: false,
     agentId: 'agent-one',
@@ -894,6 +898,7 @@ test('agent-scoped session refresh preserves unread tasks from other agents', ()
   state = coworkReducer(state, setAgentSessions([{
     id: 'agent-two-session',
     title: 'Agent two task',
+    scheduledTaskId: null,
     status: CoworkSessionStatusValue.Completed,
     pinned: false,
     agentId: 'agent-two',
@@ -909,6 +914,7 @@ test('full session refresh prunes unread completion state outside the snapshot',
   let state = coworkReducer(undefined, setSessions([{
     id: 'stale-session',
     title: 'Stale task',
+    scheduledTaskId: null,
     status: CoworkSessionStatusValue.Running,
     pinned: false,
     agentId: 'main',
@@ -930,6 +936,7 @@ test('running a completed task again clears only its completion unread state', (
   let state = coworkReducer(undefined, setSessions([{
     id: 'rerun-session',
     title: 'Rerun task',
+    scheduledTaskId: null,
     status: CoworkSessionStatusValue.Running,
     pinned: false,
     agentId: 'main',
@@ -954,6 +961,7 @@ test('deleting a session clears its completion unread state', () => {
   let state = coworkReducer(undefined, setSessions([{
     id: 'deleted-session',
     title: 'Deleted task',
+    scheduledTaskId: null,
     status: CoworkSessionStatusValue.Running,
     pinned: false,
     agentId: 'main',
@@ -976,6 +984,7 @@ test('updateSessionStatus does not mark the active completed session unread', ()
     coworkReducer(undefined, setSessions([{
       id: 'session-1',
       title: 'Active task',
+      scheduledTaskId: null,
       status: CoworkSessionStatusValue.Running,
       pinned: false,
       agentId: 'main',

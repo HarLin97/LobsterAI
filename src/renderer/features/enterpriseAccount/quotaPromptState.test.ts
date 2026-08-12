@@ -60,6 +60,7 @@ const createSession = (
   id: 'session-1',
   title: 'Session',
   claudeSessionId: null,
+  scheduledTaskId: null,
   status,
   pinned: false,
   cwd: '/tmp',

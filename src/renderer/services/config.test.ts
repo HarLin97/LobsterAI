@@ -138,6 +138,7 @@ async function loadConfigServiceWithStoredConfig(storedConfig: AppConfig) {
   vi.doMock('./store', () => ({
     localStore: {
       getItem,
+      getItemStrict: getItem,
       setItem,
       removeItem: vi.fn(),
     },
@@ -163,6 +164,103 @@ afterEach(() => {
   vi.resetModules();
   vi.doUnmock('./store');
   delete (globalThis as { window?: unknown }).window;
+});
+
+describe('configService initialization failures', () => {
+  test('rejects when the strict store read fails so startup can schedule repair', async () => {
+    vi.resetModules();
+    const storeError = new Error('store IPC unavailable');
+    vi.doMock('./store', () => ({
+      localStore: {
+        getItem: vi.fn(),
+        getItemStrict: vi.fn(async () => { throw storeError; }),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      },
+    }));
+    (globalThis as unknown as { window?: unknown }).window = { dispatchEvent: vi.fn() };
+
+    const { configService } = await import('./config');
+
+    await expect(configService.init()).rejects.toBe(storeError);
+  });
+
+  test('ignores an older init response that resolves after a newer response', async () => {
+    vi.resetModules();
+    let resolveFirst: ((value: AppConfig) => void) | undefined;
+    const firstRead = new Promise<AppConfig>((resolve) => { resolveFirst = resolve; });
+    const newerConfig: AppConfig = { ...defaultConfig, language: 'en' };
+    const olderConfig: AppConfig = { ...defaultConfig, language: 'zh' };
+    const getItemStrict = vi.fn()
+      .mockImplementationOnce(() => firstRead)
+      .mockResolvedValueOnce(newerConfig);
+    vi.doMock('./store', () => ({
+      localStore: {
+        getItem: getItemStrict,
+        getItemStrict,
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      },
+    }));
+    (globalThis as unknown as { window?: unknown }).window = { dispatchEvent: vi.fn() };
+    const { configService } = await import('./config');
+
+    const firstInit = configService.init();
+    await configService.init();
+    resolveFirst?.(olderConfig);
+    await firstInit;
+
+    expect(configService.getConfig().language).toBe('en');
+  });
+
+  test('keeps an explicit update when an older init response arrives late', async () => {
+    vi.resetModules();
+    let resolveInit: ((value: AppConfig) => void) | undefined;
+    const initRead = new Promise<AppConfig>((resolve) => { resolveInit = resolve; });
+    const storedConfig: AppConfig = { ...defaultConfig, language: 'zh' };
+    const getItemStrict = vi.fn()
+      .mockImplementationOnce(() => initRead)
+      .mockResolvedValueOnce(storedConfig);
+    const getItem = vi.fn(async () => storedConfig);
+    vi.doMock('./store', () => ({
+      localStore: {
+        getItem,
+        getItemStrict,
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      },
+    }));
+    (globalThis as unknown as { window?: unknown }).window = { dispatchEvent: vi.fn() };
+    const { configService } = await import('./config');
+
+    const pendingInit = configService.init();
+    await configService.updateConfig({ language: 'en' });
+    resolveInit?.(storedConfig);
+    await pendingInit;
+
+    expect(configService.getConfig().language).toBe('en');
+  });
+
+  test('does not overwrite persisted config when the update pre-read fails', async () => {
+    vi.resetModules();
+    const readError = new Error('store IPC unavailable');
+    const setItem = vi.fn();
+    vi.doMock('./store', () => ({
+      localStore: {
+        getItem: vi.fn(),
+        getItemStrict: vi.fn(async () => { throw readError; }),
+        setItem,
+        removeItem: vi.fn(),
+      },
+    }));
+    (globalThis as unknown as { window?: unknown }).window = { dispatchEvent: vi.fn() };
+    const { configService } = await import('./config');
+
+    await expect(configService.updateConfig({ language: 'en' })).rejects.toBe(readError);
+
+    expect(configService.getConfig()).toEqual(defaultConfig);
+    expect(setItem).not.toHaveBeenCalled();
+  });
 });
 
 describe('configService theme persistence', () => {
@@ -768,6 +866,7 @@ describe('configService provider migrations', () => {
     vi.doMock('./store', () => ({
       localStore: {
         getItem,
+        getItemStrict: getItem,
         setItem,
         removeItem: vi.fn(),
       },

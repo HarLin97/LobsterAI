@@ -5,7 +5,6 @@ import {
   DocumentIcon as DataFileIcon,
   FolderIcon as DataFolderIcon,
   PlusIcon as AddIcon,
-  ShareIcon,
 } from '@heroicons/react/24/outline';
 import { ArtifactBrowserPartition } from '@shared/artifactPreview/constants';
 import {
@@ -65,6 +64,7 @@ import {
   readLocalServiceProjectDirectoryCandidate as readNodeDeploymentProjectDirectoryCandidate,
   writeLocalServiceProjectDirectory as writeNodeDeploymentProjectDirectory,
 } from '@/services/localServiceProjectDirectoryCache';
+import { normalizeShellFilePath } from '@/services/shellAppsCache';
 import type { RootState } from '@/store';
 import {
   addArtifact,
@@ -156,6 +156,16 @@ import { OfficeZoomControls } from './renderers/OfficeZoomControls';
 import SiteQuotaReplacementDialog from './SiteQuotaReplacementDialog';
 
 const t = (key: string) => i18nService.t(key);
+
+const logArtifactFileActionFailure = (operation: string, detail?: unknown): void => {
+  const message = `${operation} failed${detail ? `: ${String(detail)}` : ''}`;
+  console.warn(`[ArtifactPanel] ${message}`);
+  try {
+    window.electron?.log?.fromRenderer?.('warn', 'ArtifactPanel', message);
+  } catch {
+    // File action diagnostics must never affect the panel interaction.
+  }
+};
 
 const BROWSER_OPENABLE_TYPES = new Set<ArtifactType>(['html', 'svg', 'mermaid']);
 
@@ -1615,6 +1625,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             selectedArtifact.filePath,
           );
           if (!result?.success) {
+            logArtifactFileActionFailure('copy artifact image', result?.error);
             reportSelectedArtifactAction('copy_content', { result: 'failed' });
             window.dispatchEvent(
               new CustomEvent('app:showToast', { detail: result?.error || t('copyFailed') }),
@@ -1628,7 +1639,19 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       } else {
         if (selectedArtifact.filePath && !selectedArtifact.content && selectedArtifact.type !== 'document') {
           const result = await window.electron?.dialog?.readTextFile?.(selectedArtifact.filePath);
+          if (result?.truncated) {
+            logArtifactFileActionFailure(
+              'copy artifact content',
+              `file exceeds read limit; size=${result.size ?? 'unknown'}, readBytes=${result.readBytes ?? 'unknown'}`,
+            );
+            reportSelectedArtifactAction('copy_content', { result: 'failed' });
+            window.dispatchEvent(new CustomEvent('app:showToast', {
+              detail: t('fileMenuCopyContentsTooLarge'),
+            }));
+            return;
+          }
           if (!result?.success || typeof result.content !== 'string') {
+            logArtifactFileActionFailure('copy artifact content', result?.error);
             reportSelectedArtifactAction('copy_content', { result: 'failed' });
             window.dispatchEvent(new CustomEvent('app:showToast', { detail: result?.error || t('copyFailed') }));
             return;
@@ -1644,7 +1667,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       }
       reportSelectedArtifactAction('copy_content', { result: 'success' });
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: t('messageCopied') }));
-    } catch {
+    } catch (error) {
+      logArtifactFileActionFailure('copy artifact content', error);
       reportSelectedArtifactAction('copy_content', { result: 'failed' });
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: t('copyFailed') }));
     }
@@ -4117,19 +4141,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       reportSelectedArtifactAction('open_with_app', {
         openTarget: 'external_app',
       });
-      let filePath = selectedArtifact.filePath;
-      if (filePath.startsWith('file:///')) {
-        filePath = filePath.slice(7);
-      } else if (filePath.startsWith('file://')) {
-        filePath = filePath.slice(7);
-      } else if (filePath.startsWith('file:/')) {
-        filePath = filePath.slice(5);
-      }
-      // Strip leading / before Windows drive letter
-      if (/^\/[A-Za-z]:/.test(filePath)) {
-        filePath = filePath.slice(1);
-      }
-      void openLocalPathWithToast(filePath);
+      void openLocalPathWithToast(normalizeShellFilePath(selectedArtifact.filePath));
     }
   }, [reportSelectedArtifactAction, selectedArtifact]);
 
@@ -4159,6 +4171,17 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       const isTextType = selectedArtifact.type !== 'image' && selectedArtifact.type !== 'document';
       if (isTextType && window.electron?.dialog?.readTextFile) {
         const result = await window.electron.dialog.readTextFile(selectedArtifact.filePath);
+        if (result?.truncated) {
+          logArtifactFileActionFailure(
+            'refresh artifact source',
+            `file exceeds read limit; size=${result.size ?? 'unknown'}, readBytes=${result.readBytes ?? 'unknown'}`,
+          );
+          reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
+          window.dispatchEvent(new CustomEvent('app:showToast', {
+            detail: t('artifactSourceTooLarge'),
+          }));
+          return;
+        }
         if (result?.success && typeof result.content === 'string') {
           dispatch(addArtifact({
             sessionId: selectedArtifact.sessionId,
@@ -4166,7 +4189,11 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
           }));
           reportSelectedArtifactAction('refresh_preview', { result: 'success' });
         } else {
+          logArtifactFileActionFailure('refresh artifact source', result?.error);
           reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
+          window.dispatchEvent(new CustomEvent('app:showToast', {
+            detail: result?.error || t('artifactSourceLoadFailed'),
+          }));
         }
         return;
       }
@@ -4193,11 +4220,18 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         );
         reportSelectedArtifactAction('refresh_preview', { result: 'success' });
       } else {
+        logArtifactFileActionFailure('refresh artifact preview', result?.error);
         reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: result?.error || t('artifactSourceLoadFailed'),
+        }));
       }
-    } catch {
+    } catch (error) {
+      logArtifactFileActionFailure('refresh artifact preview', error);
       reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
-      // File unreadable or missing
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: t('artifactSourceLoadFailed'),
+      }));
     }
   }, [selectedArtifact, dispatch, reportSelectedArtifactAction]);
 
@@ -4526,7 +4560,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                   aria-label={t('htmlShare')}
                   title={t('htmlShare')}
                 >
-                  <ShareIcon className="h-4 w-4" />
+                  <ShareUploadIcon />
                 </button>
               )}
               {showArtifactActionsMenu && (
@@ -7279,7 +7313,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
                   aria-hidden="true"
                 />
               ) : publishAction.kind === ArtifactToolbarPublishActionKind.Share ? (
-                <ShareIcon className="h-4 w-4" />
+                <ShareUploadIcon />
               ) : (
                 <ServiceDeploymentIcon className="h-[18px] w-[18px] translate-y-[1.5px]" />
               )}
@@ -7638,19 +7672,36 @@ const BrowserIcon = () => (
   </svg>
 );
 
-const AnnotateIcon = () => (
+const ShareUploadIcon = () => (
   <svg
-    width="18"
-    height="18"
-    viewBox="0 0 20 20"
+    width="16"
+    height="16"
+    viewBox="0 0 16 16"
     fill="none"
     stroke="currentColor"
-    strokeWidth="1.55"
+    strokeWidth="1.5"
     strokeLinecap="round"
     strokeLinejoin="round"
   >
-    <path d="M10 2.7c4.75 0 8.35 3.05 8.35 6.9 0 3.8-3.6 6.85-8.35 6.85-.95 0-1.86-.13-2.72-.4l-3.45 1.62 1.38-2.55C3 13.85 1.65 11.9 1.65 9.6 1.65 5.75 5.25 2.7 10 2.7z" />
-    <path d="M10 6.65v5.9M7.05 9.6h5.9" />
+    <path d="M2 11v1.5A1.5 1.5 0 0 0 3.5 14h9a1.5 1.5 0 0 0 1.5-1.5V11" />
+    <path d="M5 5l3-3 3 3" />
+    <path d="M8 2v9" />
+  </svg>
+);
+
+const AnnotateIcon = () => (
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M13.4 9.8a1.9 1.9 0 01-1.9 1.9H6l-3.4 2.9V4.8a1.9 1.9 0 011.9-1.9h7a1.9 1.9 0 011.9 1.9z" />
+    <path d="M8 5.2v4.2M5.9 7.3h4.2" />
   </svg>
 );
 

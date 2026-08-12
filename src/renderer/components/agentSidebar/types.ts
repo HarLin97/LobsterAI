@@ -15,6 +15,7 @@ export interface AgentSidebarTaskNode {
   id: string;
   agentId: string;
   title: string;
+  isScheduledTask: boolean;
   status: CoworkSessionStatus;
   pinned: boolean;
   pinOrder?: number | null;

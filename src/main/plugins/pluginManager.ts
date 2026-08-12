@@ -10,6 +10,11 @@ import {
   findThirdPartyExtensionsDir,
   listBundledOpenClawExtensionManifests,
 } from '../libs/openclawLocalExtensions';
+import {
+  cleanupPluginInstallStagingDir,
+  createPluginInstallStagingDir,
+  publishStagedPluginDirectory,
+} from './pluginInstallPublisher';
 
 export interface PluginInstallParams {
   source: PluginSource;
@@ -274,6 +279,8 @@ export class PluginManager {
       return { ok: false, error: `OpenClaw CLI not found at ${openclawMjs}` };
     }
 
+    let stagingDir: string | null = null;
+
     try {
       let installSpec: string;
 
@@ -300,11 +307,12 @@ export class PluginManager {
           return { ok: false, error: `Unknown source: ${params.source}` };
       }
 
-      // Run openclaw plugins install into a temp staging directory, then copy
-      // to the actual extensions dir. This avoids:
+      // Run openclaw plugins install into an isolated staging directory, then
+      // atomically publish it to the actual extensions dir. This avoids:
       // 1. EPERM from gateway locking the target directory
-      // 2. Path mismatch (openclaw creates extensions/ subdir under STATE_DIR)
-      const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-plugin-stage-'));
+      // 2. Recreating OpenClaw peer dependency links during a recursive copy
+      // 3. Path mismatch (openclaw creates extensions/ subdir under STATE_DIR)
+      stagingDir = createPluginInstallStagingDir(extensionsDir);
       onLog?.(`Installing plugin from ${installSpec}...\n`);
       const installEnv: NodeJS.ProcessEnv = {
         ...process.env,
@@ -330,7 +338,7 @@ export class PluginManager {
         return { ok: false, error: result.stderr || `Install exited with code ${result.code}` };
       }
 
-      // Discover plugin from staging extensions/ subdir and copy to final location
+      // Discover the plugin in staging before publishing it to the final location.
       const stagedExtDir = path.join(stagingDir, 'extensions');
       const pluginId = this.discoverInstalledPluginId(
         fs.existsSync(stagedExtDir) ? stagedExtDir : stagingDir,
@@ -343,20 +351,11 @@ export class PluginManager {
       const stagedPluginDir = path.join(stagedExtDir, pluginId);
       const targetPluginDir = path.join(extensionsDir, pluginId);
 
-      // Copy from staging to final extensions directory (async to avoid blocking main thread)
-      onLog?.(`Copying ${pluginId} to extensions directory...\n`);
-      try {
-        if (fs.existsSync(targetPluginDir)) {
-          await fs.promises.rm(targetPluginDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
-        }
-      } catch {
-        // On Windows the gateway may hold file handles; proceed with force-overwrite
-      }
-      await fs.promises.cp(stagedPluginDir, targetPluginDir, { recursive: true, force: true });
+      // Publish with same-volume renames so OpenClaw peer dependency junctions
+      // are preserved without requiring Windows symlink privileges.
+      onLog?.(`Publishing ${pluginId} to extensions directory...\n`);
+      await publishStagedPluginDirectory(stagedPluginDir, targetPluginDir, pluginId);
       onLog?.(`Done.\n`);
-
-      // Cleanup staging
-      fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
 
       const version = readPluginVersion(targetPluginDir) || params.version;
 
@@ -376,6 +375,10 @@ export class PluginManager {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, error: message };
+    } finally {
+      if (stagingDir) {
+        await cleanupPluginInstallStagingDir(stagingDir);
+      }
     }
   }
 

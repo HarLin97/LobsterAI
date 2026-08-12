@@ -11,6 +11,7 @@ import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { imService } from '../../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
+import { resolveThinkingLevelForModel } from '../../services/modelThinkingLevelMemory';
 import type { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
 import type { PresetAgent } from '../../types/agent';
@@ -374,6 +375,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
         systemPrompt: systemPrompt.trim(),
         identity: identity.trim(),
         model: model ? toOpenClawModelRef(model) : '',
+        thinkingLevel: resolveThinkingLevelForModel(model),
         workingDirectory: workingDirectory.trim(),
         icon: icon.trim() || undefined,
         skillIds,

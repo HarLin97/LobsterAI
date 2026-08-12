@@ -171,6 +171,21 @@ const translations: Record<LanguageType, Record<string, string>> = {
     inputFileLabel: '输入文件',
     inputFolderLabel: '输入文件夹',
     folderAttachmentType: '文件夹',
+    fileAttachmentTypeWord: 'Word 文档',
+    fileAttachmentTypeSpreadsheet: '电子表格',
+    fileAttachmentTypePresentation: '演示文稿',
+    fileAttachmentTypePdf: 'PDF 文档',
+    fileAttachmentTypeArchive: '压缩文件',
+    fileAttachmentTypeCode: '代码文件',
+    fileAttachmentTypeText: '文本文件',
+    fileAttachmentTypeSubtitle: '字幕文件',
+    fileAttachmentTypeAudio: '音频文件',
+    fileAttachmentTypeVideo: '视频文件',
+    fileAttachmentTypeImage: '图片文件',
+    fileAttachmentTypeFile: '文件',
+    coworkFileAttachmentRevealHint: '点击在文件夹中显示',
+    coworkFileAttachmentMissing: '文件不存在，可能已被移动或删除',
+    coworkFileAttachmentRevealFailed: '无法在文件夹中显示该文件',
     imageVisionHint:
       '当前模型未启用图片输入，图片将以文件路径形式发送。若该模型本身支持图片理解，可在模型配置中开启图片输入选项。',
     copied: '已复制',
@@ -295,7 +310,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutConflict: '快捷键 "{0}" 已被 "{1}" 使用',
     shortcutSearchPlaceholder: '搜索快捷键',
     shortcutScopeHint:
-      '快捷键仅在 LobsterAI 窗口获得焦点时生效；正在编辑输入框时不会触发全局快捷键。',
+      '快捷键仅在 LobsterAI 窗口获得焦点时生效；输入框聚焦时，仅带有 Cmd/Ctrl 修饰键的快捷键会触发。',
     shortcutNoResults: '没有匹配的快捷键',
     shortcutClear: '清除快捷键',
     shortcutEditCommand: '更改 {command} 的快捷键',
@@ -318,7 +333,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutShowShortcuts: '打开快捷键设置',
     shortcutPreviousAgent: '上一个 Agent',
     shortcutNextAgent: '下一个 Agent',
-    shortcutShowCurrentAgentTasks: '查看当前 Agent 任务记录',
+    shortcutShowCurrentAgentTasks: '展开当前 Agent 任务记录',
+    shortcutCollapseCurrentAgentTasks: '折叠当前 Agent 任务记录',
     shortcutOpenAgentTaskSlot: '打开当前 Agent 任务 {slot}',
     shortcutOpenSettingsTab: '打开设置：{tab}',
     shortcutDescNewChat: '开始一个新的 LobsterAI 任务',
@@ -338,6 +354,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutDescPreviousAgent: '切换到左侧列表里的上一个 Agent',
     shortcutDescNextAgent: '切换到左侧列表里的下一个 Agent',
     shortcutDescShowCurrentAgentTasks: '展开当前 Agent 的历史任务记录',
+    shortcutDescCollapseCurrentAgentTasks: '收起当前 Agent 下所有已展开的任务记录',
     shortcutDescOpenAgentTaskSlot: '打开当前 Agent 历史任务列表中的第 {slot} 个任务',
     shortcutDescOpenSettingsTab: '切换到设置里的「{tab}」页',
     shortcutAgentTaskSlotUnavailable: '当前 Agent 没有第 {slot} 个任务记录',
@@ -581,6 +598,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactNoContent: '无内容',
     artifactSourceLoading: '正在加载源码...',
     artifactSourceLoadFailed: '源码加载失败',
+    artifactSourceTooLarge: '文件过大，无法完整刷新预览',
     artifactSourceTruncated: '文件较大，仅显示前 {size}',
     markdownLargePreviewNotice: '内容较大，已显示轻量预览',
     artifactPanelToggle: '预览面板',
@@ -972,8 +990,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactPreviewCardShowLess: '收起',
     artifactPreviewCardOpenPreview: '打开预览',
     artifactPreviewCardOpenWith: '打开方式',
-    artifactPreviewCardLobsterBrowser: '有道龙虾浏览器',
-    artifactPreviewCardOpenInLobsterBrowser: '在有道龙虾浏览器中打开',
+    artifactPreviewCardLobsterBrowser: 'LobsterAI',
+    artifactPreviewCardOpenInLobsterBrowser: '在 LobsterAI 中打开',
     artifactFileKindWebsite: '网站',
     artifactFileKindDocument: '文档',
     artifactFileKindSpreadsheet: '电子表格',
@@ -985,6 +1003,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactFileKindText: '文本',
     artifactFileKindFile: '文件',
     artifactOpenWithApp: '使用系统应用打开',
+    artifactOpenWithDefaultSuffix: '（默认）',
+    artifactOpenWithLoadingApps: '正在加载应用…',
     artifactOpenInFolder: '在文件夹中打开',
     artifactDocumentPreviewTitle: '文档预览',
     artifactDocumentLoading: '正在加载文档...',
@@ -1061,6 +1081,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelSelectorLearnMore: '了解订阅权益',
     modelSupportsImageInputBadge: '可读图',
     modelSupportsThinkingBadge: '深度思考',
+    modelThinkingMode: '思考模式',
+    modelThinkingStrength: '思考强度',
+    modelThinkingLevelOff: '关闭',
+    modelThinkingLevelMinimal: '极低',
+    modelThinkingLevelLow: '低',
+    modelThinkingLevelMedium: '中',
+    modelThinkingLevelHigh: '高',
+    modelThinkingLevelXHigh: '超高',
+    modelThinkingLevelMax: '最大',
     modelCostMultiplierLabel: '积分消耗倍率：',
     mediaTierSpecLabel: '规格',
     mediaMillionTokensUnit: '1M tokens',
@@ -1371,6 +1400,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkToolInput: '工具参数',
     coworkToolResult: '执行结果',
     coworkToolRunning: '执行中',
+    coworkThinking: '正在思考',
+    coworkProcessing: '正在处理',
     coworkContextMaintenanceRunning: '正在整理上下文...',
     coworkModelResponseWaitingLong: '模型仍在响应，请耐心等待…',
     coworkToolNoErrorDetail: '执行失败（无详细错误输出）',
@@ -1378,6 +1409,34 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkToolOutputLines: '行',
     coworkToolOutputLineCount: '{count} {unit}输出',
     coworkToolLargeOutput: '大段输出（{size}）',
+    coworkActivitySegmentCommand: '运行了 {count} 个命令',
+    coworkActivitySegmentCommands: '运行了 {count} 个命令',
+    coworkActivitySegmentFileRead: '读取了 {count} 个文件',
+    coworkActivitySegmentFilesRead: '读取了 {count} 个文件',
+    coworkActivitySegmentEdit: '进行了 {count} 次编辑',
+    coworkActivitySegmentEdits: '进行了 {count} 次编辑',
+    coworkActivitySegmentTool: '调用了 {count} 次工具',
+    coworkActivitySegmentTools: '调用了 {count} 次工具',
+    coworkActivitySegmentSeparator: '、',
+    coworkActivityThoughtProcess: '思考过程',
+    coworkActivityThinkingNow: '思考中…',
+    coworkActivityLiveCommand: '正在运行 {target}',
+    coworkActivityLiveCommandGeneric: '正在运行命令',
+    coworkActivityLiveRead: '正在读取 {target}',
+    coworkActivityLiveReadGeneric: '正在读取文件',
+    coworkActivityLiveEdit: '正在编辑 {target}',
+    coworkActivityLiveEditGeneric: '正在编辑文件',
+    coworkActivityLiveWrite: '正在写入 {target}',
+    coworkActivityLiveWriteGeneric: '正在写入文件',
+    coworkActivityLiveTool: '正在使用 {target}',
+    coworkToolWaitingSubagents: '等待子 Agent 完成',
+    coworkActivityLiveWaitSubagents: '正在等待子 Agent 完成',
+    coworkActivityLiveSpawnSubagent: '正在启动子 Agent',
+    coworkTurnProcessDuration: '耗时 {duration}',
+    coworkTurnProcess: '执行过程',
+    coworkDurationSecondsOnly: '{seconds}秒',
+    coworkDurationMinutes: '{minutes}分钟 {seconds}秒',
+    coworkDurationHours: '{hours}小时 {minutes}分钟',
     coworkTodosTitle: 'Todos',
     coworkTodoItems: '项',
     coworkTodoCompleted: '已完成',
@@ -1387,6 +1446,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkTodoUnknownStatus: '未知状态',
     subagentWorking: 'Agent 工作中...',
     subagentCompleted: '已完成',
+    subagentRunning: '工作中',
+    subagentFailed: '出错',
     subTaskRoleUser: '任务指令',
     subTaskRoleTool: '工具调用',
     subTaskNoHistory: '暂无对话记录',
@@ -1447,6 +1508,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     myAgentSidebarExpandMore: '展开显示',
     myAgentSidebarCollapse: '折叠显示',
     myAgentSidebarPendingPermission: '待确认',
+    myAgentSidebarScheduledTask: '定时任务',
     myAgentSidebarNoAgents: '还没有 Agent',
     myAgentSidebarNoTasks: '暂无任务',
     myAgentSidebarNewTask: '新建任务',
@@ -2348,6 +2410,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openFileFailed: '打开文件失败',
     showInFolderFailed: '打开文件所在目录失败',
     fileCreated: '文件已创建',
+    fileMenuOpenWith: '打开方式',
+    fileMenuSaveAs: '另存为…',
+    fileMenuCopyPath: '复制路径',
+    fileMenuCopyContents: '复制文件内容',
+    fileMenuCopyContentsTooLarge: '文件过大，未复制，以避免只复制部分内容',
+    fileMenuCopyImage: '复制图片',
+    fileMenuRevealFinder: '在 Finder 中显示',
+    fileMenuRevealExplorer: '在文件资源管理器中显示',
+    fileMenuSaveFailed: '保存文件失败',
 
     // 插件管理
     pluginsTab: '插件',
@@ -3456,6 +3527,21 @@ const translations: Record<LanguageType, Record<string, string>> = {
     inputFileLabel: 'Input Files',
     inputFolderLabel: 'Input Folder',
     folderAttachmentType: 'Folder',
+    fileAttachmentTypeWord: 'Word document',
+    fileAttachmentTypeSpreadsheet: 'Spreadsheet',
+    fileAttachmentTypePresentation: 'Presentation',
+    fileAttachmentTypePdf: 'PDF document',
+    fileAttachmentTypeArchive: 'Archive',
+    fileAttachmentTypeCode: 'Code file',
+    fileAttachmentTypeText: 'Text file',
+    fileAttachmentTypeSubtitle: 'Subtitle file',
+    fileAttachmentTypeAudio: 'Audio file',
+    fileAttachmentTypeVideo: 'Video file',
+    fileAttachmentTypeImage: 'Image file',
+    fileAttachmentTypeFile: 'File',
+    coworkFileAttachmentRevealHint: 'Click to reveal in folder',
+    coworkFileAttachmentMissing: 'File not found. It may have been moved or deleted.',
+    coworkFileAttachmentRevealFailed: 'Could not reveal this file in its folder.',
     imageVisionHint:
       'Image input is not enabled for the current model. Images will be sent as file paths. If the model supports vision, you can enable image input in the model configuration.',
     copied: 'Copied',
@@ -3610,7 +3696,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutConflict: 'Shortcut "{0}" is already used by "{1}"',
     shortcutSearchPlaceholder: 'Search shortcuts',
     shortcutScopeHint:
-      'Shortcuts only run while the LobsterAI window is focused; global shortcuts are ignored while editing text fields.',
+      'Shortcuts only run while the LobsterAI window is focused; while a text field is focused, only shortcuts with a Cmd/Ctrl modifier trigger.',
     shortcutNoResults: 'No matching shortcuts',
     shortcutClear: 'Clear shortcut',
     shortcutEditCommand: 'Change {command} shortcut',
@@ -3633,7 +3719,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutShowShortcuts: 'Open Shortcut Settings',
     shortcutPreviousAgent: 'Previous Agent',
     shortcutNextAgent: 'Next Agent',
-    shortcutShowCurrentAgentTasks: 'Show Current Agent Tasks',
+    shortcutShowCurrentAgentTasks: 'Expand Current Agent Tasks',
+    shortcutCollapseCurrentAgentTasks: 'Collapse Current Agent Tasks',
     shortcutOpenAgentTaskSlot: 'Open Current Agent Task {slot}',
     shortcutOpenSettingsTab: 'Open Settings: {tab}',
     shortcutDescNewChat: 'Start a new LobsterAI task',
@@ -3653,6 +3740,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutDescPreviousAgent: 'Switch to the previous agent in the sidebar',
     shortcutDescNextAgent: 'Switch to the next agent in the sidebar',
     shortcutDescShowCurrentAgentTasks: 'Expand the current agent task history',
+    shortcutDescCollapseCurrentAgentTasks: 'Collapse all expanded task history under the current agent',
     shortcutDescOpenAgentTaskSlot: 'Open task {slot} in the current agent history list',
     shortcutDescOpenSettingsTab: 'Switch to the {tab} tab in settings',
     shortcutAgentTaskSlotUnavailable: 'The current agent does not have task {slot}',
@@ -3900,6 +3988,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactNoContent: 'No content',
     artifactSourceLoading: 'Loading source...',
     artifactSourceLoadFailed: 'Failed to load source',
+    artifactSourceTooLarge: 'The file is too large to refresh the preview completely',
     artifactSourceTruncated: 'Large file, showing the first {size}',
     markdownLargePreviewNotice: 'Large content, showing a lightweight preview',
     artifactPanelToggle: 'Artifacts',
@@ -4318,8 +4407,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactPreviewCardShowLess: 'Show less',
     artifactPreviewCardOpenPreview: 'Open preview',
     artifactPreviewCardOpenWith: 'Open with',
-    artifactPreviewCardLobsterBrowser: 'LobsterAI Browser',
-    artifactPreviewCardOpenInLobsterBrowser: 'Open in LobsterAI Browser',
+    artifactPreviewCardLobsterBrowser: 'LobsterAI',
+    artifactPreviewCardOpenInLobsterBrowser: 'Open in LobsterAI',
     artifactFileKindWebsite: 'Website',
     artifactFileKindDocument: 'Document',
     artifactFileKindSpreadsheet: 'Spreadsheet',
@@ -4331,6 +4420,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactFileKindText: 'Text',
     artifactFileKindFile: 'File',
     artifactOpenWithApp: 'Open with System App',
+    artifactOpenWithDefaultSuffix: ' (Default)',
+    artifactOpenWithLoadingApps: 'Loading apps…',
     artifactOpenInFolder: 'Reveal in Folder',
     artifactDocumentPreviewTitle: 'Document Preview',
     artifactDocumentLoading: 'Loading document...',
@@ -4409,6 +4500,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelSelectorLearnMore: 'Learn about subscription',
     modelSupportsImageInputBadge: 'Reads images',
     modelSupportsThinkingBadge: 'Deep thinking',
+    modelThinkingMode: 'Thinking mode',
+    modelThinkingStrength: 'Thinking strength',
+    modelThinkingLevelOff: 'Off',
+    modelThinkingLevelMinimal: 'Minimal',
+    modelThinkingLevelLow: 'Low',
+    modelThinkingLevelMedium: 'Medium',
+    modelThinkingLevelHigh: 'High',
+    modelThinkingLevelXHigh: 'Extra high',
+    modelThinkingLevelMax: 'Max',
     modelCostMultiplierLabel: 'Cost multiplier: ',
     mediaTierSpecLabel: 'Spec',
     mediaMillionTokensUnit: '1M tokens',
@@ -4752,6 +4852,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkToolInput: 'Tool Input',
     coworkToolResult: 'Result',
     coworkToolRunning: 'Running...',
+    coworkThinking: 'Thinking',
+    coworkProcessing: 'Working',
     coworkContextMaintenanceRunning: 'Organizing context...',
     coworkModelResponseWaitingLong: 'The model is still responding. This may take a little longer…',
     coworkToolNoErrorDetail: 'Failed (no error details)',
@@ -4759,6 +4861,34 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkToolOutputLines: 'lines',
     coworkToolOutputLineCount: '{count} {unit} of output',
     coworkToolLargeOutput: 'Large output ({size})',
+    coworkActivitySegmentCommand: 'ran {count} command',
+    coworkActivitySegmentCommands: 'ran {count} commands',
+    coworkActivitySegmentFileRead: 'read {count} file',
+    coworkActivitySegmentFilesRead: 'read {count} files',
+    coworkActivitySegmentEdit: 'made {count} edit',
+    coworkActivitySegmentEdits: 'made {count} edits',
+    coworkActivitySegmentTool: 'used {count} tool',
+    coworkActivitySegmentTools: 'used {count} tools',
+    coworkActivitySegmentSeparator: ', ',
+    coworkActivityThoughtProcess: 'Thought process',
+    coworkActivityThinkingNow: 'Thinking…',
+    coworkActivityLiveCommand: 'Running {target}',
+    coworkActivityLiveCommandGeneric: 'Running a command',
+    coworkActivityLiveRead: 'Reading {target}',
+    coworkActivityLiveReadGeneric: 'Reading a file',
+    coworkActivityLiveEdit: 'Editing {target}',
+    coworkActivityLiveEditGeneric: 'Editing a file',
+    coworkActivityLiveWrite: 'Creating {target}',
+    coworkActivityLiveWriteGeneric: 'Creating a file',
+    coworkActivityLiveTool: 'Using {target}',
+    coworkToolWaitingSubagents: 'Waiting for subagents',
+    coworkActivityLiveWaitSubagents: 'Waiting for subagents',
+    coworkActivityLiveSpawnSubagent: 'Starting a subagent',
+    coworkTurnProcessDuration: 'Worked for {duration}',
+    coworkTurnProcess: 'Process',
+    coworkDurationSecondsOnly: '{seconds}s',
+    coworkDurationMinutes: '{minutes}m {seconds}s',
+    coworkDurationHours: '{hours}h {minutes}m',
     coworkTodosTitle: 'Todos',
     coworkTodoItems: 'items',
     coworkTodoCompleted: 'completed',
@@ -4768,6 +4898,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkTodoUnknownStatus: 'Unknown status',
     subagentWorking: 'Agent working...',
     subagentCompleted: 'Completed',
+    subagentRunning: 'Working',
+    subagentFailed: 'Failed',
     subTaskRoleUser: 'Task',
     subTaskRoleTool: 'Tool Call',
     subTaskNoHistory: 'No history yet',
@@ -4831,6 +4963,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     myAgentSidebarExpandMore: 'Show more',
     myAgentSidebarCollapse: 'Show less',
     myAgentSidebarPendingPermission: 'Confirm',
+    myAgentSidebarScheduledTask: 'Scheduled task',
     myAgentSidebarNoAgents: 'No agents yet',
     myAgentSidebarNoTasks: 'No tasks yet',
     myAgentSidebarNewTask: 'New task',
@@ -5790,6 +5923,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openFileFailed: 'Failed to open file',
     showInFolderFailed: 'Failed to show file in folder',
     fileCreated: 'File created',
+    fileMenuOpenWith: 'Open With',
+    fileMenuSaveAs: 'Save As…',
+    fileMenuCopyPath: 'Copy Path',
+    fileMenuCopyContents: 'Copy File Contents',
+    fileMenuCopyContentsTooLarge: 'File is too large and was not copied, to avoid copying partial content',
+    fileMenuCopyImage: 'Copy Image',
+    fileMenuRevealFinder: 'Reveal in Finder',
+    fileMenuRevealExplorer: 'Reveal in File Explorer',
+    fileMenuSaveFailed: 'Failed to save file',
 
     // Plugins
     pluginsTab: 'Plugins',
@@ -6812,6 +6954,7 @@ const readLanguageHint = (): LanguageType => {
 class I18nService {
   private currentLanguage: LanguageType = 'zh';
   private listeners = new Set<() => void>();
+  private initializeGeneration = 0;
 
   constructor() {
     this.currentLanguage = readLanguageHint();
@@ -6819,6 +6962,10 @@ class I18nService {
 
   // 初始化语言设置
   async initialize(): Promise<void> {
+    const initializeGeneration = ++this.initializeGeneration;
+    let nextLanguage: LanguageType = 'en';
+    let configUpdate: { language?: LanguageType; language_initialized?: boolean } | undefined;
+
     try {
       const config = configService.getConfig();
 
@@ -6833,10 +6980,10 @@ class I18nService {
         if (hasCustomLanguage) {
           // 旧用户已手动设置过语言(非默认值),保留他们的设置
           console.log(`[i18n] Legacy user detected with custom language: ${config.language}`);
-          this.currentLanguage = config.language;
-          configService.updateConfig({
+          nextLanguage = config.language;
+          configUpdate = {
             language_initialized: true,
-          });
+          };
         } else {
           // 新用户或使用默认中文的旧用户:检测系统语言
           try {
@@ -6847,41 +6994,64 @@ class I18nService {
               `[i18n] First run detected. System locale: ${systemLocale}, default language: ${defaultLanguage}`,
             );
 
-            this.currentLanguage = defaultLanguage;
+            nextLanguage = defaultLanguage;
 
             // 保存语言配置和初始化标记
-            configService.updateConfig({
+            configUpdate = {
               language: defaultLanguage,
               language_initialized: true,
-            });
+            };
           } catch (error) {
-            console.error('Failed to get system locale:', error);
+            console.error('[i18n] Failed to get system locale:', error);
             // 如果获取系统语言失败,默认使用英文
-            this.currentLanguage = 'en';
-            configService.updateConfig({
+            nextLanguage = 'en';
+            configUpdate = {
               language: 'en',
               language_initialized: true,
-            });
+            };
           }
         }
       } else {
         // 非首次启动:使用已保存的语言配置
         if (config.language && (config.language === 'zh' || config.language === 'en')) {
-          this.currentLanguage = config.language;
+          nextLanguage = config.language;
         } else {
           // 如果配置无效,fallback 到英文
-          this.currentLanguage = 'en';
-          configService.updateConfig({
+          nextLanguage = 'en';
+          configUpdate = {
             language: 'en',
-          });
+          };
         }
       }
     } catch (error) {
-      console.error('Failed to initialize language:', error);
+      console.error('[i18n] Failed to initialize language:', error);
       // 默认使用英文
-      this.currentLanguage = 'en';
+      nextLanguage = 'en';
     }
-    this.persistLanguageHint(this.currentLanguage);
+
+    // App may start a fresh attempt after timing out an IPC call. Only the
+    // newest invocation may change language, persistence, or the splash hint.
+    if (initializeGeneration !== this.initializeGeneration) {
+      return;
+    }
+
+    this.applyLanguage(nextLanguage);
+    this.persistLanguageHint(nextLanguage);
+    if (configUpdate) {
+      try {
+        await configService.updateConfig(configUpdate);
+      } catch (error) {
+        console.error('[i18n] Failed to persist initialized language:', error);
+      }
+    }
+  }
+
+  private applyLanguage(language: LanguageType): void {
+    const hasChanged = this.currentLanguage !== language;
+    this.currentLanguage = language;
+    if (hasChanged) {
+      this.listeners.forEach(listener => listener());
+    }
   }
 
   // 持久化语言提示，供 index.html 的启动屏在下次启动时读取
@@ -6904,30 +7074,24 @@ class I18nService {
 
   // 设置语言
   setLanguage(language: LanguageType, options: { persist?: boolean } = {}): void {
+    // Explicit repair/user choices supersede any locale lookup that is still
+    // in flight from degraded startup.
+    this.initializeGeneration += 1;
     const { persist = true } = options;
-    const hasChanged = this.currentLanguage !== language;
-    this.currentLanguage = language;
+    this.applyLanguage(language);
 
-    if (hasChanged) {
-      this.listeners.forEach(listener => listener());
-    }
+    // The lightweight splash hint is safe to refresh even when callers are
+    // applying already-persisted config and must avoid another config write.
+    this.persistLanguageHint(language);
 
     if (!persist) {
       return;
     }
 
-    this.persistLanguageHint(language);
-
-    // 更新配置
-    try {
-      const config = configService.getConfig();
-      configService.updateConfig({
-        ...config,
-        language,
-      });
-    } catch (error) {
-      console.error('Failed to save language setting:', error);
-    }
+    // 更新配置；只提交语言字段，避免用旧快照覆盖并发设置修改。
+    void configService.updateConfig({ language }).catch((error) => {
+      console.error('[i18n] Failed to save language setting:', error);
+    });
   }
 
   // 获取当前语言

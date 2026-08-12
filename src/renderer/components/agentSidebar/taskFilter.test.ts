@@ -19,6 +19,7 @@ const makeTask = (
   id,
   agentId: 'main',
   title: id,
+  isScheduledTask: false,
   status: indicator === AgentSidebarIndicator.Running
     ? CoworkSessionStatusValue.Running
     : CoworkSessionStatusValue.Completed,

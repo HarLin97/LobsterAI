@@ -467,14 +467,17 @@ const IMSettings: React.FC = () => {
     };
 
     const handleWeixinDmPolicyMenuKeydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsWeixinDmPolicyMenuOpen(false);
+      if (event.key !== 'Escape') return;
+      // Claim the press during capture so the settings panel stays open.
+      event.preventDefault();
+      setIsWeixinDmPolicyMenuOpen(false);
     };
 
     document.addEventListener('pointerdown', closeWeixinDmPolicyMenu);
-    document.addEventListener('keydown', handleWeixinDmPolicyMenuKeydown);
+    document.addEventListener('keydown', handleWeixinDmPolicyMenuKeydown, true);
     return () => {
       document.removeEventListener('pointerdown', closeWeixinDmPolicyMenu);
-      document.removeEventListener('keydown', handleWeixinDmPolicyMenuKeydown);
+      document.removeEventListener('keydown', handleWeixinDmPolicyMenuKeydown, true);
     };
   }, [isWeixinDmPolicyMenuOpen]);
 
@@ -3223,6 +3226,9 @@ const IMSettings: React.FC = () => {
             onClose={() => {
               if (!isDeletingInstance) setDeleteConfirmTarget(null);
             }}
+            onEscape={() => {
+              if (!isDeletingInstance) setDeleteConfirmTarget(null);
+            }}
             overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
             className="w-full max-w-sm mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-5"
           >
@@ -3256,7 +3262,12 @@ const IMSettings: React.FC = () => {
         )}
 
         {connectivityModalPlatform && (
-          <Modal onClose={() => setConnectivityModalPlatform(null)} overlayClassName="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" className="w-full max-w-2xl bg-surface rounded-2xl shadow-modal border border-border overflow-hidden">
+          <Modal
+            onClose={() => setConnectivityModalPlatform(null)}
+            onEscape={() => setConnectivityModalPlatform(null)}
+            overlayClassName="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+            className="w-full max-w-2xl bg-surface rounded-2xl shadow-modal border border-border overflow-hidden"
+          >
               <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                 <div className="text-sm font-semibold text-foreground">
                   {`${i18nService.t(connectivityModalPlatform)} ${i18nService.t('imConnectivitySectionTitle')}`}

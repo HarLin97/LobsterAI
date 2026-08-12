@@ -56,7 +56,7 @@ import {
   openStartupCreditCampaign,
   useStartupCreditCampaignEntry,
 } from '../startupCreditCampaignBridge';
-import { useAgentSelectedModel } from './agentModelSelection';
+import { resolveModelThinkingLevel, useAgentSelectedModel } from './agentModelSelection';
 import { CoworkUiEvent } from './constants';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import CoworkSessionDetail from './CoworkSessionDetail';
@@ -174,6 +174,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     homeQuotaReason,
     currentAgentSelectedModel,
   );
+  const currentAgentThinkingLevel = resolveModelThinkingLevel(
+    currentAgentSelectedModel,
+    currentAgent?.thinkingLevel,
+  );
   const homeDraftCollaborationMode = useSelector((state: RootState) => (
     state.cowork.draftCollaborationModes.__home__ || CoworkCollaborationMode.Default
   ));
@@ -254,26 +258,43 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   };
 
   useEffect(() => {
+    let cancelled = false;
     const init = async () => {
-      await coworkService.init();
-      const initialEngineStatus = await coworkService.getOpenClawEngineStatus();
-      if (initialEngineStatus) {
-        setOpenClawStatus(initialEngineStatus);
-      }
-      // Load quick actions with localization
       try {
+        await coworkService.init();
+        const initialEngineStatus = coworkService.getOpenClawEngineStatusSnapshot();
+        if (!cancelled && initialEngineStatus) {
+          setOpenClawStatus(initialEngineStatus);
+        }
+        // Load quick actions with localization
         quickActionService.initialize();
         const actions = await quickActionService.getLocalizedActions();
-        dispatch(setActions(actions));
+        if (!cancelled) {
+          dispatch(setActions(actions));
+        }
       } catch (error) {
-        console.error('Failed to load quick actions:', error);
+        console.error('[CoworkView] initialization failed:', error);
+        try {
+          window.electron?.log?.fromRenderer?.(
+            'error',
+            'CoworkView',
+            `initialization failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        } catch {
+          // Diagnostic logging must not keep the view in a loading state.
+        }
+      } finally {
+        if (!cancelled) {
+          // Individual service stages are best-effort and can recover via
+          // their event listeners; never leave the whole view spinning.
+          setIsInitialized(true);
+        }
       }
       // Intentionally no API-config check here: mounting this view (e.g. when
       // switching sidebar tabs) must never pop up the custom-model settings
       // page. Missing config is surfaced at send time instead.
-      setIsInitialized(true);
     };
-    init();
+    void init();
 
     const unsubscribeOpenClawStatus = coworkService.onOpenClawEngineStatus((status) => {
       setOpenClawStatus(status);
@@ -290,6 +311,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     });
 
     return () => {
+      cancelled = true;
       unsubscribe();
       unsubscribeOpenClawStatus();
     };
@@ -386,6 +408,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         id: tempSessionId,
         title: fallbackTitle,
         claudeSessionId: null,
+        scheduledTaskId: null,
         status: 'running',
         pinned: false,
         createdAt: now,
@@ -393,6 +416,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         cwd: currentAgentWorkingDirectory,
         systemPrompt: '',
         modelOverride: currentAgentSelectedModelRef,
+        thinkingLevel: currentAgentThinkingLevel ?? '',
         executionMode: config.executionMode || 'local',
         activeSkillIds: effectiveRuntimeSkillIds,
         activeKitIds: displayKitIds.length > 0 ? displayKitIds : undefined,
@@ -467,6 +491,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         resolvedKitCapabilities: displayKitIds.length > 0 ? resolvedKitCapabilities : undefined,
         agentId: currentAgentId,
         modelOverride: sessionModelOverride,
+        thinkingLevel: currentAgentThinkingLevel,
         imageAttachments,
         mediaSelection: mediaSelection && mediaSelection.mode !== 'none' ? mediaSelection : undefined,
         mediaReferences,

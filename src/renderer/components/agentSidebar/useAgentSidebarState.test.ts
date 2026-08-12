@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 
 import {
   type CoworkSessionStatus,
@@ -10,11 +10,18 @@ import type { AgentSidebarAgentSummary } from './types';
 import {
   collapseAgentSidebarTaskList,
   deriveAgentSidebarIndicator,
+  logAgentSidebarDebug,
   removeAgentSidebarAgentTaskPreviews,
   removeAgentSidebarTaskPreviews,
   sortAgentSidebarAgents,
   sortAgentSidebarTasks,
+  toAgentSidebarTaskNode,
 } from './useAgentSidebarState';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 const makeSession = (
   id: string,
@@ -23,9 +30,11 @@ const makeSession = (
   status: CoworkSessionStatus = CoworkSessionStatusValue.Completed,
   pinned = false,
   pinOrder: number | null = null,
+  scheduledTaskId: string | null = null,
 ): CoworkSessionSummary => ({
   id,
   title: id,
+  scheduledTaskId,
   status,
   pinned,
   pinOrder,
@@ -47,6 +56,25 @@ const makeAgent = (
   pinned,
   pinOrder,
   sortOrder,
+});
+
+test('keeps successful task loading independent from renderer debug logging', () => {
+  const fromRenderer = vi.fn(() => {
+    throw new Error('logger unavailable');
+  });
+  vi.stubGlobal('window', {
+    electron: {
+      log: { fromRenderer },
+    },
+  });
+  vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+  expect(() => logAgentSidebarDebug('task preview loaded')).not.toThrow();
+  expect(fromRenderer).toHaveBeenCalledWith(
+    'debug',
+    'AgentSidebar',
+    'task preview loaded',
+  );
 });
 
 test('sortAgentSidebarTasks keeps unpinned tasks ordered by last update time', () => {
@@ -139,6 +167,45 @@ test('deriveAgentSidebarIndicator keeps a running task active without completion
     new Set(),
     new Set(),
   )).toBe(AgentSidebarIndicator.Running);
+});
+
+test('toAgentSidebarTaskNode marks sessions linked to scheduled tasks', () => {
+  const session = makeSession(
+    'scheduled-session',
+    100,
+    200,
+    CoworkSessionStatusValue.Completed,
+    false,
+    null,
+    'job-daily-summary',
+  );
+
+  expect(toAgentSidebarTaskNode(session, null, new Set(), new Set()).isScheduledTask).toBe(true);
+  expect(
+    toAgentSidebarTaskNode(makeSession('regular-session', 100), null, new Set(), new Set())
+      .isScheduledTask,
+  ).toBe(false);
+
+  const legacyZhSession = {
+    ...makeSession('legacy-zh-session', 100),
+    title: '[定时] 科技早报',
+  };
+  const legacyEnSession = {
+    ...makeSession('legacy-en-session', 100),
+    title: '[Cron] Daily summary',
+  };
+  expect(toAgentSidebarTaskNode(legacyZhSession, null, new Set(), new Set()).isScheduledTask)
+    .toBe(true);
+  expect(toAgentSidebarTaskNode(legacyEnSession, null, new Set(), new Set()).isScheduledTask)
+    .toBe(true);
+
+  const legacyFork = {
+    ...legacyZhSession,
+    id: 'legacy-fork',
+    parentSessionId: 'legacy-zh-session',
+  };
+  expect(toAgentSidebarTaskNode(legacyFork, null, new Set(), new Set()).isScheduledTask)
+    .toBe(false);
 });
 
 test('collapseAgentSidebarTaskList resets one agent history list to preview mode', () => {

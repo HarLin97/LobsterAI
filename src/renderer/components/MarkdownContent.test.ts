@@ -6,9 +6,21 @@ import MarkdownContent, {
   convertLatexMathDelimiters,
   getLargeMarkdownPreview,
   isInternalHref,
+  normalizeMarkdownLocalFilePath,
   safeUrlTransform,
   shouldUseLargeMarkdownPreview,
 } from './MarkdownContent';
+
+test('normalizes macOS, Windows drive, and UNC file links for local actions', () => {
+  expect(normalizeMarkdownLocalFilePath('file:///Users/test/My%20File.md'))
+    .toBe('/Users/test/My File.md');
+  expect(normalizeMarkdownLocalFilePath('file:///C:/Users/test/My%20File.md'))
+    .toBe('C:/Users/test/My File.md');
+  expect(normalizeMarkdownLocalFilePath('file://server/share/My%20File.md'))
+    .toBe('//server/share/My File.md');
+  expect(normalizeMarkdownLocalFilePath('/Users/test/name with spaces.md'))
+    .toBe('/Users/test/name with spaces.md');
+});
 
 test('large markdown preview threshold only applies to oversized content', () => {
   expect(shouldUseLargeMarkdownPreview('x'.repeat(8 * 1024))).toBe(false);

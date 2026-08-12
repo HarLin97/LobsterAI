@@ -140,6 +140,7 @@ const FINAL_CONTEXT_USAGE_REFRESH_DELAYS_MS = [800, 2500, 6000, 12000] as const;
 const CONTEXT_USAGE_AUTO_SUPPRESSION_MS = 5 * 60 * 1000;
 const CONTEXT_USAGE_REFRESH_BACKOFF_MS = 30_000;
 const MANUAL_CONTEXT_COMPACTION_WATCHDOG_MS = 130_000;
+const COWORK_INIT_STAGE_TIMEOUT_MS = 12_000;
 
 const restoreCurrentAgentDefaultSkills = (): void => {
   const state = store.getState();
@@ -223,18 +224,36 @@ class CoworkService {
   async init(): Promise<void> {
     if (this.initialized) return;
 
-    // Load initial config
-    await this.loadConfig();
-
-    // Load sessions list
-    await this.loadSessions();
-
-    // Set up stream listeners
+    // Attach listeners before reads so a slow initial snapshot cannot miss
+    // real-time events. Each snapshot is isolated and bounded: the Cowork view
+    // must never remain on a permanent loading screen because one IPC stalls.
     this.setupStreamListeners();
     this.setupOpenClawEngineListeners();
 
-    // Load OpenClaw status
-    await this.loadOpenClawEngineStatus();
+    const runStage = async (label: string, task: () => Promise<unknown>): Promise<void> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          task(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`${label} timed out after ${COWORK_INIT_STAGE_TIMEOUT_MS}ms`)),
+              COWORK_INIT_STAGE_TIMEOUT_MS,
+            );
+          }),
+        ]);
+      } catch (error) {
+        this.logDiagnostic('warn', `initialization stage ${label} failed: ${String(error)}`);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
+    await Promise.all([
+      runStage('loadConfig', () => this.loadConfig()),
+      runStage('loadSessions', () => this.loadSessions()),
+      runStage('loadOpenClawEngineStatus', () => this.loadOpenClawEngineStatus()),
+    ]);
 
     this.initialized = true;
   }
@@ -794,8 +813,27 @@ class CoworkService {
     limit: number,
     offset: number,
   ): Promise<CoworkSessionListResult> {
-    const result = await window.electron?.cowork?.listSessions({ limit, offset, agentId });
-    return result ?? { success: false, error: 'Cowork IPC is unavailable' };
+    try {
+      const result = await window.electron?.cowork?.listSessions({ limit, offset, agentId });
+      const resolved = result ?? { success: false, error: 'Cowork IPC is unavailable' };
+      if (!resolved.success) {
+        this.logDiagnostic(
+          'warn',
+          `agent sidebar session page request failed; agent=${agentId}; offset=${offset}; limit=${limit}; error=${resolved.error ?? 'unknown'}.`,
+        );
+      }
+      return resolved;
+    } catch (error) {
+      this.logDiagnostic(
+        'warn',
+        `agent sidebar session page request threw; agent=${agentId}; offset=${offset}; limit=${limit}.`,
+        error,
+      );
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to load agent task sessions',
+      };
+    }
   }
 
   async listSessionsForSearch(
