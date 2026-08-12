@@ -17,6 +17,7 @@ import { compareVersions,resolveLocalizedText, skillService } from '../../servic
 import { RootState } from '../../store';
 import { setSkills } from '../../store/slices/skillSlice';
 import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
+import { CARD_ACTION_PILL_CLASS, DETAIL_ACTION_PILL_CLASS } from '../common/actionPillStyles';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
 import EditIcon from '../icons/EditIcon';
@@ -41,17 +42,6 @@ import {
   SKILL_TAB_ORDER,
   SkillTab,
 } from './skillTabPreference';
-
-/** Same capsule, sized for the detail dialog's header. */
-const SKILL_DETAIL_ACTION_PILL_CLASS =
-  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-primary px-5 '
-  + 'text-[13px] font-semibold text-white transition-colors hover:bg-primary-hover '
-  + 'disabled:cursor-not-allowed disabled:opacity-50';
-
-const SKILL_ACTION_PILL_CLASS =
-  'inline-flex h-[26px] flex-shrink-0 items-center gap-1 rounded-full bg-surface-raised px-3 '
-  + 'text-[11px] font-semibold text-primary transition-colors hover:bg-primary hover:text-white '
-  + 'disabled:cursor-not-allowed disabled:opacity-50';
 
 type ImportSourceType = 'github' | 'clawhub';
 type DirectImportSource = 'zip' | 'folder' | 'remote';
@@ -943,7 +933,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
           type="button"
           onClick={() => handleUpgradeSkill(skill)}
           disabled={upgradeState?.isActive === true}
-          className={SKILL_DETAIL_ACTION_PILL_CLASS}
+          className={DETAIL_ACTION_PILL_CLASS}
         >
           {i18nService.t('skillUpgrade')}
         </button>
@@ -963,7 +953,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
         <button
           type="button"
           onClick={() => { setSelectedMarketplaceSkill(null); handleUseSkill(installedSkill); }}
-          className={SKILL_DETAIL_ACTION_PILL_CLASS}
+          className={DETAIL_ACTION_PILL_CLASS}
         >
           {i18nService.t('skillUse')}
         </button>
@@ -975,7 +965,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
         type="button"
         onClick={() => handleInstallMarketplaceSkill(skill)}
         disabled={installingSkillId !== null}
-        className={SKILL_DETAIL_ACTION_PILL_CLASS}
+        className={DETAIL_ACTION_PILL_CLASS}
       >
         {installingSkillId === skill.id && <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />}
         {installingSkillId === skill.id ? i18nService.t('skillInstalling') : i18nService.t('skillInstall')}
@@ -1039,7 +1029,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); handleUseSkill(skill); }}
-                className={SKILL_ACTION_PILL_CLASS}
+                className={CARD_ACTION_PILL_CLASS}
               >
                 {i18nService.t('skillUse')}
               </button>
@@ -1478,7 +1468,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                             type="button"
                             onClick={(e) => { e.stopPropagation(); handleUpgradeSkill(skill); }}
                             disabled={upgradeState?.isActive === true}
-                            className={SKILL_ACTION_PILL_CLASS}
+                            className={CARD_ACTION_PILL_CLASS}
                           >
                             {i18nService.t('skillUpgrade')}
                           </button>
@@ -1497,7 +1487,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); handleUseSkill(installedSkill); }}
-                            className={SKILL_ACTION_PILL_CLASS}
+                            className={CARD_ACTION_PILL_CLASS}
                           >
                             {i18nService.t('skillUse')}
                           </button>
@@ -1508,7 +1498,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                           type="button"
                           onClick={(e) => { e.stopPropagation(); handleInstallMarketplaceSkill(skill); }}
                           disabled={installingSkillId !== null}
-                          className={SKILL_ACTION_PILL_CLASS}
+                          className={CARD_ACTION_PILL_CLASS}
                         >
                           {installingSkillId === skill.id && (
                             <ArrowPathIcon className="h-3 w-3 animate-spin" />
@@ -1748,7 +1738,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                   <button
                     type="button"
                     onClick={() => handleUseSkill(selectedSkill)}
-                    className={SKILL_DETAIL_ACTION_PILL_CLASS}
+                    className={DETAIL_ACTION_PILL_CLASS}
                   >
                     {i18nService.t('skillUse')}
                   </button>
