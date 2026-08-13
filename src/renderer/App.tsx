@@ -27,12 +27,11 @@ import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import KitsView from './components/kits/KitsView';
-import { McpView } from './components/mcp';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
 import { SitesView } from './components/sites';
-import { SkillsView } from './components/skills';
+import { SkillsAndConnectorsView, SkillsConnectorsSection } from './components/skillsAndConnectors';
 import SkinBackdrop, { SkinBackdropVariant } from './components/skin/SkinBackdrop';
 import SkinPresentationScope from './components/skin/SkinPresentationScope';
 import StartupCreditCampaign from './components/StartupCreditCampaign';
@@ -641,6 +640,14 @@ const App: React.FC = () => {
   const handleShowKits = useCallback(() => {
     setMainView('kits');
   }, []);
+
+  const handleSkillsConnectorsSectionChange = useCallback((section: SkillsConnectorsSection) => {
+    if (section === SkillsConnectorsSection.Connectors) {
+      handleShowMcp();
+    } else {
+      handleShowSkills();
+    }
+  }, [handleShowMcp, handleShowSkills]);
 
   const openHomeWithKit = useCallback((kitId: string, text?: string) => {
     dispatch(setActiveKitIds([kitId]));
@@ -1714,7 +1721,6 @@ const App: React.FC = () => {
           onShowCowork={handleShowCowork}
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowKits={handleShowKits}
-          onShowMcp={handleShowMcp}
           onShowSites={handleShowSites}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
@@ -1739,15 +1745,17 @@ const App: React.FC = () => {
               <SkinBackdrop variant={SkinBackdropVariant.Management} />
             )}
             <EngineStartupOverlay />
-            {mainView === 'skills' ? (
-              <SkillsView
+            {mainView === 'skills' || mainView === 'mcp' ? (
+              <SkillsAndConnectorsView
+                activeSection={mainView === 'mcp' ? SkillsConnectorsSection.Connectors : SkillsConnectorsSection.Skills}
+                onSectionChange={handleSkillsConnectorsSectionChange}
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 onCreateSkillByChat={handleCreateSkillByChat}
                 onUseSkill={handleSkillUse}
                 updateBadge={collapsedHeaderUpdateBadge}
-                readOnly={enterpriseConfig?.ui?.skills === 'readonly'}
+                skillsReadOnly={enterpriseConfig?.ui?.skills === 'readonly'}
               />
             ) : mainView === 'scheduledTasks' ? (
               <ScheduledTasksView
@@ -1764,13 +1772,6 @@ const App: React.FC = () => {
                 updateBadge={collapsedHeaderUpdateBadge}
                 onTryAsking={handleKitTryAsking}
                 onUseKit={handleKitUse}
-              />
-            ) : mainView === 'mcp' ? (
-              <McpView
-                isSidebarCollapsed={isSidebarCollapsed}
-                onToggleSidebar={handleToggleSidebar}
-                onNewChat={handleNewChat}
-                updateBadge={collapsedHeaderUpdateBadge}
               />
             ) : mainView === 'sites' ? (
               <SitesView

@@ -328,7 +328,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutOpenScheduledTasks: '打开定时任务',
     shortcutOpenKits: '打开专家套件',
     shortcutOpenSkills: '打开技能',
-    shortcutOpenMcp: '打开 MCP 服务',
+    shortcutOpenMcp: '打开连接器',
     shortcutToggleSidebar: '显示/隐藏侧边栏',
     shortcutShowShortcuts: '打开快捷键设置',
     shortcutPreviousAgent: '上一个 Agent',
@@ -347,7 +347,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutDescOpenScheduledTasks: '切换到定时任务视图',
     shortcutDescOpenKits: '切换到专家套件视图',
     shortcutDescOpenSkills: '切换到技能视图',
-    shortcutDescOpenMcp: '切换到 MCP 服务视图',
+    shortcutDescOpenMcp: '切换到连接器视图',
     shortcutDescToggleSidebar: '收起或展开左侧导航栏',
     shortcutDescSettings: '打开应用设置',
     shortcutDescShowShortcuts: '直接打开设置里的快捷键页',
@@ -1941,6 +1941,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skills
     skills: '技能',
+    skillsAndConnectors: '技能与连接器',
+    connectors: '连接器',
     useSkill: '使用技能',
     searchSkills: '搜索技能',
     manageSkills: '管理技能',
@@ -3739,7 +3741,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutOpenScheduledTasks: 'Open Scheduled Tasks',
     shortcutOpenKits: 'Open Kits',
     shortcutOpenSkills: 'Open Skills',
-    shortcutOpenMcp: 'Open MCP Servers',
+    shortcutOpenMcp: 'Open Connectors',
     shortcutToggleSidebar: 'Show or Hide Sidebar',
     shortcutShowShortcuts: 'Open Shortcut Settings',
     shortcutPreviousAgent: 'Previous Agent',
@@ -3758,7 +3760,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutDescOpenScheduledTasks: 'Switch to the scheduled tasks view',
     shortcutDescOpenKits: 'Switch to the kits view',
     shortcutDescOpenSkills: 'Switch to the skills view',
-    shortcutDescOpenMcp: 'Switch to the MCP servers view',
+    shortcutDescOpenMcp: 'Switch to the Connectors view',
     shortcutDescToggleSidebar: 'Collapse or expand the left navigation sidebar',
     shortcutDescSettings: 'Open app settings',
     shortcutDescShowShortcuts: 'Open the shortcuts tab in settings directly',
@@ -5454,6 +5456,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skills
     skills: 'Skills',
+    skillsAndConnectors: 'Skills & Connectors',
+    connectors: 'Connectors',
     useSkill: 'Use Skill',
     searchSkills: 'Search skills',
     manageSkills: 'Manage Skills',

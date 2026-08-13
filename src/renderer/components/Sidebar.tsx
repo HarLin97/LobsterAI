@@ -33,7 +33,6 @@ import Cog6ToothIcon from './icons/Cog6ToothIcon';
 import ComposeIcon from './icons/ComposeIcon';
 import SidebarAutomationIcon from './icons/SidebarAutomationIcon';
 import SidebarKitsIcon from './icons/SidebarKitsIcon';
-import SidebarMcpIcon from './icons/SidebarMcpIcon';
 import SidebarSitesIcon from './icons/SidebarSitesIcon';
 import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import SkillIcon from './icons/SkillIcon';
@@ -49,7 +48,6 @@ interface SidebarProps {
   onShowCowork: () => void;
   onShowScheduledTasks: () => void;
   onShowKits: () => void;
-  onShowMcp: () => void;
   onShowSites: () => void;
   onNewChat: () => void;
   isCollapsed: boolean;
@@ -160,7 +158,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowCowork,
   onShowScheduledTasks,
   onShowKits,
-  onShowMcp,
   onShowSites,
   onNewChat,
   isCollapsed,
@@ -649,24 +646,11 @@ const Sidebar: React.FC<SidebarProps> = ({
               setIsSearchOpen(false);
               onShowSkills();
             }}
-            className={activeView === 'skills' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
-            aria-current={activeView === 'skills' ? 'page' : undefined}
+            className={activeView === 'skills' || activeView === 'mcp' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
+            aria-current={activeView === 'skills' || activeView === 'mcp' ? 'page' : undefined}
           >
             <SkillIcon className="h-4 w-4 shrink-0" />
-            {i18nService.t('skills')}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              reportSidebarAction('open_mcp', { activeView, isCollapsed });
-              setIsSearchOpen(false);
-              onShowMcp();
-            }}
-            className={activeView === 'mcp' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
-            aria-current={activeView === 'mcp' ? 'page' : undefined}
-          >
-            <SidebarMcpIcon className="h-4 w-4 shrink-0" />
-            {i18nService.t('mcpServers')}
+            <span className="min-w-0 truncate">{i18nService.t('skillsAndConnectors')}</span>
           </button>
           {!hideSites && (
             <button
