@@ -31,8 +31,8 @@ export type CoworkBtwResizeDirection =
   typeof CoworkBtwResizeDirection[keyof typeof CoworkBtwResizeDirection];
 
 export const COWORK_BTW_PANEL_MARGIN = 16;
-export const COWORK_BTW_PANEL_DEFAULT_WIDTH = 430;
-export const COWORK_BTW_PANEL_DEFAULT_HEIGHT = 450;
+export const COWORK_BTW_PANEL_DEFAULT_WIDTH = 340;
+export const COWORK_BTW_PANEL_DEFAULT_HEIGHT = 380;
 export const COWORK_BTW_PANEL_MIN_WIDTH = 320;
 export const COWORK_BTW_PANEL_MIN_HEIGHT = 320;
 export const COWORK_BTW_PANEL_ANCHOR_GAP = 16;
