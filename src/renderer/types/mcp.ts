@@ -63,7 +63,9 @@ export interface McpServerFormData {
 // Built-in MCP registry entry (pure frontend definition)
 export interface McpRegistryEntry {
   id: string;                    // unique identifier, e.g. 'filesystem'
-  name: string;                  // display name
+  name: string;                  // display name, English; also the zh fallback
+  name_zh?: string;              // Chinese display name (remote data)
+  icon?: string;                 // icon URL (remote data); falls back to the default glyph
   descriptionKey: string;        // i18n translation key for description
   description_zh?: string;       // Chinese description (remote data)
   description_en?: string;       // English description (remote data)
@@ -84,6 +86,8 @@ export interface McpRegistryEntry {
 export interface McpMarketplaceServer {
   id: string;
   name: string;
+  name_zh?: string;
+  icon?: string;
   description_zh?: string;
   description_en?: string;
   category: string;

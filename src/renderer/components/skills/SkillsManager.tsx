@@ -18,6 +18,8 @@ import { RootState } from '../../store';
 import { setSkills } from '../../store/slices/skillSlice';
 import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
 import { CARD_ACTION_PILL_CLASS, DETAIL_ACTION_PILL_CLASS } from '../common/actionPillStyles';
+import CardOverflowMenu, { type CardOverflowMenuItem } from '../common/CardOverflowMenu';
+import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
 import EditIcon from '../icons/EditIcon';
@@ -32,7 +34,6 @@ import {
   getMarketplaceSkillAnalyticsParams,
   reportSkillAction,
 } from './analytics';
-import SkillCardMenu, { type SkillCardMenuItem } from './SkillCardMenu';
 import SkillIconTile from './SkillIconTile';
 import SkillSecurityReport from './SkillSecurityReport';
 import {
@@ -848,8 +849,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
     }
   };
 
-  const buildInstalledSkillMenuItems = (skill: Skill): SkillCardMenuItem[] => {
-    const items: SkillCardMenuItem[] = [];
+  const buildInstalledSkillMenuItems = (skill: Skill): CardOverflowMenuItem[] => {
+    const items: CardOverflowMenuItem[] = [];
     if (!readOnly) {
       items.push({
         key: 'toggle',
@@ -943,7 +944,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
       const installedSkill = skills.find(item => item.id === skill.id);
       if (!onUseSkill || !installedSkill?.enabled) {
         return (
-          <span className="inline-flex flex-shrink-0 items-center gap-1 text-[12.5px] text-muted">
+          <span className={`inline-flex flex-shrink-0 items-center gap-1 ${MANAGEMENT_BODY_TEXT} text-muted`}>
             <CheckIcon className="h-4 w-4" />
             {i18nService.t('skillAlreadyInstalled')}
           </span>
@@ -1003,7 +1004,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
         key={skill.id}
         role="button"
         tabIndex={0}
-        className="group flex flex-col cursor-pointer rounded-2xl border border-border bg-surface p-3.5 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card focus-within:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        className="group flex flex-col cursor-pointer rounded-2xl border border-border bg-surface p-4 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card focus-within:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         onClick={openInstalledDetail}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
@@ -1015,9 +1016,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
       >
         {/* Single-line title keeps every card the same shape; the raw id is
             reference material and lives in the detail dialog. */}
-        <div className="mb-2.5 flex items-center gap-2.5">
+        <div className="mb-3 flex items-center gap-2.5">
           <SkillIconTile icon={skillService.getSkillIcon(skill.id)} />
-          <div className="min-w-0 flex-1 truncate text-[14.5px] font-semibold leading-snug text-foreground">
+          <div className={`min-w-0 flex-1 truncate ${MANAGEMENT_TITLE_TEXT} font-semibold leading-snug text-foreground`}>
             {displayName}
           </div>
           {/* This is a management surface — the everyday "use a skill" path is
@@ -1034,15 +1035,15 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 {i18nService.t('skillUse')}
               </button>
             )}
-            <SkillCardMenu items={buildInstalledSkillMenuItems(skill)} />
+            <CardOverflowMenu items={buildInstalledSkillMenuItems(skill)} />
           </div>
         </div>
 
-        <p className="mb-2.5 line-clamp-2 min-h-[2.6em] text-xs leading-relaxed text-secondary">
+        <p className="mb-3 line-clamp-2 min-h-[2.6em] text-xs leading-relaxed text-secondary">
           {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
         </p>
 
-        <div className="mt-auto flex items-center justify-between gap-2 text-[11px] text-muted">
+        <div className={`mt-auto flex items-center justify-between gap-2 ${MANAGEMENT_META_TEXT} text-muted`}>
           <div className="flex min-w-0 items-center gap-1.5">
             {/* Only the exceptional state is labelled; enabled is the norm. */}
             {!skill.enabled && (
@@ -1068,7 +1069,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               type="button"
               onClick={(e) => { e.stopPropagation(); handleUpgradeSkill(marketplaceSkill); }}
               disabled={upgradeState?.isActive === true}
-              className="inline-flex flex-shrink-0 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-600 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:text-emerald-400"
+              className={`inline-flex flex-shrink-0 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 ${MANAGEMENT_META_TEXT} font-medium text-emerald-600 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:text-emerald-400`}
             >
               <ArrowPathIcon className="h-3.5 w-3.5" />
               {i18nService.t('skillUpgrade')}
@@ -1081,8 +1082,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
 
   return (
     <div className="space-y-4">
-      <div>
-        <p className="text-sm text-secondary">
+      <div className="pb-2">
+        <p className={`${MANAGEMENT_BODY_TEXT} text-secondary`}>
           {i18nService.t('skillsDescription')}
         </p>
       </div>
@@ -1097,7 +1098,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
       {/* Sticky toolbar: Description + Search + Tabs + Tag pills */}
       <div
         data-skin-management-toolbar="true"
-        className="sticky top-0 z-10 space-y-4 bg-background pb-4"
+        className="sticky top-0 z-10 space-y-4 bg-background pb-2"
       >
         {/* Search + Add button */}
         <div className="flex items-center gap-3">
@@ -1158,7 +1159,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               ref={addSkillMenuRef}
               className="absolute right-0 mt-2 w-72 rounded-xl border border-border bg-surface shadow-lg z-50 overflow-hidden"
             >
-              <p className="px-3 py-2 text-[11px] text-orange-600 dark:text-orange-400 border-b border-border">
+              <p className={`px-3 py-2 ${MANAGEMENT_META_TEXT} text-orange-600 dark:text-orange-400 border-b border-border`}>
                 {i18nService.t('addSkillSecurityTip')}
               </p>
               <button
@@ -1226,7 +1227,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                   });
                   setActiveTab(tab);
                 }}
-                className={`relative px-2.5 pb-2.5 pt-0.5 text-[14.5px] font-semibold transition-colors ${
+                className={`relative px-2.5 pb-2.5 pt-0.5 ${MANAGEMENT_TITLE_TEXT} font-semibold transition-colors ${
                   activeTab === tab
                     ? 'text-foreground'
                     : 'text-secondary hover:text-foreground'
@@ -1234,7 +1235,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               >
                 {i18nService.t(SKILL_TAB_LABEL_KEYS[tab])}
                 {count !== null && count > 0 && (
-                  <span className="ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 text-[11px] font-medium text-secondary">
+                  <span className={`ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 ${MANAGEMENT_META_TEXT} font-medium text-secondary`}>
                     {count}
                   </span>
                 )}
@@ -1250,7 +1251,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 type="button"
                 onClick={handleUpgradeAll}
                 disabled={upgradeState?.isActive === true}
-                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className={`inline-flex items-center gap-1 px-2 py-1 ${MANAGEMENT_META_TEXT} font-medium rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 <ArrowPathIcon className="h-3 w-3" />
                 {i18nService.t('skillUpgradeAll').replace('{count}', String(updatableSkills.length))}
@@ -1312,7 +1313,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
       <div>
       {/* Search spans both installed groups, so hits from the other tab stay reachable. */}
       {isInstalledTab && isSkillSearchActive && (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
           {filteredSkills.length === 0 ? (
             <div className="col-span-full text-center py-8 text-sm text-secondary">
               {i18nService.t('noSkillsAvailable')}
@@ -1382,23 +1383,23 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             </div>
           )
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
             {mySkills.map((skill) => renderInstalledSkillCard(skill, false))}
           </div>
         )
       )}
 
       {activeTab === SkillTab.BuiltIn && !isSkillSearchActive && (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
           {builtInSkills.map((skill) => renderInstalledSkillCard(skill, false))}
         </div>
       )}
 
       {activeTab === SkillTab.Marketplace && (
         isLoadingMarketplace ? (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3" aria-hidden="true">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4" aria-hidden="true">
             {Array.from({ length: 6 }).map((_, idx) => (
-              <div key={idx} className="animate-pulse rounded-xl border border-border bg-surface p-3">
+              <div key={idx} className="animate-pulse rounded-2xl border border-border bg-surface p-4">
                 <div className="mb-3 flex items-center gap-2">
                   <div className="h-7 w-7 rounded-lg bg-surface-raised" />
                   <div className="h-3.5 w-1/3 rounded bg-surface-raised" />
@@ -1421,7 +1422,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 {i18nService.t('skillMarketplaceEmpty')}
               </div>
             ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
                 {filteredMarketplaceSkills.map((skill) => {
                   const openMarketplaceDetail = () => {
                     reportSkillAction('open_marketplace_detail', {
@@ -1441,7 +1442,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 key={skill.id}
                 role="button"
                 tabIndex={0}
-                className="group flex flex-col cursor-pointer rounded-2xl border border-border bg-surface p-3.5 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                className="group flex flex-col cursor-pointer rounded-2xl border border-border bg-surface p-4 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 onClick={openMarketplaceDetail}
                 onKeyDown={(e) => {
                   if (e.target !== e.currentTarget) return;
@@ -1451,9 +1452,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                   }
                 }}
               >
-                <div className="mb-2.5 flex items-center gap-2.5">
+                <div className="mb-3 flex items-center gap-2.5">
                   <SkillIconTile icon={skill.icon ?? skillService.getSkillIcon(skill.id)} />
-                  <div className="min-w-0 flex-1 truncate text-[14.5px] font-semibold leading-snug text-foreground">
+                  <div className={`min-w-0 flex-1 truncate ${MANAGEMENT_TITLE_TEXT} font-semibold leading-snug text-foreground`}>
                     {skillService.getLocalizedSkillName(skill.id, skill.name)}
                   </div>
                   {/* App Store rules: one capsule, label carries the state.
@@ -1477,7 +1478,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                       if (status === 'installed') {
                         if (!onUseSkill || !installedSkill?.enabled) {
                           return (
-                            <span className="inline-flex h-[26px] flex-shrink-0 items-center gap-1 px-1 text-[11px] text-muted">
+                            <span className={`inline-flex h-[26px] flex-shrink-0 items-center gap-1 px-1 ${MANAGEMENT_META_TEXT} text-muted`}>
                               <CheckIcon className="h-3.5 w-3.5" />
                               {i18nService.t('skillAlreadyInstalled')}
                             </span>
@@ -1510,11 +1511,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                   </div>
                 </div>
 
-                <p className="mb-2.5 line-clamp-2 min-h-[2.6em] text-xs leading-relaxed text-secondary">
+                <p className="mb-3 line-clamp-2 min-h-[2.6em] text-xs leading-relaxed text-secondary">
                   {resolveLocalizedText(skill.description)}
                 </p>
 
-                <div className="mt-auto flex items-center gap-1.5 text-[11px] text-muted">
+                <div className={`mt-auto flex items-center gap-1.5 ${MANAGEMENT_META_TEXT} text-muted`}>
                   {skill.source?.from && (
                     <span className="rounded bg-surface-raised px-1.5 py-0.5 font-medium">
                       {skill.source.from}
@@ -1589,11 +1590,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                   iconClassName="h-7 w-7"
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[17px] font-semibold leading-tight text-foreground">
+                  <div className="truncate text-base font-semibold leading-tight text-foreground">
                     {skillService.getLocalizedSkillName(selectedMarketplaceSkill.id, selectedMarketplaceSkill.name)}
                   </div>
                   {selectedMarketplaceSkill.source?.author && (
-                    <div className="mt-1 truncate text-[12.5px] text-secondary">
+                    <div className={`mt-1 truncate ${MANAGEMENT_BODY_TEXT} text-secondary`}>
                       {selectedMarketplaceSkill.source.author}
                     </div>
                   )}
@@ -1612,10 +1613,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                       key={stat.label}
                       className={`flex-1 px-6 py-3 text-center ${index > 0 ? 'border-l border-border' : ''}`}
                     >
-                      <div className="text-[10.5px] font-medium uppercase tracking-wide text-muted">
+                      <div className={`${MANAGEMENT_META_TEXT} font-medium uppercase tracking-wide text-muted`}>
                         {stat.label}
                       </div>
-                      <div className="mt-1 truncate text-[13px] font-semibold text-foreground">
+                      <div className={`mt-1 truncate ${MANAGEMENT_BODY_TEXT} font-semibold text-foreground`}>
                         {stat.value}
                       </div>
                     </div>
@@ -1625,14 +1626,14 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             })()}
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-              <h3 className="mb-2 text-[13px] font-semibold text-foreground">
+              <h3 className={`mb-2 ${MANAGEMENT_BODY_TEXT} font-semibold text-foreground`}>
                 {i18nService.t('skillDetailAbout')}
               </h3>
-              <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-secondary">
+              <p className={`whitespace-pre-wrap break-words ${MANAGEMENT_TITLE_TEXT} leading-relaxed text-secondary`}>
                 {resolveLocalizedText(selectedMarketplaceSkill.description)}
               </p>
 
-              <h3 className="mb-2 mt-5 text-[13px] font-semibold text-foreground">
+              <h3 className={`mb-2 mt-5 ${MANAGEMENT_BODY_TEXT} font-semibold text-foreground`}>
                 {i18nService.t('skillDetailInfo')}
               </h3>
               <div className="space-y-2">
@@ -1668,7 +1669,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                       setSelectedMarketplaceSkill(null);
                       handleRequestDeleteSkill(installedSkill);
                     }}
-                    className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 text-[13px] text-secondary transition-colors hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400"
+                    className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 ${MANAGEMENT_BODY_TEXT} text-secondary transition-colors hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400`}
                   >
                     <TrashIcon className="h-4 w-4" />
                     {i18nService.t('deleteSkill')}
@@ -1724,14 +1725,14 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                   iconClassName="h-7 w-7"
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[17px] font-semibold leading-tight text-foreground">
+                  <div className="truncate text-base font-semibold leading-tight text-foreground">
                     {skillService.getLocalizedSkillName(selectedSkill.id, selectedSkill.name)}
                   </div>
                   {(() => {
                     const mp = marketplaceSkills.find(m => m.id === selectedSkill.id);
                     const author = mp?.source?.author;
                     if (!author) return null;
-                    return <div className="mt-1 truncate text-[12.5px] text-secondary">{author}</div>;
+                    return <div className={`mt-1 truncate ${MANAGEMENT_BODY_TEXT} text-secondary`}>{author}</div>;
                   })()}
                 </div>
                 {onUseSkill && selectedSkill.enabled && (
@@ -1756,10 +1757,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                       key={stat.label}
                       className={`flex-1 px-6 py-3 text-center ${index > 0 ? 'border-l border-border' : ''}`}
                     >
-                      <div className="text-[10.5px] font-medium uppercase tracking-wide text-muted">
+                      <div className={`${MANAGEMENT_META_TEXT} font-medium uppercase tracking-wide text-muted`}>
                         {stat.label}
                       </div>
-                      <div className="mt-1 truncate text-[13px] font-semibold text-foreground">
+                      <div className={`mt-1 truncate ${MANAGEMENT_BODY_TEXT} font-semibold text-foreground`}>
                         {stat.value}
                       </div>
                     </div>
@@ -1769,14 +1770,14 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             })()}
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-              <h3 className="mb-2 text-[13px] font-semibold text-foreground">
+              <h3 className={`mb-2 ${MANAGEMENT_BODY_TEXT} font-semibold text-foreground`}>
                 {i18nService.t('skillDetailAbout')}
               </h3>
-              <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-secondary">
+              <p className={`whitespace-pre-wrap break-words ${MANAGEMENT_TITLE_TEXT} leading-relaxed text-secondary`}>
                 {skillService.getLocalizedSkillDescription(selectedSkill.id, selectedSkill.name, selectedSkill.description)}
               </p>
 
-              <h3 className="mb-2 mt-5 text-[13px] font-semibold text-foreground">
+              <h3 className={`mb-2 mt-5 ${MANAGEMENT_BODY_TEXT} font-semibold text-foreground`}>
                 {i18nService.t('skillDetailInfo')}
               </h3>
               <div className="space-y-2">
@@ -1807,7 +1808,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 toggles, and delete stays quiet until you reach for it. */}
             <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-border px-6 py-3">
               <div className="flex items-center gap-2.5">
-                <span className="text-[13px] text-secondary">{i18nService.t('enable')}</span>
+                <span className={`${MANAGEMENT_BODY_TEXT} text-secondary`}>{i18nService.t('enable')}</span>
                 <button
                   type="button"
                   role="switch"
@@ -1834,7 +1835,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 <button
                   type="button"
                   onClick={() => { setSelectedSkill(null); handleRequestDeleteSkill(selectedSkill); }}
-                  className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 text-[13px] text-secondary transition-colors hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400"
+                  className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 ${MANAGEMENT_BODY_TEXT} text-secondary transition-colors hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400`}
                 >
                   <TrashIcon className="h-4 w-4" />
                   {i18nService.t('deleteSkill')}
@@ -2047,7 +2048,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 <div key={skill.skillKey} className="flex items-baseline gap-2 px-1">
                   <span className="shrink-0 text-xs font-medium text-foreground bg-background border border-border rounded px-1.5 py-0.5">{skill.name}</span>
                   {skill.description && (
-                    <span className="text-[11px] text-muted-foreground truncate">{skill.description}</span>
+                    <span className={`${MANAGEMENT_META_TEXT} text-muted-foreground truncate`}>{skill.description}</span>
                   )}
                 </div>
               ))}
