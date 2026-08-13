@@ -3,13 +3,14 @@ import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
+import { MANAGEMENT_BODY_TEXT } from './managementTypography';
 
 const MENU_WIDTH_PX = 152;
 const MENU_EDGE_GAP_PX = 8;
 const MENU_TRIGGER_GAP_PX = 4;
 const MENU_ITEM_HEIGHT_PX = 36;
 
-export interface SkillCardMenuItem {
+export interface CardOverflowMenuItem {
   key: string;
   label: string;
   icon?: React.ReactNode;
@@ -17,18 +18,18 @@ export interface SkillCardMenuItem {
   onSelect: () => void;
 }
 
-interface SkillCardMenuProps {
-  items: SkillCardMenuItem[];
+interface CardOverflowMenuProps {
+  items: CardOverflowMenuItem[];
   /** Extra classes for the trigger, e.g. to reveal it on card hover. */
   className?: string;
 }
 
 /**
- * Overflow menu for the low-frequency skill actions (enable/disable, delete),
- * keeping the card's own surface free for the one action people actually reach
- * for after installing something.
+ * Overflow menu for the low-frequency card actions (enable/disable, edit,
+ * delete), keeping the card's own surface free for the one action people
+ * actually reach for after installing something.
  */
-const SkillCardMenu: React.FC<SkillCardMenuProps> = ({ items, className = '' }) => {
+const CardOverflowMenu: React.FC<CardOverflowMenuProps> = ({ items, className = '' }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -90,8 +91,8 @@ const SkillCardMenu: React.FC<SkillCardMenuProps> = ({ items, className = '' }) 
         type="button"
         aria-haspopup="menu"
         aria-expanded={isOpen}
-        aria-label={i18nService.t('skillMoreActions')}
-        title={i18nService.t('skillMoreActions')}
+        aria-label={i18nService.t('moreActions')}
+        title={i18nService.t('moreActions')}
         onClick={(event) => { event.stopPropagation(); setIsOpen(value => !value); }}
         className={`inline-flex h-[26px] w-[26px] flex-shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-raised hover:text-foreground ${
           isOpen ? 'bg-surface-raised text-foreground' : ''
@@ -113,7 +114,7 @@ const SkillCardMenu: React.FC<SkillCardMenuProps> = ({ items, className = '' }) 
               type="button"
               role="menuitem"
               onClick={(event) => { event.stopPropagation(); setIsOpen(false); item.onSelect(); }}
-              className={`flex w-full items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-[13px] transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.05] ${
+              className={`flex w-full items-center gap-2 whitespace-nowrap px-3 py-2 text-left ${MANAGEMENT_BODY_TEXT} transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.05] ${
                 item.destructive ? 'text-red-500 dark:text-red-400' : 'text-foreground'
               }`}
             >
@@ -128,4 +129,4 @@ const SkillCardMenu: React.FC<SkillCardMenuProps> = ({ items, className = '' }) 
   );
 };
 
-export default SkillCardMenu;
+export default CardOverflowMenu;
