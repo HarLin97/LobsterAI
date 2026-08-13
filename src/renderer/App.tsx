@@ -51,6 +51,7 @@ import WelcomeDialog from './components/WelcomeDialog';
 import WindowsAppTitleBar from './components/window/WindowsAppTitleBar';
 import WindowTitleBar from './components/window/WindowTitleBar';
 import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config';
+import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selectors';
 import { SkinProvider } from './providers/SkinProvider';
 import type { ApiConfig } from './services/api';
 import { apiService } from './services/api';
@@ -207,6 +208,7 @@ const App: React.FC = () => {
   const pendingPermission = useSelector(selectFirstCurrentSessionPendingPermission);
   const pendingPermissions = useSelector(selectPendingPermissions);
   const authUser = useSelector((state: RootState) => state.auth.user);
+  const isEnterpriseAccount = useSelector(selectIsEnterpriseAccount);
   const isWindows = window.electron.platform === 'win32';
   const [minimizedPermissionIds, setMinimizedPermissionIds] = useState<string[]>([]);
   const isPendingPermissionMinimized = pendingPermission
@@ -1697,7 +1699,7 @@ const App: React.FC = () => {
       {/* The welcome screen renders via the early return above, so agreement
           alone gates the campaign here (no separate showWelcome flag). */}
       <StartupCreditCampaign
-        enabled={privacyAgreed === true}
+        enabled={privacyAgreed === true && !isEnterpriseAccount}
       />
       {windowsStandaloneTitleBar}
       <div

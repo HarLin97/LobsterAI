@@ -135,6 +135,7 @@ export const DailyCheckInLoginModal: React.FC<DailyCheckInLoginModalProps> = ({
 };
 
 interface DailyCheckInHeaderEntryProps {
+  enabled?: boolean;
   suppressed?: boolean;
 }
 
@@ -145,13 +146,13 @@ interface DailyCheckInSuccessState {
 
 export const DailyCheckInHeaderEntry: React.FC<
   DailyCheckInHeaderEntryProps
-> = ({ suppressed = false }) => {
+> = ({ enabled = true, suppressed = false }) => {
   const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
   const {
     snapshot,
     claiming,
     claim,
-  } = useDailyCheckInActivity();
+  } = useDailyCheckInActivity({ enabled });
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [success, setSuccess] = useState<DailyCheckInSuccessState | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -174,12 +175,12 @@ export const DailyCheckInHeaderEntry: React.FC<
   useEffect(() => () => clearSuccessTimer(), [clearSuccessTimer]);
 
   useEffect(() => {
-    if (suppressed) {
+    if (!enabled || suppressed) {
       setLoginModalOpen(false);
       clearSuccessTimer();
       setSuccess(null);
     }
-  }, [clearSuccessTimer, suppressed]);
+  }, [clearSuccessTimer, enabled, suppressed]);
 
   useEffect(() => {
     if (isLoggedIn) setLoginModalOpen(false);
@@ -227,7 +228,7 @@ export const DailyCheckInHeaderEntry: React.FC<
   const stateAllowsEntry = snapshot
     ? shouldShowDailyCheckInEntry(snapshot.context)
     : false;
-  if (suppressed || (!stateAllowsEntry && !success)) return null;
+  if (!enabled || suppressed || (!stateAllowsEntry && !success)) return null;
 
   const entryLabel = snapshot?.descriptor.cardTitle
     || i18nService.t('dailyCheckInEntry');
