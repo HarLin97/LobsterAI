@@ -89,7 +89,7 @@ export const normalizeAuthQuota = (
   if (typeof raw.limit === 'number') {
     creditsLimit = raw.limit;
     creditsUsed = readNumber(raw.used);
-    planName = readString(raw.planName, 'Enterprise');
+    planName = readString(raw.planName, 'Team');
     subscriptionStatus = readString(
       raw.subscriptionStatus,
       AuthSubscriptionStatus.Enterprise,
@@ -120,7 +120,10 @@ export const normalizeAuthQuota = (
       || subscriptionStatus === AuthSubscriptionStatus.Active;
     const normalizedRaw = {
       ...raw,
-      planName: readString(raw.planName, labels.freePlanName),
+      planName: readString(
+        raw.planName,
+        subscriptionStatus === AuthSubscriptionStatus.Enterprise ? 'Team' : labels.freePlanName,
+      ),
       subscriptionStatus,
       creditsLimit,
       creditsUsed,

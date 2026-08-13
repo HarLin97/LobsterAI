@@ -194,6 +194,13 @@ import {
   readAccountMode,
   requestEnterpriseQuotaIncrease,
 } from './enterpriseAccount/context';
+import {
+  createEnterpriseAuthSessionSnapshot,
+  createEnterpriseMembershipRevocationHandler,
+  EnterpriseMembershipRevocationSource,
+  readEnterpriseApiErrorCode,
+  resolveEnterpriseMembershipRevocationSource,
+} from './enterpriseAccount/membershipRevocation';
 import { setLanguage, t } from './i18n';
 import { IMGatewayConfig, IMGatewayManager } from './im';
 import {
@@ -4747,6 +4754,28 @@ if (!gotTheLock) {
   };
   resolveCurrentMediaAccountScope = getCurrentMediaAccountScope;
 
+  const captureEnterpriseAuthSessionSnapshot = (
+    accountScope = getCurrentMediaAccountScope(),
+  ) => createEnterpriseAuthSessionSnapshot(
+    accountScope,
+    getPersistedEnterpriseAccountContext(getStore())?.enterpriseId,
+  );
+
+  const handleEnterpriseMembershipRevocation = createEnterpriseMembershipRevocationHandler({
+    getCurrentSession: captureEnterpriseAuthSessionSnapshot,
+    invalidateCurrentSession: (event) => {
+      console.warn(
+        '[EnterpriseAccount] invalidating revoked enterprise auth session '
+        + `source=${event.source} code=${event.code} `
+        + `generation=${event.requestSession?.accountGeneration ?? 'unknown'}`,
+      );
+      clearLocalAuthSession({
+        reason: AuthSessionChangeReason.EnterpriseMembershipRevoked,
+        notifyRenderer: true,
+      });
+    },
+  });
+
   const notifyAuthQuotaChanged = (): void => {
     BrowserWindow.getAllWindows().forEach(win => {
       if (!win.isDestroyed()) win.webContents.send(AuthIpcChannel.QuotaChanged);
@@ -4757,6 +4786,14 @@ if (!gotTheLock) {
     code: number,
     requestAccountScope: MediaAccountScope | null,
   ): boolean => {
+    if (code === EnterpriseApiErrorCode.NotMember) {
+      return handleEnterpriseMembershipRevocation({
+        code,
+        source: EnterpriseMembershipRevocationSource.JsonApi,
+        requestSession: captureEnterpriseAuthSessionSnapshot(requestAccountScope),
+      });
+    }
+
     const currentAccountScope = getCurrentMediaAccountScope();
     if (
       code !== EnterpriseApiErrorCode.AccountModeMismatch
@@ -4928,7 +4965,15 @@ if (!gotTheLock) {
     },
     getRefreshUrl: () => `${getServerApiBaseUrl()}/api/auth/refresh`,
     buildRefreshRequestBody: refreshToken => JSON.stringify(withKeyfromBody({ refreshToken })),
-    onTerminalFailure: () => {
+    onTerminalFailure: (result) => {
+      if (result.errorCode === EnterpriseApiErrorCode.NotMember) {
+        handleEnterpriseMembershipRevocation({
+          code: result.errorCode,
+          source: EnterpriseMembershipRevocationSource.Refresh,
+          requestSession: captureEnterpriseAuthSessionSnapshot(),
+        });
+        return;
+      }
       clearLocalAuthSession({
         reason: AuthSessionChangeReason.RefreshRejected,
         notifyRenderer: true,
@@ -4956,8 +5001,28 @@ if (!gotTheLock) {
   });
   waitForPendingTokenRefresh = () => authSessionManager.waitForPendingRefresh();
 
-  const fetchWithAuth = (url: string, options?: RequestInit): Promise<Response> =>
-    authSessionManager.fetchWithAuth(url, options);
+  const fetchWithAuth = async (url: string, options?: RequestInit): Promise<Response> => {
+    const requestEnterpriseSession = captureEnterpriseAuthSessionSnapshot();
+    const response = await authSessionManager.fetchWithAuth(url, options);
+    if (
+      requestEnterpriseSession
+      && response.headers.get('content-type')?.includes('application/json')
+    ) {
+      try {
+        const code = readEnterpriseApiErrorCode(await response.clone().json());
+        if (code === EnterpriseApiErrorCode.NotMember) {
+          handleEnterpriseMembershipRevocation({
+            code,
+            source: resolveEnterpriseMembershipRevocationSource(url),
+            requestSession: requestEnterpriseSession,
+          });
+        }
+      } catch {
+        // The original response remains available to the endpoint-specific parser.
+      }
+    }
+    return response;
+  };
 
   type AvailableServerModel = ServerModelMetadataInput & {
     modelId: string;
@@ -5242,6 +5307,7 @@ if (!gotTheLock) {
   const refreshEnterpriseAccountContext = (): ReturnType<typeof fetchEnterpriseAccountContext> => {
     const generation = authAccountGeneration;
     const requestAccountScope = getCurrentMediaAccountScope();
+    const requestEnterpriseSession = captureEnterpriseAuthSessionSnapshot(requestAccountScope);
     if (pendingEnterpriseAccountContextRefresh?.generation === generation) {
       return pendingEnterpriseAccountContextRefresh.promise;
     }
@@ -5256,6 +5322,13 @@ if (!gotTheLock) {
           EnterpriseApiErrorCode.AccountModeMismatch,
           requestAccountScope,
         );
+      },
+      onMembershipRevoked: () => {
+        handleEnterpriseMembershipRevocation({
+          code: EnterpriseApiErrorCode.NotMember,
+          source: EnterpriseMembershipRevocationSource.EnterpriseContext,
+          requestSession: requestEnterpriseSession,
+        });
       },
     }).finally(() => {
       if (pendingEnterpriseAccountContextRefresh?.promise === promise) {
@@ -6452,9 +6525,11 @@ if (!gotTheLock) {
 
     const quotaGateSyncScheduled = syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
     if (!quotaGateSyncScheduled) {
-      const syncReason = options.reason === AuthSessionChangeReason.RefreshRejected
-        ? 'auth-session-expired-server-models-cleared'
-        : 'auth-logout-server-models-cleared';
+      const syncReason = options.reason === AuthSessionChangeReason.EnterpriseMembershipRevoked
+        ? 'enterprise-membership-revoked-server-models-cleared'
+        : options.reason === AuthSessionChangeReason.RefreshRejected
+          ? 'auth-session-expired-server-models-cleared'
+          : 'auth-logout-server-models-cleared';
       syncOpenClawConfig({
         reason: syncReason,
         restartGatewayIfRunning: false,
@@ -13294,6 +13369,13 @@ if (!gotTheLock) {
         getAccountContextHeaders: getEnterpriseAccountHeaders,
         getSessionKey: getAuthSessionKey,
         getClientVersion: () => app.getVersion(),
+        getEnterpriseAuthSessionSnapshot: captureEnterpriseAuthSessionSnapshot,
+        onEnterpriseMembershipRevoked: event => {
+          handleEnterpriseMembershipRevocation({
+            ...event,
+            source: EnterpriseMembershipRevocationSource.LlmSse,
+          });
+        },
       });
       console.log('[Main] OpenClaw token proxy started');
     } catch (err) {

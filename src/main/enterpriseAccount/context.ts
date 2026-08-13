@@ -27,6 +27,7 @@ export interface EnterpriseAccountContextApiDeps {
   store: SqliteStore;
   isRequestCurrent?: () => boolean;
   onAccountModeMismatch?: () => void;
+  onMembershipRevoked?: () => void;
   requestTimeoutMs?: number;
 }
 
@@ -53,6 +54,11 @@ function isRecord(value: unknown): value is JsonRecord {
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function readTimestamp(value: unknown): string | null {
+  const timestamp = readString(value);
+  return timestamp && Number.isFinite(Date.parse(timestamp)) ? timestamp : null;
 }
 
 function readNonNegativeNumber(value: unknown): number {
@@ -115,10 +121,21 @@ function readPermissions(
 
 function readMemberQuota(value: unknown): EnterpriseMemberQuota {
   const record = isRecord(value) ? value : {};
+  const refreshCycle = record.refreshCycle === 'natural_week'
+    ? 'natural_week'
+    : record.refreshCycle === 'natural_month'
+      ? 'natural_month'
+      : null;
+  const periodStart = readTimestamp(record.periodStart);
+  const periodEndExclusive = readTimestamp(record.periodEndExclusive);
   return {
     limit: readNonNegativeNumber(record.limit),
     used: readNonNegativeNumber(record.used),
     remaining: readNonNegativeNumber(record.remaining),
+    ...(record.reserved != null ? { reserved: readNonNegativeNumber(record.reserved) } : {}),
+    ...(refreshCycle ? { refreshCycle } : {}),
+    ...(periodStart ? { periodStart } : {}),
+    ...(periodEndExclusive ? { periodEndExclusive } : {}),
   };
 }
 
@@ -292,6 +309,9 @@ export async function fetchEnterpriseAccountContext(
       ) {
         if (code === EnterpriseApiErrorCode.AccountModeMismatch) {
           deps.onAccountModeMismatch?.();
+        }
+        if (code === EnterpriseApiErrorCode.NotMember) {
+          deps.onMembershipRevoked?.();
         }
         clearEnterpriseAccountContext(deps.store);
         console.log(`[EnterpriseAccount] cleared stale account context after server code ${code}`);

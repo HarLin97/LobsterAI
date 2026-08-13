@@ -638,7 +638,7 @@ test('resolveOpenClawRuntimeError keeps structured enterprise quota reason', () 
     errorCode: '41606',
     rawErrorPreview: '41606 member monthly quota exhausted',
   })).toEqual({
-    message: expect.stringContaining('成员月度额度'),
+    message: expect.stringContaining('成员周期额度'),
     enterpriseQuotaError: {
       code: 41606,
       reason: 'member_monthly_quota_exhausted',
@@ -654,14 +654,14 @@ test('buildRuntimeErrorMetadata preserves technical details with enterprise quot
   };
 
   expect(buildRuntimeErrorMetadata({
-    message: 'Enterprise credits have been used up.',
+    message: 'Team credits have been used up.',
     enterpriseQuotaError: {
       code: 41607,
       reason: 'enterprise_pool_exhausted',
     },
     errorDetail,
   })).toEqual({
-    error: 'Enterprise credits have been used up.',
+    error: 'Team credits have been used up.',
     errorDetail,
     enterpriseErrorCode: 41607,
     enterpriseQuotaReason: 'enterprise_pool_exhausted',

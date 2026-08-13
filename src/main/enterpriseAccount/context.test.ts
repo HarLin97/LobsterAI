@@ -86,6 +86,51 @@ describe('enterprise account context normalization', () => {
     })).toEqual(createContext());
   });
 
+  test('preserves optional member quota period metadata', () => {
+    const normalized = normalizeEnterpriseAccountContext({
+      ...createContext(),
+      memberQuota: {
+        limit: 100,
+        used: 40,
+        reserved: 10,
+        remaining: 50,
+        refreshCycle: 'natural_week',
+        periodStart: '2026-08-10T00:00:00+08:00',
+        periodEndExclusive: '2026-08-17T00:00:00+08:00',
+      },
+    });
+
+    expect(normalized?.memberQuota).toEqual({
+      limit: 100,
+      used: 40,
+      reserved: 10,
+      remaining: 50,
+      refreshCycle: 'natural_week',
+      periodStart: '2026-08-10T00:00:00+08:00',
+      periodEndExclusive: '2026-08-17T00:00:00+08:00',
+    });
+  });
+
+  test('ignores invalid optional member quota period metadata', () => {
+    const normalized = normalizeEnterpriseAccountContext({
+      ...createContext(),
+      memberQuota: {
+        limit: 100,
+        used: 40,
+        remaining: 60,
+        refreshCycle: 'rolling_week',
+        periodStart: 'not-a-date',
+        periodEndExclusive: 'also-not-a-date',
+      },
+    });
+
+    expect(normalized?.memberQuota).toEqual({
+      limit: 100,
+      used: 40,
+      remaining: 60,
+    });
+  });
+
   test('ignores stale nested enterprise data when the account is personal', () => {
     expect(normalizeEnterpriseAccountContext({
       accountMode: EnterpriseAccountMode.Personal,
@@ -156,6 +201,29 @@ describe('enterprise account context refresh', () => {
     expect(result.context).toBeNull();
     expect(getPersistedEnterpriseAccountContext(store)).toBeNull();
     expect(onAccountModeMismatch).toHaveBeenCalledOnce();
+  });
+
+  test('reports membership revocation before clearing the selected enterprise context', async () => {
+    const store = createStore();
+    const onMembershipRevoked = vi.fn(() => {
+      expect(getPersistedEnterpriseAccountContext(store)).toEqual(createContext());
+    });
+    persistEnterpriseAccountContext(store, createContext());
+
+    const result = await fetchEnterpriseAccountContext({
+      getServerBaseUrl: () => 'https://example.test',
+      fetchWithAuth: async () => jsonResponse({
+        code: EnterpriseApiErrorCode.NotMember,
+        message: 'Not an enterprise member',
+      }),
+      store,
+      onMembershipRevoked,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.context).toBeNull();
+    expect(onMembershipRevoked).toHaveBeenCalledOnce();
+    expect(getPersistedEnterpriseAccountContext(store)).toBeNull();
   });
 
   test('does not overwrite a newer account after auth state changes', async () => {

@@ -10,6 +10,7 @@ import {
   EnterpriseMemberRole,
   EnterpriseQuotaReason,
 } from '../../shared/enterpriseAccount/constants';
+import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/types';
 import { setEnterpriseAccountContext } from '../features/enterpriseAccount/enterpriseAccountSlice';
 import { store } from '../store';
 import { setLoggedIn, setLoggedOut } from '../store/slices/authSlice';
@@ -21,6 +22,7 @@ import {
   mapPricingCatalogTextModelsToServerModels,
   mapPricingCatalogToPublicServerModels,
 } from './auth';
+import { i18nService } from './i18n';
 
 afterEach(() => {
   authService.destroy();
@@ -29,6 +31,8 @@ afterEach(() => {
   store.dispatch(setEnterpriseAccountContext(null));
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  i18nService.setLanguage('zh', { persist: false });
 });
 
 describe('pricing catalog model mapping', () => {
@@ -575,6 +579,91 @@ describe('quota checks', () => {
   });
 });
 
+describe('enterprise quota period boundary refresh', () => {
+  const context = (endExclusive: string): EnterpriseAccountContext => ({
+    accountMode: 'enterprise',
+    enterpriseId: 1001,
+    memberId: 2001,
+    enterpriseName: 'Example enterprise',
+    role: EnterpriseMemberRole.Member,
+    permissions: {
+      manageEnterprise: false,
+      adjustMemberQuota: false,
+      rechargeEnterprise: false,
+    },
+    memberQuota: {
+      limit: 100,
+      used: 100,
+      remaining: 0,
+      refreshCycle: 'natural_week',
+      periodStart: '2026-08-10T00:00:00+08:00',
+      periodEndExclusive: endExclusive,
+    },
+    enterprisePool: { total: 1000, used: 400, remaining: 600 },
+    quotaStatus: {
+      available: false,
+      reason: EnterpriseQuotaReason.MemberMonthlyQuotaExhausted,
+      errorCode: 41606,
+    },
+  });
+
+  test('checks quota once after the current period boundary', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-16T23:59:58+08:00'));
+    store.dispatch(setLoggedIn({
+      user: { yid: 'tester', nickname: 'Tester', avatarUrl: null },
+      quota: null,
+      ownerAccountKey: 'enterprise:tester:1001',
+    }));
+    const enterpriseContext = context('2026-08-17T00:00:00+08:00');
+    store.dispatch(setEnterpriseAccountContext(enterpriseContext));
+    const quotaSpy = vi.spyOn(authService, 'checkQuota').mockResolvedValue({
+      success: true,
+      enterpriseQuotaAvailable: true,
+    });
+    const boundaryService = authService as unknown as {
+      scheduleEnterpriseQuotaBoundary: (
+        value: EnterpriseAccountContext | null,
+      ) => void;
+    };
+
+    boundaryService.scheduleEnterpriseQuotaBoundary(enterpriseContext);
+    await vi.advanceTimersByTimeAsync(3_001);
+
+    expect(quotaSpy).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(quotaSpy).toHaveBeenCalledOnce();
+  });
+
+  test('clears the old boundary timer when enterprise context is removed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-16T23:59:58+08:00'));
+    store.dispatch(setLoggedIn({
+      user: { yid: 'tester', nickname: 'Tester', avatarUrl: null },
+      quota: null,
+      ownerAccountKey: 'enterprise:tester:1001',
+    }));
+    const enterpriseContext = context('2026-08-17T00:00:00+08:00');
+    store.dispatch(setEnterpriseAccountContext(enterpriseContext));
+    const quotaSpy = vi.spyOn(authService, 'checkQuota').mockResolvedValue({
+      success: true,
+      enterpriseQuotaAvailable: true,
+    });
+    const boundaryService = authService as unknown as {
+      scheduleEnterpriseQuotaBoundary: (
+        value: EnterpriseAccountContext | null,
+      ) => void;
+    };
+
+    boundaryService.scheduleEnterpriseQuotaBoundary(enterpriseContext);
+    boundaryService.scheduleEnterpriseQuotaBoundary(null);
+    store.dispatch(setEnterpriseAccountContext(null));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(quotaSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('auth state restoration', () => {
   const user = {
     yid: 'user@example.com',
@@ -685,6 +774,50 @@ describe('auth state restoration', () => {
     const toastEvent = dispatchEvent.mock.calls[0][0] as CustomEvent<string>;
     expect(toastEvent.type).toBe('app:showToast');
     expect(toastEvent.detail).toContain('登录状态已过期');
+  });
+
+  test('shows the dedicated signed-out toast when enterprise membership is revoked', async () => {
+    const dispatchEvent = vi.fn();
+    store.dispatch(setLoggedIn({
+      user,
+      quota,
+      ownerAccountKey: 'enterprise:user@example.com:1001',
+    }));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('window', {
+      dispatchEvent,
+      electron: {
+        auth: {
+          getPricingCatalog: vi.fn().mockResolvedValue({
+            success: true,
+            textModels: [],
+          }),
+        },
+      },
+    });
+
+    const serviceWithSessionHandler = authService as unknown as {
+      handleSessionChanged: (event: AuthSessionChangedEvent) => Promise<void>;
+    };
+    await serviceWithSessionHandler.handleSessionChanged({
+      status: AuthSessionStatus.Expired,
+      reason: AuthSessionChangeReason.EnterpriseMembershipRevoked,
+    });
+
+    expect(store.getState().auth.sessionStatus).toBe(AuthSessionStatus.Expired);
+    expect(dispatchEvent).toHaveBeenCalledOnce();
+    const toastEvent = dispatchEvent.mock.calls[0][0] as CustomEvent<string>;
+    expect(toastEvent.type).toBe('app:showToast');
+    expect(toastEvent.detail).toBe('你已被移出当前团队，已退出登录。请重新登录并选择可用身份。');
+  });
+
+  test('provides the enterprise membership revocation message in English', () => {
+    i18nService.setLanguage('en', { persist: false });
+
+    expect(i18nService.t('coworkErrorEnterpriseMembershipRevoked')).toBe(
+      'You have been removed from the current team and signed out. '
+      + 'Sign in again to choose an available identity.',
+    );
   });
 
   test('discards a stale restore response after the renderer account changes', async () => {

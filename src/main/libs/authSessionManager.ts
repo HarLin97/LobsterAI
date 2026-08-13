@@ -10,6 +10,7 @@ import {
   AuthSessionStatus,
   type AuthSessionStatus as AuthSessionStatusValue,
 } from '../../shared/auth/constants';
+import { EnterpriseApiErrorCode } from '../../shared/enterpriseAccount/constants';
 
 export type AuthTokens = {
   accessToken: string;
@@ -56,7 +57,11 @@ type PendingRefresh = {
 };
 
 const DEFAULT_REFRESH_TIMEOUT_MS = 15_000;
-const TERMINAL_REFRESH_ERROR_CODES = new Set([40100, 40101]);
+const TERMINAL_REFRESH_ERROR_CODES = new Set([
+  40100,
+  40101,
+  EnterpriseApiErrorCode.NotMember,
+]);
 
 function readNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;

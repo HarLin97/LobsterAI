@@ -13,7 +13,11 @@ export interface EnterpriseAccountPermissions {
 export interface EnterpriseMemberQuota {
   limit: number;
   used: number;
+  reserved?: number;
   remaining: number;
+  refreshCycle?: 'natural_month' | 'natural_week';
+  periodStart?: string;
+  periodEndExclusive?: string;
 }
 
 export interface EnterpriseCreditPool {
