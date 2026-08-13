@@ -16,6 +16,7 @@ import { compareVersions, resolveLocalizedText } from '../../services/skill';
 import { setInstalledKits as setInstalledKitsAction, setMarketplaceKits } from '../../store/slices/kitSlice';
 import type { InstalledKit, KitSkillRef, MarketplaceKit } from '../../types/kit';
 import { CARD_ACTION_PILL_CLASS, DETAIL_ACTION_PILL_CLASS } from '../common/actionPillStyles';
+import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
 import SearchIcon from '../icons/SearchIcon';
@@ -509,11 +510,11 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
             <div className="flex min-w-0 items-center gap-4">
               <KitIcon icon={selectedKit.icon} className="h-20 w-20" />
               <div className="min-w-0">
-                <h2 className="text-lg font-semibold text-foreground">{resolveLocalizedText(selectedKit.name)}</h2>
-                <p className="mt-1.5 max-w-2xl text-[13px] leading-5 text-secondary">
+                <h2 className="text-base font-semibold text-foreground">{resolveLocalizedText(selectedKit.name)}</h2>
+                <p className={`mt-1.5 max-w-2xl ${MANAGEMENT_BODY_TEXT} leading-5 text-secondary`}>
                   {resolveLocalizedText(selectedKit.description)}
                 </p>
-                <div className="mt-3 flex items-center gap-1.5 text-[11px] text-secondary">
+                <div className={`mt-3 flex items-center gap-1.5 ${MANAGEMENT_META_TEXT} text-secondary`}>
                   {installed && (
                     <>
                       <span className="inline-flex items-center gap-0.5 rounded-md bg-green-500/10 px-1.5 py-0.5 font-medium text-green-600 dark:text-green-400">
@@ -544,7 +545,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
                   )}
                 </div>
                 {updateInfo && (
-                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] leading-5 text-amber-700 dark:text-amber-300">
+                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
                     <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 flex-shrink-0" />
                     <span>{formatKitReinstallRequiredDetail(updateInfo)}</span>
                   </div>
@@ -609,7 +610,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
           <div>
             <h3 className="mb-3 flex items-center gap-1.5 text-sm font-medium text-foreground">
               {i18nService.t('kitSkills')}
-              <span className="rounded-full bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-secondary">
+              <span className={`rounded-full bg-surface-raised px-1.5 py-0.5 ${MANAGEMENT_META_TEXT} font-medium text-secondary`}>
                 {selectedKit.skills.list.length}
               </span>
             </h3>
@@ -628,7 +629,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
               type="button"
               disabled={operating}
               onClick={() => handleRequestUninstall(selectedKit)}
-              className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 text-[13px] text-secondary transition-colors hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 ${MANAGEMENT_BODY_TEXT} text-secondary transition-colors hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50`}
             >
               <TrashIcon className="h-4 w-4" />
               {operating && operationType === KitOperationType.Uninstall
@@ -692,14 +693,14 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
   // List view
   return (
     <div className="space-y-4">
-      <p className="text-sm text-secondary">
+      <p className={`${MANAGEMENT_BODY_TEXT} pb-2 text-secondary`}>
         {i18nService.t('kitDescription')}
       </p>
 
       {/* Sticky toolbar: Search + tabs */}
       <div
         data-skin-management-toolbar="true"
-        className="sticky top-0 z-10 space-y-4 bg-background pb-4"
+        className="sticky top-0 z-10 space-y-4 bg-background pb-2"
       >
         {actionError && (
           <ErrorMessage message={actionError} onClose={() => setActionError('')} />
@@ -740,7 +741,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
           <button
             type="button"
             onClick={() => handleTabChange(KitTab.Marketplace)}
-            className={`relative px-2.5 pb-2.5 pt-0.5 text-sm font-semibold transition-colors ${
+            className={`relative px-2.5 pb-2.5 pt-0.5 ${MANAGEMENT_TITLE_TEXT} font-semibold transition-colors ${
               activeTab === KitTab.Marketplace ? 'text-foreground' : 'text-secondary hover:text-foreground'
             }`}
           >
@@ -752,13 +753,13 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
           <button
             type="button"
             onClick={() => handleTabChange(KitTab.Installed)}
-            className={`relative px-2.5 pb-2.5 pt-0.5 text-sm font-semibold transition-colors ${
+            className={`relative px-2.5 pb-2.5 pt-0.5 ${MANAGEMENT_TITLE_TEXT} font-semibold transition-colors ${
               activeTab === KitTab.Installed ? 'text-foreground' : 'text-secondary hover:text-foreground'
             }`}
           >
             {i18nService.t('kitInstalledTab')}
             {installedCount > 0 && (
-              <span className="ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 text-[11px] font-medium text-secondary">
+              <span className={`ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 ${MANAGEMENT_META_TEXT} font-medium text-secondary`}>
                 {installedCount}
               </span>
             )}
@@ -771,7 +772,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
 
       {/* Kit grid */}
       {isLoading ? (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2" aria-hidden="true">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" aria-hidden="true">
           {Array.from({ length: 4 }).map((_, idx) => (
             <div key={idx} className="min-h-[116px] animate-pulse rounded-xl border border-border bg-surface p-4">
               <div className="flex gap-3.5">
@@ -820,7 +821,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
           ) : null}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {filteredKits.map((kit) => {
             const installed = isKitInstalled(kit.id);
             const operating = isOperating(kit.id);
@@ -849,7 +850,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
                     {/* One capsule, its label carrying the state. Uninstall is
                         not a browsing action, so it lives in the detail page. */}
                     <div className="flex items-center gap-2">
-                      <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+                      <h3 className={`min-w-0 flex-1 truncate ${MANAGEMENT_TITLE_TEXT} font-semibold text-foreground`}>
                         {resolveLocalizedText(kit.name)}
                       </h3>
                       {installed ? (
@@ -879,11 +880,11 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
                         </button>
                       )}
                     </div>
-                    <p className="mt-1.5 line-clamp-2 text-[13px] leading-[18px] text-secondary">
+                    <p className="mt-1.5 line-clamp-2 text-xs leading-[18px] text-secondary">
                       {resolveLocalizedText(kit.description)}
                     </p>
 
-                    <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-secondary">
+                    <div className={`mt-3 flex flex-wrap items-center gap-1.5 ${MANAGEMENT_META_TEXT} text-secondary`}>
                       {installed && activeTab === KitTab.Marketplace && (
                         <>
                           <span className="inline-flex items-center gap-0.5 rounded-md bg-green-500/10 px-1.5 py-0.5 font-medium text-green-600 dark:text-green-400">

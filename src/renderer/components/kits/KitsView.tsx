@@ -50,7 +50,7 @@ const KitsView: React.FC<KitsViewProps> = ({ isSidebarCollapsed, onToggleSidebar
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0 [scrollbar-gutter:stable]">
-        <div className="mx-auto w-full max-w-[1120px] px-6 py-6">
+        <div className="mx-auto w-full max-w-[1120px] px-8 py-6">
           <KitsManager onTryAsking={onTryAsking} onUseKit={onUseKit} />
         </div>
       </div>
