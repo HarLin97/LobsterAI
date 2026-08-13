@@ -24,12 +24,18 @@ describe('conversation search', () => {
     const matches = findConversationSearchMatches([
       message('user', 'user', 'needle'),
       message('assistant', 'assistant', 'Needle'),
+      message('silent', 'assistant', '**NO_REPLY**'),
       message('thinking', 'assistant', 'needle', { isThinking: true }),
       message('tool', 'tool_result', 'needle'),
       message('system', 'system', 'needle'),
     ], 'NEEDLE');
 
     expect(matches.map(match => match.messageId)).toEqual(['user', 'assistant']);
+    expect(getConversationSearchMessageText(message(
+      'silent',
+      'assistant',
+      '**NO_REPLY**',
+    ))).toBeNull();
   });
 
   test('matches Chinese and mixed-language text literally', () => {
@@ -100,6 +106,17 @@ describe('conversation search', () => {
     expect(matches.map(match => match.occurrenceIndex)).toEqual([0, 1, 2]);
   });
 
+  test('enforces the match cap across multiple messages', () => {
+    const matches = findConversationSearchMatches([
+      message('first', 'assistant', 'x x'),
+      message('second', 'user', 'x x'),
+      message('third', 'assistant', 'x x'),
+    ], 'x', 0, 3);
+
+    expect(matches).toHaveLength(3);
+    expect(matches.map(match => match.messageId)).toEqual(['first', 'first', 'second']);
+  });
+
   test('searches visible Markdown labels and code but not hidden link or image URLs', () => {
     const text = getVisibleMarkdownSearchText([
       '# **Title**',
@@ -117,6 +134,42 @@ describe('conversation search', () => {
     expect(text).toContain('console.log(value);');
     expect(text).not.toContain('openai.com/hidden');
     expect(text).not.toContain('private.png');
+  });
+
+  test('preserves Markdown and HTML literals inside multi-backtick inline code', () => {
+    const content = [
+      'Before ``literal ` [x](https://inline.example/path) <div> **stars**`` after',
+      '[outside](https://outside.example/hidden)',
+    ].join('\n');
+    const text = getVisibleMarkdownSearchText(content);
+
+    expect(text).toContain('literal ` [x](https://inline.example/path) <div> **stars**');
+    expect(text).toContain('outside');
+    expect(text).not.toContain('outside.example/hidden');
+    expect(findConversationSearchMatches([
+      message('inline-code', 'assistant', content),
+    ], 'inline.example/path')).toHaveLength(1);
+  });
+
+  test('preserves Markdown and HTML literals inside longer fenced code', () => {
+    const content = [
+      '````markdown',
+      '```',
+      '[x](https://fenced.example/path)',
+      '<section>**literal**</section>',
+      '```',
+      '````',
+      '[outside](https://outside.example/hidden)',
+    ].join('\n');
+    const text = getVisibleMarkdownSearchText(content);
+
+    expect(text).toContain('```\n[x](https://fenced.example/path)');
+    expect(text).toContain('<section>**literal**</section>');
+    expect(text).not.toContain('````markdown');
+    expect(text).not.toContain('outside.example/hidden');
+    expect(findConversationSearchMatches([
+      message('fenced-code', 'assistant', content),
+    ], 'fenced.example/path')).toHaveLength(1);
   });
 
   test('removes paired emphasis markers without consuming literal asterisks', () => {

@@ -157,8 +157,9 @@ async function requestConfigSet(
 
 /**
  * Push the current config file content to a running gateway and return how the
- * delivery concluded. Never throws — every failure path degrades to the
- * deferred-restart fallback so convergence is still guaranteed.
+ * delivery concluded. Never throws: transient failures degrade to the
+ * deferred-restart fallback, while invalid payloads return `Rejected` so the
+ * caller can surface the configuration error without restarting in a loop.
  */
 export async function deliverOpenClawConfigToGateway(
   input: OpenClawConfigDeliveryInput,
@@ -235,13 +236,13 @@ export async function deliverOpenClawConfigToGateway(
     await requestConfigSet(client, raw);
     return finish(OpenClawConfigDeliveryMode.Rpc, 'config.set acked');
   } catch (error) {
-    if (isConfigValidationRejection(error)) {
-      return finish(
-        OpenClawConfigDeliveryMode.Rejected,
-        `config.set rejected payload: ${describeError(error)}; restart skipped`,
-      );
-    }
     if (!isBaseHashConflict(error)) {
+      if (isConfigValidationRejection(error)) {
+        return finish(
+          OpenClawConfigDeliveryMode.Rejected,
+          `config.set rejected payload: ${describeError(error)}; restart skipped`,
+        );
+      }
       return fallback(`config.set failed: ${describeError(error)}`);
     }
     // Another writer (e.g. the gateway itself) touched the file between our
@@ -250,7 +251,7 @@ export async function deliverOpenClawConfigToGateway(
       await requestConfigSet(client, raw);
       return finish(OpenClawConfigDeliveryMode.Rpc, 'config.set acked after hash retry');
     } catch (retryError) {
-      if (isConfigValidationRejection(retryError)) {
+      if (!isBaseHashConflict(retryError) && isConfigValidationRejection(retryError)) {
         return finish(
           OpenClawConfigDeliveryMode.Rejected,
           `config.set rejected payload: ${describeError(retryError)}; restart skipped`,

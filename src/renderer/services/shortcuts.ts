@@ -121,6 +121,7 @@ export const isTextEditingSafeShortcut = (shortcut?: string): boolean => {
 export const matchesShortcut = (event: KeyboardEvent, shortcut?: string): boolean => {
   const parsed = parseShortcut(shortcut);
   if (!parsed) return false;
+  if (event.getModifierState?.('AltGraph')) return false;
 
   const key = normalizeKey(event.key);
   if (key !== parsed.key) return false;

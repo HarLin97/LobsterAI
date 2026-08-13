@@ -701,22 +701,28 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
 
 class ConfigService {
   private config: AppConfig = defaultConfig;
+  private initGeneration = 0;
 
   async init() {
+    const initGeneration = ++this.initGeneration;
     try {
-      const storedConfig = await localStore.getItem<AppConfig>(CONFIG_KEYS.APP_CONFIG);
+      const storedConfig = await localStore.getItemStrict<AppConfig>(CONFIG_KEYS.APP_CONFIG);
+      if (initGeneration !== this.initGeneration) return;
       if (!storedConfig) {
         console.warn('[ConfigService] init: no stored config found, using defaults');
       }
       if (storedConfig) {
         const previousMigrationVersions = storedConfig.providerModelMigrationVersions;
-        this.config = hydrateStoredConfig(storedConfig);
-        if (JSON.stringify(this.config) !== JSON.stringify(storedConfig)) {
+        const hydratedConfig = hydrateStoredConfig(storedConfig);
+        if (initGeneration !== this.initGeneration) return;
+        this.config = hydratedConfig;
+        if (JSON.stringify(hydratedConfig) !== JSON.stringify(storedConfig)) {
           try {
-            await localStore.setItem(CONFIG_KEYS.APP_CONFIG, this.config);
+            await localStore.setItem(CONFIG_KEYS.APP_CONFIG, hydratedConfig);
+            if (initGeneration !== this.initGeneration) return;
             const appliedProviders = getNewlyAppliedProviderModelMigrations(
               previousMigrationVersions,
-              this.config.providerModelMigrationVersions,
+              hydratedConfig.providerModelMigrationVersions,
             );
             if (appliedProviders.length > 0) {
               console.log(`[ConfigService] applied provider model migrations for ${appliedProviders.join(', ')}`);
@@ -728,6 +734,7 @@ class ConfigService {
       }
     } catch (error) {
       console.error('[ConfigService] init failed:', error);
+      throw error;
     }
   }
 
@@ -736,12 +743,17 @@ class ConfigService {
   }
 
   async updateConfig(newConfig: Partial<AppConfig>) {
+    // An explicit user/service write must win over any startup read that is
+    // still in flight after App's timeout-based recovery moved on.
+    this.initGeneration += 1;
     const normalizedProviders = normalizeProvidersConfig(newConfig.providers as AppConfig['providers'] | undefined);
 
     // Read-modify-write: use the latest stored value as the base to avoid
     // overwriting fields (e.g. providers) with stale in-memory defaults when
     // only a subset of config is being updated.
-    const stored = await localStore.getItem<AppConfig>(CONFIG_KEYS.APP_CONFIG);
+    // Never turn a transient IPC/storage failure into a full write based on
+    // in-memory defaults: that could overwrite an existing user's config.
+    const stored = await localStore.getItemStrict<AppConfig>(CONFIG_KEYS.APP_CONFIG);
     const base = stored ? hydrateStoredConfig(stored) : this.config;
 
     this.config = omitLegacyVoiceInputConfig({

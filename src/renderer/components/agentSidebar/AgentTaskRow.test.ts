@@ -57,3 +57,10 @@ test('scheduled task rows show a localized accessible clock marker without marki
     i18nService.setLanguage(originalLanguage, { persist: false });
   }
 });
+
+test('task rows and hidden action controls remain keyboard reachable', () => {
+  const html = renderTask(false);
+  expect(html).toContain('role="treeitem"');
+  expect(html).toContain('tabindex="0"');
+  expect(html).toContain('focus-visible:opacity-[0.46]');
+});

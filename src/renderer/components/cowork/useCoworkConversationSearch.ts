@@ -1,34 +1,105 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { COWORK_SEARCH_MESSAGE_PAGE_SIZE } from '../../../shared/cowork/constants';
+import type {
+  CoworkSearchMessage,
+  CoworkSearchMessageCursor,
+  CoworkSearchMessagePage,
+} from '../../../shared/cowork/search';
 import type { CoworkMessage } from '../../types/cowork';
 import {
   CONVERSATION_SEARCH_MATCH_LIMIT,
   ConversationSearchDirection,
   type ConversationSearchDirection as ConversationSearchDirectionValue,
+  ConversationSearchErrorReason,
+  type ConversationSearchErrorReason as ConversationSearchErrorReasonValue,
   ConversationSearchStatus,
   type ConversationSearchStatus as ConversationSearchStatusValue,
   type CoworkConversationSearchMatch,
   findConversationSearchMatches,
 } from './conversationSearch';
 import {
+  isConversationSearchHistoryLimitError,
+  loadConversationSearchHistory,
+  measureConversationSearchHistoryContentCodeUnits,
+  mergeConversationSearchHistoryMessages,
+} from './conversationSearchHistoryLoader';
+import {
   logConversationSearchDebug,
   logConversationSearchWarning,
 } from './conversationSearchLogger';
-import { mergeCoworkTextExportMessages } from './sessionExport';
 
 // Streaming deltas can arrive many times per second. Re-scanning a complete
 // conversation more frequently than this creates avoidable CPU and allocation
 // pressure without making the result counter meaningfully more useful.
 const STREAM_MESSAGE_MERGE_THROTTLE_MS = 1_000;
 const SEARCH_MESSAGE_BATCH_SIZE = 200;
+const NON_WHITESPACE_RE = /\S/;
+
+type SearchableCurrentMessage = CoworkMessage & { type: 'user' | 'assistant' };
+
+const isSearchableCurrentMessage = (
+  message: CoworkMessage,
+): message is SearchableCurrentMessage => (
+  (message.type === 'user' || message.type === 'assistant')
+  && message.metadata?.isThinking !== true
+  && NON_WHITESPACE_RE.test(message.content)
+);
+
+interface ConversationSearchStreamReconciliation {
+  messages: CoworkSearchMessage[];
+  contentCodeUnits: number;
+  hasContentUpdate: boolean;
+  hasUnknownCurrentMessage: boolean;
+}
+
+/** Reconciles streamed message bodies and enforces the same retained-content budget. */
+export const reconcileConversationSearchStreamMessages = (
+  historyMessages: CoworkSearchMessage[],
+  currentMessages: CoworkMessage[],
+): ConversationSearchStreamReconciliation => {
+  const currentById = new Map(
+    currentMessages
+      .filter(isSearchableCurrentMessage)
+      .map(message => [message.id, message]),
+  );
+  const unknownCurrentIds = new Set(currentById.keys());
+  const messages = historyMessages.map(message => {
+    unknownCurrentIds.delete(message.id);
+    const current = currentById.get(message.id);
+    if (
+      !current
+      || (
+        current.type === message.type
+        && current.content === message.content
+        && current.timestamp === message.timestamp
+      )
+    ) {
+      return message;
+    }
+    return {
+      id: current.id,
+      type: current.type,
+      content: current.content,
+      timestamp: current.timestamp,
+      absoluteMessageIndex: message.absoluteMessageIndex,
+    };
+  });
+  return {
+    messages,
+    contentCodeUnits: measureConversationSearchHistoryContentCodeUnits(messages),
+    hasContentUpdate: messages.some((message, index) => message !== historyMessages[index]),
+    hasUnknownCurrentMessage: unknownCurrentIds.size > 0,
+  };
+};
 
 interface ConversationSearchBatchResult {
   matches: CoworkConversationSearchMatch[];
   isResultLimitReached: boolean;
 }
 
-const findConversationSearchMatchesInBatches = async (
-  messages: CoworkMessage[],
+export const findConversationSearchMatchesInBatches = async (
+  messages: CoworkSearchMessage[],
   query: string,
   isRequestCurrent: () => boolean,
 ): Promise<ConversationSearchBatchResult | null> => {
@@ -38,13 +109,21 @@ const findConversationSearchMatchesInBatches = async (
     if (!isRequestCurrent()) return null;
 
     const endIndex = Math.min(startIndex + SEARCH_MESSAGE_BATCH_SIZE, messages.length);
+    const batchMessages = messages.slice(startIndex, endIndex);
+    const absoluteIndexById = new Map(
+      batchMessages.map(message => [message.id, message.absoluteMessageIndex]),
+    );
     const remainingMatchCapacity = CONVERSATION_SEARCH_MATCH_LIMIT - matches.length;
     const batchMatches = findConversationSearchMatches(
-      messages.slice(startIndex, endIndex),
+      batchMessages,
       query,
-      startIndex,
+      0,
       remainingMatchCapacity + 1,
-    );
+    ).map(match => ({
+      ...match,
+      absoluteMessageIndex: absoluteIndexById.get(match.messageId)
+        ?? match.absoluteMessageIndex,
+    }));
     if (batchMatches.length > remainingMatchCapacity) {
       matches.push(...batchMatches.slice(0, remainingMatchCapacity));
       return { matches, isResultLimitReached: true };
@@ -62,7 +141,13 @@ const findConversationSearchMatchesInBatches = async (
 interface UseCoworkConversationSearchOptions {
   sessionId?: string;
   currentMessages: CoworkMessage[];
-  loadFullMessages: () => Promise<CoworkMessage[]>;
+  currentTotalMessages?: number;
+  loadMessagePage: (options: {
+    offset: number;
+    limit: number;
+    cursor?: CoworkSearchMessageCursor;
+    knownTotal?: number;
+  }) => Promise<CoworkSearchMessagePage>;
   debounceMs?: number;
 }
 
@@ -70,6 +155,7 @@ export interface CoworkConversationSearchController {
   isOpen: boolean;
   query: string;
   status: ConversationSearchStatusValue;
+  errorReason: ConversationSearchErrorReasonValue | null;
   matches: CoworkConversationSearchMatch[];
   isResultLimitReached: boolean;
   activeMatch: CoworkConversationSearchMatch | null;
@@ -84,36 +170,73 @@ export interface CoworkConversationSearchController {
 export function useCoworkConversationSearch({
   sessionId,
   currentMessages,
-  loadFullMessages,
+  currentTotalMessages = currentMessages.length,
+  loadMessagePage,
   debounceMs = 120,
 }: UseCoworkConversationSearchOptions): CoworkConversationSearchController {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQueryState] = useState('');
   const [status, setStatus] = useState<ConversationSearchStatusValue>(ConversationSearchStatus.Idle);
-  const [fullMessages, setFullMessages] = useState<CoworkMessage[]>([]);
+  const [errorReason, setErrorReason] = useState<ConversationSearchErrorReasonValue | null>(null);
+  const [fullMessages, setFullMessages] = useState<CoworkSearchMessage[]>([]);
   const [matches, setMatches] = useState<CoworkConversationSearchMatch[]>([]);
   const [isResultLimitReached, setIsResultLimitReached] = useState(false);
   const [activeMatchKey, setActiveMatchKey] = useState<string | null>(null);
   const [focusRequestKey, setFocusRequestKey] = useState(0);
+  const [streamRefreshVersion, setStreamRefreshVersion] = useState(0);
   const loadRequestRef = useRef(0);
   const searchRequestRef = useRef(0);
   const streamMergeTimerRef = useRef<number | null>(null);
+  const tailLoadInFlightRef = useRef(false);
+  const loadedHistoryEndOffsetRef = useRef(0);
+  const loadedHistoryCursorRef = useRef<CoworkSearchMessageCursor | undefined>(undefined);
+  const loadedHistoryContentCodeUnitsRef = useRef(0);
   const latestCurrentMessagesRef = useRef(currentMessages);
+  const latestCurrentTotalMessagesRef = useRef(currentTotalMessages);
+  const latestSessionIdRef = useRef(sessionId);
   const isOpenRef = useRef(false);
   const statusRef = useRef<ConversationSearchStatusValue>(ConversationSearchStatus.Idle);
-  const fullMessagesRef = useRef<CoworkMessage[]>([]);
-  const loadFullMessagesRef = useRef(loadFullMessages);
+  const fullMessagesRef = useRef<CoworkSearchMessage[]>([]);
+  const loadMessagePageRef = useRef(loadMessagePage);
   const previousSessionIdRef = useRef(sessionId);
   const hasLoggedResultLimitRef = useRef(false);
 
   latestCurrentMessagesRef.current = currentMessages;
+  latestCurrentTotalMessagesRef.current = currentTotalMessages;
+  latestSessionIdRef.current = sessionId;
   isOpenRef.current = isOpen;
   statusRef.current = status;
   fullMessagesRef.current = fullMessages;
 
   useEffect(() => {
-    loadFullMessagesRef.current = loadFullMessages;
-  }, [loadFullMessages]);
+    loadMessagePageRef.current = loadMessagePage;
+  }, [loadMessagePage]);
+
+  const enterError = useCallback((message: string, error: unknown) => {
+    loadRequestRef.current += 1;
+    searchRequestRef.current += 1;
+    if (streamMergeTimerRef.current !== null) {
+      window.clearTimeout(streamMergeTimerRef.current);
+      streamMergeTimerRef.current = null;
+    }
+    statusRef.current = ConversationSearchStatus.Error;
+    fullMessagesRef.current = [];
+    loadedHistoryEndOffsetRef.current = 0;
+    loadedHistoryCursorRef.current = undefined;
+    loadedHistoryContentCodeUnitsRef.current = 0;
+    tailLoadInFlightRef.current = false;
+    setStatus(ConversationSearchStatus.Error);
+    setErrorReason(isConversationSearchHistoryLimitError(error)
+      ? ConversationSearchErrorReason.HistoryTooLarge
+      : ConversationSearchErrorReason.Unavailable);
+    setFullMessages([]);
+    setMatches([]);
+    setIsResultLimitReached(false);
+    setActiveMatchKey(null);
+    setStreamRefreshVersion(0);
+    hasLoggedResultLimitRef.current = false;
+    logConversationSearchWarning(message, error);
+  }, []);
 
   const reset = useCallback(() => {
     loadRequestRef.current += 1;
@@ -125,13 +248,19 @@ export function useCoworkConversationSearch({
     isOpenRef.current = false;
     statusRef.current = ConversationSearchStatus.Idle;
     fullMessagesRef.current = [];
+    loadedHistoryEndOffsetRef.current = 0;
+    loadedHistoryCursorRef.current = undefined;
+    loadedHistoryContentCodeUnitsRef.current = 0;
+    tailLoadInFlightRef.current = false;
     setIsOpen(false);
     setQueryState('');
     setStatus(ConversationSearchStatus.Idle);
+    setErrorReason(null);
     setFullMessages([]);
     setMatches([]);
     setIsResultLimitReached(false);
     setActiveMatchKey(null);
+    setStreamRefreshVersion(0);
     hasLoggedResultLimitRef.current = false;
   }, []);
 
@@ -158,7 +287,6 @@ export function useCoworkConversationSearch({
     if (
       !isOpen
       || status !== ConversationSearchStatus.Ready
-      || currentMessages.length === 0
     ) return;
     if (streamMergeTimerRef.current !== null) return;
 
@@ -166,19 +294,106 @@ export function useCoworkConversationSearch({
       streamMergeTimerRef.current = null;
       if (!isOpenRef.current || statusRef.current !== ConversationSearchStatus.Ready) return;
 
-      setFullMessages(previous => {
-        const nextMessages = mergeCoworkTextExportMessages(
-          previous,
+      const hasUninspectedTimelineTail = latestCurrentTotalMessagesRef.current
+        > loadedHistoryEndOffsetRef.current;
+      let reconciliation: ConversationSearchStreamReconciliation;
+      try {
+        reconciliation = reconcileConversationSearchStreamMessages(
+          fullMessagesRef.current,
           latestCurrentMessagesRef.current,
         );
-        const unchanged = nextMessages.length === previous.length
-          && nextMessages.every((message, index) => message === previous[index]);
-        if (unchanged) return previous;
+      } catch (error) {
+        enterError('Streamed conversation search content exceeded its safe budget.', error);
+        return;
+      }
+      loadedHistoryContentCodeUnitsRef.current = reconciliation.contentCodeUnits;
+      if (reconciliation.hasContentUpdate) {
+        fullMessagesRef.current = reconciliation.messages;
+        setFullMessages(reconciliation.messages);
+      }
+
+      if (
+        (!reconciliation.hasUnknownCurrentMessage && !hasUninspectedTimelineTail)
+        || tailLoadInFlightRef.current
+      ) return;
+      const requestId = loadRequestRef.current;
+      const requestSessionId = latestSessionIdRef.current;
+      const startOffset = loadedHistoryEndOffsetRef.current;
+      const startCursor = loadedHistoryCursorRef.current;
+      tailLoadInFlightRef.current = true;
+      void loadConversationSearchHistory({
+        startOffset,
+        startCursor,
+        knownTotal: latestCurrentTotalMessagesRef.current,
+        existingContentCodeUnits: loadedHistoryContentCodeUnitsRef.current,
+        pageSize: COWORK_SEARCH_MESSAGE_PAGE_SIZE,
+        loadPage: options => loadMessagePageRef.current(options),
+        isRequestCurrent: () => (
+          requestId === loadRequestRef.current
+          && requestSessionId === latestSessionIdRef.current
+          && isOpenRef.current
+          && statusRef.current === ConversationSearchStatus.Ready
+        ),
+      }).then(result => {
+        if (
+          !result
+          || requestId !== loadRequestRef.current
+          || requestSessionId !== latestSessionIdRef.current
+        ) return;
+        const mergedMessages = mergeConversationSearchHistoryMessages(
+          fullMessagesRef.current,
+          result.messages,
+        );
+        const latestById = new Map(
+          latestCurrentMessagesRef.current
+            .filter(isSearchableCurrentMessage)
+            .map(message => [message.id, message]),
+        );
+        const nextMessages = mergedMessages
+          .map(message => {
+            const current = latestById.get(message.id);
+            if (!current) return message;
+            return {
+              id: current.id,
+              type: current.type,
+              content: current.content,
+              timestamp: current.timestamp,
+              absoluteMessageIndex: message.absoluteMessageIndex,
+            };
+          })
+          .sort((left, right) => left.absoluteMessageIndex - right.absoluteMessageIndex);
+        const nextContentCodeUnits = measureConversationSearchHistoryContentCodeUnits(nextMessages);
+        loadedHistoryEndOffsetRef.current = result.endOffset;
+        loadedHistoryCursorRef.current = result.endCursor;
+        loadedHistoryContentCodeUnitsRef.current = nextContentCodeUnits;
         fullMessagesRef.current = nextMessages;
-        return nextMessages;
+        setFullMessages(nextMessages);
+        if (latestCurrentTotalMessagesRef.current > result.endOffset) {
+          setStreamRefreshVersion(value => value + 1);
+        }
+      }).catch((error: unknown) => {
+        if (
+          requestId !== loadRequestRef.current
+          || requestSessionId !== latestSessionIdRef.current
+        ) return;
+        enterError('Failed to refresh streamed conversation search history.', error);
+      }).finally(() => {
+        if (
+          requestId === loadRequestRef.current
+          && requestSessionId === latestSessionIdRef.current
+        ) {
+          tailLoadInFlightRef.current = false;
+        }
       });
     }, STREAM_MESSAGE_MERGE_THROTTLE_MS);
-  }, [currentMessages, isOpen, status]);
+  }, [
+    currentMessages,
+    currentTotalMessages,
+    enterError,
+    isOpen,
+    status,
+    streamRefreshVersion,
+  ]);
 
   const open = useCallback(() => {
     if (!sessionId) return;
@@ -196,22 +411,42 @@ export function useCoworkConversationSearch({
     ) return;
 
     const requestId = ++loadRequestRef.current;
+    const requestSessionId = sessionId;
     statusRef.current = ConversationSearchStatus.Loading;
     setStatus(ConversationSearchStatus.Loading);
-    void loadFullMessagesRef.current().then(messages => {
-      if (requestId !== loadRequestRef.current) return;
-      fullMessagesRef.current = messages;
+    setErrorReason(null);
+    void loadConversationSearchHistory({
+      pageSize: COWORK_SEARCH_MESSAGE_PAGE_SIZE,
+      loadPage: options => loadMessagePageRef.current(options),
+      isRequestCurrent: () => (
+        requestId === loadRequestRef.current
+        && requestSessionId === latestSessionIdRef.current
+        && isOpenRef.current
+      ),
+    }).then(result => {
+      if (
+        !result
+        || requestId !== loadRequestRef.current
+        || requestSessionId !== latestSessionIdRef.current
+      ) return;
+      loadedHistoryEndOffsetRef.current = result.endOffset;
+      loadedHistoryCursorRef.current = result.endCursor;
+      loadedHistoryContentCodeUnitsRef.current = result.cumulativeContentCodeUnits;
+      fullMessagesRef.current = result.messages;
       statusRef.current = ConversationSearchStatus.Ready;
-      setFullMessages(messages);
+      setFullMessages(result.messages);
       setStatus(ConversationSearchStatus.Ready);
-      logConversationSearchDebug(`Loaded conversation history; messageCount=${messages.length}.`);
+      logConversationSearchDebug(
+        `Loaded lightweight conversation search history; searchableMessages=${result.messages.length}; totalMessages=${result.total}.`,
+      );
     }).catch((error: unknown) => {
-      if (requestId !== loadRequestRef.current) return;
-      statusRef.current = ConversationSearchStatus.Error;
-      logConversationSearchWarning('Failed to load conversation history.', error);
-      setStatus(ConversationSearchStatus.Error);
+      if (
+        requestId !== loadRequestRef.current
+        || requestSessionId !== latestSessionIdRef.current
+      ) return;
+      enterError('Failed to load conversation history.', error);
     });
-  }, [sessionId]);
+  }, [enterError, sessionId]);
 
   const close = useCallback(() => {
     if (isOpenRef.current) {
@@ -275,14 +510,12 @@ export function useCoworkConversationSearch({
         setStatus(ConversationSearchStatus.Ready);
       }).catch((error: unknown) => {
         if (requestId !== searchRequestRef.current) return;
-        logConversationSearchWarning('Failed to search conversation history.', error);
-        statusRef.current = ConversationSearchStatus.Error;
-        setStatus(ConversationSearchStatus.Error);
+        enterError('Failed to search conversation history.', error);
       });
     }, debounceMs);
 
     return () => window.clearTimeout(timer);
-  }, [debounceMs, fullMessages, isOpen, query, status]);
+  }, [debounceMs, enterError, fullMessages, isOpen, query, status]);
 
   const activeMatchIndex = useMemo(() => {
     if (!activeMatchKey) return -1;
@@ -312,6 +545,7 @@ export function useCoworkConversationSearch({
     isOpen: isSessionStateCurrent ? isOpen : false,
     query: isSessionStateCurrent ? query : '',
     status: isSessionStateCurrent ? status : ConversationSearchStatus.Idle,
+    errorReason: isSessionStateCurrent ? errorReason : null,
     matches: isSessionStateCurrent ? matches : [],
     isResultLimitReached: isSessionStateCurrent ? isResultLimitReached : false,
     activeMatch: isSessionStateCurrent ? activeMatch : null,

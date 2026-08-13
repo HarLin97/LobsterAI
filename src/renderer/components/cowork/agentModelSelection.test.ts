@@ -1,3 +1,4 @@
+import { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
 import { ModelThinkingLevel } from '@shared/providers/modelThinking';
 import { describe, expect, test } from 'vitest';
 
@@ -23,6 +24,7 @@ const configurableThinkingModel: Model = {
   id: 'deepseek-v4-flash',
   name: 'DeepSeek V4 Flash',
   providerKey: 'lobsterai-server',
+  requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
   thinkingConfig: {
     options: [
       { level: ModelThinkingLevel.Off, openclawLevel: 'off' },
@@ -51,6 +53,13 @@ describe('resolveModelThinkingLevel', () => {
 
   test('does not attach a thinking level to models without configuration', () => {
     expect(resolveModelThinkingLevel(nonVisionModel, ModelThinkingLevel.Max)).toBeUndefined();
+  });
+
+  test('does not attach a thinking level after the server withdraws request-options support', () => {
+    expect(resolveModelThinkingLevel(
+      { ...configurableThinkingModel, requestCapabilities: undefined },
+      ModelThinkingLevel.High,
+    )).toBeUndefined();
   });
 });
 

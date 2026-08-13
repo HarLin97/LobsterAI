@@ -2,9 +2,11 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
+import { OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS } from '../../shared/openclawEngine/constants';
 import type { IMStore } from '../im/imStore';
 import type { PopoInstanceConfig } from '../im/types';
 import type { SqliteStore } from '../sqliteStore';
+import { safelyReplaceTextFileSync } from './safeFileReplace';
 
 export type EnterpriseUIAction = 'hide' | 'disable' | 'readonly';
 
@@ -1063,6 +1065,22 @@ function readPluginLoadPaths(config: Record<string, unknown>): string[] {
   return paths.filter((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
+function stripPluginIndexManagedKeys(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!isRecord(config.plugins)) return config;
+
+  const managedKeys: readonly string[] = OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS;
+  const plugins = Object.fromEntries(
+    Object.entries(config.plugins).filter(([key]) => !managedKeys.includes(key)),
+  );
+  if (Object.keys(plugins).length === 0) {
+    const { plugins: _plugins, ...rest } = config;
+    return rest;
+  }
+  return { ...config, plugins };
+}
+
 export function mergeOpenClawConfigs(
   runtimeConfig: Record<string, unknown>,
   enterpriseConfig: Record<string, unknown>,
@@ -1095,7 +1113,7 @@ export function mergeOpenClawConfigs(
   ]));
 
   if (mergedPluginLoadPaths.length === 0) {
-    return merged;
+    return stripPluginIndexManagedKeys(merged);
   }
 
   const existingPlugins = merged.plugins;
@@ -1111,7 +1129,7 @@ export function mergeOpenClawConfigs(
   plugins.load = load;
   merged.plugins = plugins;
 
-  return merged;
+  return stripPluginIndexManagedKeys(merged);
 }
 
 /**
@@ -1119,12 +1137,12 @@ export function mergeOpenClawConfigs(
  * Called AFTER openclawConfigSync generates the runtime config.
  * Enterprise values override generated values; fields not in enterprise config are preserved.
  */
-export function mergeEnterpriseOpenclawConfig(runtimeConfigPath: string): void {
+export function mergeEnterpriseOpenclawConfig(runtimeConfigPath: string): boolean {
   const enterprisePath = resolveEnterpriseConfigPath();
-  if (!enterprisePath) return;
+  if (!enterprisePath) return false;
 
   const enterpriseOpenclawPath = path.join(enterprisePath, 'openclaw.json');
-  if (!fs.existsSync(enterpriseOpenclawPath) || !fs.existsSync(runtimeConfigPath)) return;
+  if (!fs.existsSync(enterpriseOpenclawPath) || !fs.existsSync(runtimeConfigPath)) return false;
 
   try {
     const runtimeRaw = fs.readFileSync(runtimeConfigPath, 'utf-8');
@@ -1134,9 +1152,21 @@ export function mergeEnterpriseOpenclawConfig(runtimeConfigPath: string): void {
     const enterpriseConfig = JSON.parse(enterpriseRaw) as Record<string, unknown>;
 
     const merged = mergeOpenClawConfigs(runtimeConfig, enterpriseConfig);
-    fs.writeFileSync(runtimeConfigPath, JSON.stringify(merged, null, 2), 'utf-8');
+    const currentNormalized = `${JSON.stringify(runtimeConfig, null, 2)}\n`;
+    const mergedRaw = `${JSON.stringify(merged, null, 2)}\n`;
+    if (currentNormalized === mergedRaw) return false;
+
+    const existingMode = fs.statSync(runtimeConfigPath).mode & 0o777;
+    safelyReplaceTextFileSync({
+      filePath: runtimeConfigPath,
+      content: mergedRaw,
+      mode: existingMode,
+      tempLabel: 'enterprise-merge',
+    });
     console.log('[Enterprise] merged enterprise openclaw.json into runtime config');
+    return true;
   } catch (error) {
     console.error('[Enterprise] failed to merge enterprise openclaw.json:', error);
+    return false;
   }
 }

@@ -64,8 +64,8 @@ LobsterAI 当前把 `CommandOrControl+F` 配置为全局“搜索任务”快捷
 
 ### 1.4 工程目标
 
-1. 第一版复用现有 `getSessionMessages` 和 `loadMessageWindowAroundIndex`，不新增主进程 IPC、
-   SQLite 表、索引或 OpenClaw patch。
+1. 目标定位继续复用 `loadMessageWindowAroundIndex`；完整历史读取使用搜索专用的轻量分页 IPC，
+   不把 tool/system 大正文或消息 metadata 复制到 renderer。无需新增 SQLite 表或 OpenClaw patch。
 2. 将搜索状态、匹配计算和 DOM 高亮从超大的 `CoworkSessionDetail.tsx` 中提取到独立模块。
 3. 将匹配算法设计为纯函数，覆盖中文、英文、Markdown 和同消息多次命中的单元测试。
 4. 不关闭 Cowork 现有分页和懒渲染来换取搜索能力。
@@ -448,21 +448,21 @@ export interface CoworkConversationSearchMatch {
 `key` 由 `messageId + occurrenceIndex` 生成。查询变化会先清空旧选择，因此无需把查询正文复制到每个
 结果 key 中；这样也能避免长查询在大量结果时造成额外内存占用。
 
-### FR-5：完整消息缓存
+### FR-5：轻量完整历史缓存
 
 搜索打开时按以下顺序构建完整消息缓存：
 
-1. 如果 `messagesOffset <= 0` 且 `messages.length >= totalMessages`，直接使用已加载消息；
-2. 否则调用现有 `window.electron.cowork.getSessionMessages({ sessionId, limit, offset: 0 })`；
-3. `limit` 至少为当前 `totalMessages`；如果返回的 `total` 更大，按返回值重试一次；
-4. 把 SQLite 返回消息与当前 Redux 中同 session 的内存消息按 message id 合并，内存版本优先，
-   以覆盖尚未完全持久化的流式内容；
-5. 缓存只存在于搜索 hook 生命周期中，不把完整历史写入 Redux，也不改变当前消息窗口；
-6. session 切换或搜索关闭后释放缓存。
-
-该流程可复用文本导出已有的完整历史加载和消息合并规则，但不应从
-`CoworkSessionDetail.tsx` 复制第二份相同算法。若现有导出 helper 不适合直接复用，应抽取一个
-职责明确的完整消息读取 helper，同时保持导出行为不变。
+1. 调用搜索专用 `getSessionSearchMessages`，每页检查固定数量的完整 mixed-message 顺序行；
+2. 主进程只投影非 thinking 的 user/assistant 文本、时间戳、id 和数据库完整顺序中的
+   `absoluteMessageIndex`，不跨 IPC 返回 tool/system 正文或 metadata；
+3. 分页使用 `(COALESCE(sequence, created_at), created_at, ROWID)` keyset cursor，并由复合索引支持；
+   总数只在首屏计算一次，后续页携带已知总数，避免长会话重复排序、OFFSET 扫描和 COUNT；
+4. 每页校验 offset、cursor、total 单调性和消息 id；零进度、时间线收缩/漂移或页数越界时安全失败；
+5. Redux 当前窗口及 detached tail 只按 message id 更新已缓存文本；新增尾部从最后 cursor 增量读取，
+   继续使用主进程提供的绝对下标，不按筛选后的数组重排；
+6. 缓存只存在于搜索 hook 生命周期中，不写入 Redux、不改变当前消息窗口；关闭、卸载或切换 session
+   会使 request token 失效，停止后续页并丢弃部分结果；
+7. 文本导出仍使用完整 `getSessionMessages` 数据和原有合并规则，不受轻量搜索投影影响。
 
 ### FR-6：查询更新与异步竞态
 
@@ -756,6 +756,7 @@ forceSearchContentExpanded?: boolean;
 | `src/renderer/components/cowork/CoworkSessionDetail.tsx` | 标题栏槽位、搜索事件、目标 turn 渲染、滚动与 ArtifactPanel 状态协调 |
 | `src/renderer/components/cowork/CoworkConversationSearch.tsx` | 新增两行搜索控件 |
 | `src/renderer/components/cowork/useCoworkConversationSearch.ts` | 新增搜索状态、完整历史缓存和导航 hook |
+| `src/renderer/components/cowork/conversationSearchHistoryLoader.ts` | 有界 keyset 分页、取消和时间线一致性保护 |
 | `src/renderer/components/cowork/conversationSearch.ts` | 新增纯搜索与文本规范化函数 |
 | `src/renderer/components/cowork/conversationSearchHighlight.ts` | 新增 CSS Highlight / Range 控制器 |
 | `src/renderer/components/cowork/UserMessageItem.tsx` | 增加统一搜索消息 DOM 标记 |
@@ -765,6 +766,9 @@ forceSearchContentExpanded?: boolean;
 | `src/renderer/components/MarkdownContent.tsx` | 增加默认关闭的受控强制完整展示能力 |
 | `src/renderer/services/i18n.ts` | 增加中英文搜索文案 |
 | `src/renderer/index.css` | 增加普通命中和当前命中的 Highlight 样式 |
+| `src/main/coworkStore.ts`、`src/main/main.ts`、`src/main/preload.ts` | 轻量搜索投影、分页 IPC 与 bridge |
+| `src/main/sqliteStore.ts` | 老库 sequence 迁移后创建消息顺序复合索引 |
+| `src/shared/cowork/search.ts` | 搜索投影、绝对下标和 keyset cursor 契约 |
 
 预计新增或扩展测试：
 
@@ -776,14 +780,7 @@ forceSearchContentExpanded?: boolean;
 | 现有 shortcut/App 测试 | 会话内搜索与历史任务搜索的上下文路由 |
 | 现有 Cowork 分页测试 | 未加载消息定位和 session 切换竞态 |
 
-第一版不预计修改：
-
-- `src/main/main.ts`
-- `src/main/preload.ts`
-- `src/main/coworkStore.ts`
-- `src/shared/cowork/constants.ts` 中的 IPC channel
-- SQLite schema
-- OpenClaw runtime 或补丁
+本功能不修改 SQLite 表字段、OpenClaw runtime 或补丁；仅增加可重复执行的消息顺序索引迁移。
 
 ## 9. 测试与验证计划
 

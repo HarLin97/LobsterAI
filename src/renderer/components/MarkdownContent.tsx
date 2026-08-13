@@ -11,7 +11,9 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 
 import { i18nService } from '../services/i18n';
+import { normalizeShellFilePath } from '../services/shellAppsCache';
 import { showShellFailureToast, showToast } from '../utils/localFileActions';
+import { transformMarkdownTextSegments } from '../utils/markdownCodeSegments';
 import CodeBlock from './CodeBlock';
 import LocalFileContextMenu from './common/LocalFileContextMenu';
 
@@ -133,8 +135,6 @@ const encodeFileUrlsInMarkdown = (content: string): string => {
  * untouched, and `\\[...]` (a LaTeX line break with spacing) is not treated
  * as an opening delimiter.
  */
-const MARKDOWN_CODE_SEGMENT_PATTERN = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/g;
-
 const convertSegmentLatexDelimiters = (segment: string): string => segment
   .replace(/(?<!\\)\\\[([\s\S]*?)\\\]/g, (match, inner: string) => {
     const trimmed = inner.trim();
@@ -149,10 +149,7 @@ export const convertLatexMathDelimiters = (content: string): string => {
   if (!content.includes('\\[') && !content.includes('\\(')) {
     return content;
   }
-  return content
-    .split(MARKDOWN_CODE_SEGMENT_PATTERN)
-    .map((segment, index) => (index % 2 === 1 ? segment : convertSegmentLatexDelimiters(segment)))
-    .join('');
+  return transformMarkdownTextSegments(content, convertSegmentLatexDelimiters);
 };
 
 /**
@@ -247,12 +244,16 @@ const safeDecodeURIComponent = (value: string): string => {
 
 const stripHashAndQuery = (value: string): string => value.split('#')[0].split('?')[0];
 
-const stripFileProtocol = (value: string): string => {
-  let cleaned = value.replace(/^(?:file|localfile):\/\//i, '');
-  if (/^\/[A-Za-z]:/.test(cleaned)) {
-    cleaned = cleaned.slice(1);
+export const normalizeMarkdownLocalFilePath = (value: string): string => {
+  const cleaned = stripHashAndQuery(value.trim());
+  if (/^file:/i.test(cleaned)) {
+    return normalizeShellFilePath(cleaned);
   }
-  return cleaned;
+  let normalized = cleaned.replace(/^localfile:\/\//i, '');
+  if (/^\/[A-Za-z]:/.test(normalized)) {
+    normalized = normalized.slice(1);
+  }
+  return safeDecodeURIComponent(normalized);
 };
 
 const hasFileExtension = (value: string): boolean => /\.[A-Za-z0-9]{1,6}$/.test(value);
@@ -305,7 +306,7 @@ const encodeLocalPathForUrl = (filePath: string): string => {
 };
 
 const toLocalFileSrc = (filePath: string): string => {
-  const normalized = stripFileProtocol(stripHashAndQuery(filePath.trim()));
+  const normalized = normalizeMarkdownLocalFilePath(filePath);
   const encoded = encodeLocalPathForUrl(normalized);
   if (/^[A-Za-z]:/.test(normalized)) {
     return `localfile:///${encoded}`;
@@ -362,9 +363,7 @@ const getLocalPathFromLink = (
   const resolved = resolveLocalFilePath ? resolveLocalFilePath(href, text) : null;
   if (resolved) return resolved;
   if (!isLikelyLocalFilePath(href)) return null;
-  const rawPath = stripFileProtocol(stripHashAndQuery(href));
-  const decoded = safeDecodeURIComponent(rawPath);
-  return decoded || rawPath || null;
+  return normalizeMarkdownLocalFilePath(href) || null;
 };
 
 const findFallbackPathFromContext = (
@@ -613,10 +612,7 @@ const createMarkdownComponents = (
     }
 
     if (isLocalFilePath) {
-      const rawPath = resolvedPath
-        ?? stripFileProtocol(stripHashAndQuery(hrefValue));
-      const decodedPath = safeDecodeURIComponent(rawPath);
-      const filePath = decodedPath || rawPath;
+      const filePath = normalizeMarkdownLocalFilePath(resolvedPath ?? hrefValue);
 
       return (
         <LocalFileLink

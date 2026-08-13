@@ -52,6 +52,7 @@ import {
   buildMacSwapPaths,
   buildWindowsInstallerLaunchScript,
   buildWindowsPowerShellCandidatePaths,
+  cancelActiveDownload,
   downloadUpdate,
   findAttachedDevEntries,
   installUpdate,
@@ -402,6 +403,49 @@ describe('Windows update download URL enforcement', () => {
       expect.objectContaining({ redirect: 'error' }),
     );
     expect(fs.existsSync(path.join(tmpDir, 'updates'))).toBe(false);
+  });
+
+  test('a cancelled stale download does not clear the replacement download controller', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const bodyControllers: ReadableStreamDefaultController<Uint8Array>[] = [];
+    mocks.fetch.mockImplementation((_url, options: { signal: AbortSignal }) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          bodyControllers.push(controller);
+          options.signal.addEventListener('abort', () => {
+            controller.error(new Error('aborted'));
+          }, { once: true });
+        },
+      });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        url: '',
+        headers: new Headers(),
+        body,
+      });
+    });
+
+    const firstDownload = downloadUpdate(
+      'https://downloads.example.com/LobsterAI.exe',
+      'auto',
+      () => {},
+    );
+    await vi.waitFor(() => expect(bodyControllers).toHaveLength(1));
+
+    expect(cancelActiveDownload()).toBe(true);
+    const replacementDownload = downloadUpdate(
+      'https://downloads.example.com/LobsterAI.exe',
+      'manual',
+      () => {},
+    );
+    await vi.waitFor(() => expect(bodyControllers).toHaveLength(2));
+    await expect(firstDownload).rejects.toThrow('Download cancelled');
+
+    expect(cancelActiveDownload()).toBe(true);
+    await expect(replacementDownload).rejects.toThrow('Download cancelled');
+    expect(errorSpy).toHaveBeenCalled();
   });
 });
 

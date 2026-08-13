@@ -15,7 +15,7 @@ describe('artifactSubscriptionGate', () => {
     await expect(resolveArtifactSubscriptionDecision({
       isLoggedIn: true,
       subscriptionStatus: AuthSubscriptionStatus.Active,
-    }, refreshSnapshot)).resolves.toEqual({ allowed: true });
+    }, refreshSnapshot, ArtifactSubscriptionFeature.Share)).resolves.toEqual({ allowed: true });
     expect(refreshSnapshot).not.toHaveBeenCalled();
   });
 
@@ -27,7 +27,7 @@ describe('artifactSubscriptionGate', () => {
     await expect(resolveArtifactSubscriptionDecision({
       isLoggedIn: true,
       subscriptionStatus: AuthSubscriptionStatus.Free,
-    }, refreshSnapshot)).resolves.toEqual({ allowed: true });
+    }, refreshSnapshot, ArtifactSubscriptionFeature.Share)).resolves.toEqual({ allowed: true });
     expect(refreshSnapshot).toHaveBeenCalledOnce();
   });
 
@@ -35,16 +35,45 @@ describe('artifactSubscriptionGate', () => {
     expect(getArtifactSubscriptionDecision({
       isLoggedIn: false,
       subscriptionStatus: AuthSubscriptionStatus.Free,
-    })).toEqual({
+    }, ArtifactSubscriptionFeature.Share)).toEqual({
       allowed: false,
       reason: ArtifactSubscriptionBlockReason.LoginRequired,
     });
     expect(getArtifactSubscriptionDecision({
       isLoggedIn: true,
       subscriptionStatus: AuthSubscriptionStatus.Free,
-    })).toEqual({
+    }, ArtifactSubscriptionFeature.Share)).toEqual({
       allowed: false,
       reason: ArtifactSubscriptionBlockReason.SubscriptionRequired,
+    });
+  });
+
+  test('allows enterprise sharing and deployment only from explicit server entitlements', () => {
+    const enterpriseSnapshot = {
+      isLoggedIn: true,
+      subscriptionStatus: AuthSubscriptionStatus.Enterprise,
+      accountMode: 'enterprise',
+      shareEntitled: true,
+      deploymentEntitled: true,
+    };
+    expect(getArtifactSubscriptionDecision(
+      enterpriseSnapshot,
+      ArtifactSubscriptionFeature.Share,
+    )).toEqual({ allowed: true });
+    expect(getArtifactSubscriptionDecision(
+      enterpriseSnapshot,
+      ArtifactSubscriptionFeature.Deployment,
+    )).toEqual({ allowed: true });
+  });
+
+  test('fails closed for enterprise accounts when explicit entitlement is unavailable', () => {
+    expect(getArtifactSubscriptionDecision({
+      isLoggedIn: true,
+      subscriptionStatus: AuthSubscriptionStatus.Enterprise,
+      accountMode: 'enterprise',
+    }, ArtifactSubscriptionFeature.Share)).toEqual({
+      allowed: false,
+      reason: ArtifactSubscriptionBlockReason.EnterpriseUnavailable,
     });
   });
 
@@ -68,6 +97,11 @@ describe('artifactSubscriptionGate', () => {
       ArtifactSubscriptionFeature.Deployment,
       ArtifactSubscriptionBlockReason.SubscriptionRequired,
       'nodeDeploymentSubscriptionRequiredTitle',
+    ],
+    [
+      ArtifactSubscriptionFeature.Share,
+      ArtifactSubscriptionBlockReason.EnterpriseUnavailable,
+      'htmlShareEnterpriseUnavailableTitle',
     ],
   ])('maps %s and %s to feature-specific copy', (feature, reason, expectedTitleKey) => {
     expect(getArtifactSubscriptionPromptCopyKeys(feature, reason).titleKey).toBe(expectedTitleKey);

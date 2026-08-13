@@ -791,6 +791,41 @@ describe('enterpriseConfigSync', () => {
     });
   });
 
+  test('mergeOpenClawConfigs never writes plugin-index-managed installs', async () => {
+    const mod = await import('./enterpriseConfigSync');
+    const merged = mod.mergeOpenClawConfigs(
+      {
+        plugins: {
+          installs: {
+            runtimePlugin: { source: 'npm', spec: 'runtime-plugin@1.0.0' },
+          },
+          entries: {
+            runtimePlugin: { enabled: true },
+          },
+        },
+      },
+      {
+        plugins: {
+          installs: {
+            enterprisePlugin: { source: 'npm', spec: 'enterprise-plugin@1.0.0' },
+          },
+          entries: {
+            enterprisePlugin: { enabled: true },
+          },
+        },
+      },
+    );
+
+    expect(merged).toEqual({
+      plugins: {
+        entries: {
+          runtimePlugin: { enabled: true },
+          enterprisePlugin: { enabled: true },
+        },
+      },
+    });
+  });
+
   test('mergeEnterpriseOpenclawConfig does not inject enterprise plugins source path automatically', async () => {
     const enterpriseDir = path.join(electronPaths.userData, 'enterprise-config');
     const pluginsDir = path.join(enterpriseDir, 'plugins', 'enterprise-test-plugin');
@@ -808,6 +843,12 @@ describe('enterpriseConfigSync', () => {
       path.join(enterpriseDir, 'openclaw.json'),
       JSON.stringify({
         plugins: {
+          installs: {
+            enterprisePlugin: {
+              source: 'npm',
+              spec: 'enterprise-plugin@1.0.0',
+            },
+          },
           load: {
             paths: ['/enterprise/custom-plugins'],
           },
@@ -826,7 +867,11 @@ describe('enterpriseConfigSync', () => {
     );
 
     const mod = await import('./enterpriseConfigSync');
-    mod.mergeEnterpriseOpenclawConfig(runtimeConfigPath);
+    const renameError = Object.assign(new Error('destination exists'), { code: 'EEXIST' });
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw renameError;
+    });
+    expect(mod.mergeEnterpriseOpenclawConfig(runtimeConfigPath)).toBe(true);
 
     const merged = JSON.parse(fs.readFileSync(runtimeConfigPath, 'utf-8'));
     expect(merged).toEqual({
@@ -839,6 +884,8 @@ describe('enterpriseConfigSync', () => {
         },
       },
     });
+    expect(renameSpy).toHaveBeenCalledOnce();
+    expect(mod.mergeEnterpriseOpenclawConfig(runtimeConfigPath)).toBe(false);
   });
 
   test('mergeOpenClawConfigs overwrites feishu accounts with top-level enterprise fields', async () => {

@@ -1,3 +1,4 @@
+import { supportsLobsterAIRequestOptionsV1 } from '@shared/providers/lobsterAIRequestOptions';
 import {
   getModelThinkingLevels,
   type ModelThinkingLevel,
@@ -25,11 +26,11 @@ type ResolveAgentModelSelectionResult = {
 };
 
 export function resolveModelThinkingLevel(
-  model: Pick<Model, 'thinkingConfig'> | null | undefined,
+  model: Pick<Model, 'requestCapabilities' | 'thinkingConfig'> | null | undefined,
   persistedLevel: ModelThinkingLevel | '' | null | undefined,
 ): ModelThinkingLevel | undefined {
   const config = model?.thinkingConfig;
-  if (!config) return undefined;
+  if (!config || !supportsLobsterAIRequestOptionsV1(model.requestCapabilities)) return undefined;
   if (persistedLevel && getModelThinkingLevels(config).includes(persistedLevel)) {
     return persistedLevel;
   }

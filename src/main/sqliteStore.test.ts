@@ -116,6 +116,58 @@ test('backfills agent working directories from legacy cowork config only once', 
   reopenedStore.close();
 });
 
+test('installs required thinking columns independently from best-effort legacy migrations', async () => {
+  const userDataPath = createTempUserDataPath();
+  createLegacyDatabase(userDataPath);
+
+  const legacyDb = new Database(path.join(userDataPath, DB_FILENAME));
+  const now = Date.now();
+  legacyDb.exec(`
+    ALTER TABLE agents ADD COLUMN WORKING_DIRECTORY TEXT NOT NULL DEFAULT '';
+    CREATE TABLE cowork_sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'idle',
+      cwd TEXT NOT NULL,
+      system_prompt TEXT NOT NULL DEFAULT '',
+      EXECUTION_MODE TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  legacyDb.prepare(
+    `INSERT INTO cowork_sessions (
+      id, title, status, cwd, created_at, updated_at
+    ) VALUES ('legacy-session', 'Legacy Session', 'idle', '/repo/legacy', ?, ?)`,
+  ).run(now, now);
+  legacyDb.close();
+
+  const store = await SqliteStore.create(userDataPath);
+  const db = store.getDatabase();
+  const session = db.prepare(
+    "SELECT thinking_level FROM cowork_sessions WHERE id = 'legacy-session'",
+  ).get() as { thinking_level: string };
+  const agents = db.prepare(
+    'SELECT id, thinking_level FROM agents ORDER BY id',
+  ).all() as Array<{ id: string; thinking_level: string }>;
+
+  expect(session.thinking_level).toBe('');
+  expect(agents).toEqual([
+    { id: 'docs', thinking_level: '' },
+    { id: 'main', thinking_level: '' },
+  ]);
+
+  store.close();
+
+  const reopenedStore = await SqliteStore.create(userDataPath);
+  expect(
+    reopenedStore.getDatabase().prepare(
+      "SELECT thinking_level FROM cowork_sessions WHERE id = 'legacy-session'",
+    ).get(),
+  ).toEqual({ thinking_level: '' });
+  reopenedStore.close();
+});
+
 test('creates continuity capsule table during startup migration', async () => {
   const userDataPath = createTempUserDataPath();
   createLegacyDatabase(userDataPath);
@@ -126,6 +178,74 @@ test('creates continuity capsule table during startup migration', async () => {
     .get() as { name: string } | undefined;
 
   expect(table?.name).toBe('cowork_session_capsules');
+
+  store.close();
+});
+
+test('upgrades legacy message ordering and creates an index-backed pagination path', async () => {
+  const userDataPath = createTempUserDataPath();
+  createLegacyDatabase(userDataPath);
+
+  const legacyDb = new Database(path.join(userDataPath, DB_FILENAME));
+  legacyDb.exec(`
+    CREATE TABLE cowork_sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'idle',
+      cwd TEXT NOT NULL,
+      system_prompt TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE cowork_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      metadata TEXT,
+      created_at INTEGER NOT NULL
+    );
+    INSERT INTO cowork_sessions (
+      id, title, status, cwd, system_prompt, created_at, updated_at
+    ) VALUES ('legacy-session', 'Legacy', 'idle', '/repo/legacy', '', 1, 1);
+    INSERT INTO cowork_messages (
+      id, session_id, type, content, metadata, created_at
+    ) VALUES
+      ('message-later', 'legacy-session', 'assistant', 'later', NULL, 20),
+      ('message-earlier', 'legacy-session', 'user', 'earlier', NULL, 10);
+  `);
+  legacyDb.close();
+
+  const store = await SqliteStore.create(userDataPath);
+  const db = store.getDatabase();
+  const orderedMessages = db.prepare(`
+    SELECT id, sequence
+    FROM cowork_messages
+    WHERE session_id = ?
+    ORDER BY COALESCE(sequence, created_at), created_at, ROWID
+  `).all('legacy-session') as Array<{ id: string; sequence: number }>;
+  const queryPlan = db.prepare(`
+    EXPLAIN QUERY PLAN
+    SELECT id
+    FROM cowork_messages
+    WHERE session_id = ?
+      AND COALESCE(sequence, created_at) >= ?
+      AND (
+        COALESCE(sequence, created_at) > ?
+        OR created_at > ?
+        OR (created_at = ? AND ROWID > ?)
+      )
+    ORDER BY COALESCE(sequence, created_at), created_at, ROWID
+    LIMIT ?
+  `).all('legacy-session', 0, 0, 0, 0, 0, 50) as Array<{ detail: string }>;
+
+  expect(orderedMessages).toEqual([
+    { id: 'message-earlier', sequence: 1 },
+    { id: 'message-later', sequence: 2 },
+  ]);
+  expect(queryPlan.some(row => row.detail.includes('idx_cowork_messages_session_order'))).toBe(true);
+  expect(queryPlan.some(row => row.detail.includes('<expr>>?'))).toBe(true);
+  expect(queryPlan.some(row => row.detail.includes('USE TEMP B-TREE FOR ORDER BY'))).toBe(false);
 
   store.close();
 });

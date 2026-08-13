@@ -63,6 +63,16 @@ const isItemLive = (item: ConsolidatedItem): boolean => {
   return item.type === 'assistant' && Boolean(item.message.metadata?.isStreaming);
 };
 
+export const activityItemHasError = (item: ConsolidatedItem): boolean => {
+  if (item.type === 'tool_group') {
+    return Boolean(item.group.toolResult?.metadata?.isError || item.group.toolResult?.metadata?.error);
+  }
+  if (item.type === 'tool_result') {
+    return Boolean(item.message.metadata?.isError || item.message.metadata?.error);
+  }
+  return false;
+};
+
 /**
  * Collapses a run of consecutive agent work items (tool calls, thinking,
  * media polling) behind a single summary line, following the Codex /
@@ -79,7 +89,8 @@ const ActivityGroupBlock: React.FC<{
     options?: { initiallyExpanded?: boolean },
   ) => React.ReactNode;
 }> = ({ entries, isStreamingTail = false, renderEntry }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const hasError = entries.some(entry => activityItemHasError(entry.item));
+  const [isExpanded, setIsExpanded] = useState(hasError);
 
   const items = useMemo(() => entries.map((entry) => entry.item), [entries]);
   const summary = useMemo(() => getActivityGroupSummary(items), [items]);
@@ -113,7 +124,9 @@ const ActivityGroupBlock: React.FC<{
         className="flex max-w-full items-center gap-1.5 text-left group"
         aria-expanded={isExpanded}
       >
-        <span className={`min-w-0 truncate text-sm text-secondary group-hover:text-foreground transition-colors ${
+        <span className={`min-w-0 truncate text-sm group-hover:text-foreground transition-colors ${
+          hasError ? 'text-red-500' : 'text-secondary'
+        } ${
           showLiveAction ? 'shimmer-text' : ''
         }`}>
           {headerLabel}

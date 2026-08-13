@@ -38,4 +38,23 @@ describe('resolveOpenClawThinkingLevelForModel', () => {
       'high',
     )).toBe('high');
   });
+
+  test('falls back to the latest server default when a persisted level is removed', () => {
+    updateServerModelMetadata([{
+      modelId: 'deepseek-v4-flash',
+      supportsThinking: true,
+      thinkingConfig: {
+        options: [
+          { level: 'off', openclawLevel: 'off' },
+          { level: 'high', openclawLevel: 'high' },
+        ],
+        defaultLevel: 'high',
+      },
+    }]);
+
+    expect(resolveOpenClawThinkingLevelForModel(
+      'lobsterai-server/deepseek-v4-flash',
+      'max',
+    )).toBe('high');
+  });
 });

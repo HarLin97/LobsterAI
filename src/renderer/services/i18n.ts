@@ -171,6 +171,18 @@ const translations: Record<LanguageType, Record<string, string>> = {
     inputFileLabel: '输入文件',
     inputFolderLabel: '输入文件夹',
     folderAttachmentType: '文件夹',
+    fileAttachmentTypeWord: 'Word 文档',
+    fileAttachmentTypeSpreadsheet: '电子表格',
+    fileAttachmentTypePresentation: '演示文稿',
+    fileAttachmentTypePdf: 'PDF 文档',
+    fileAttachmentTypeArchive: '压缩文件',
+    fileAttachmentTypeCode: '代码文件',
+    fileAttachmentTypeText: '文本文件',
+    fileAttachmentTypeSubtitle: '字幕文件',
+    fileAttachmentTypeAudio: '音频文件',
+    fileAttachmentTypeVideo: '视频文件',
+    fileAttachmentTypeImage: '图片文件',
+    fileAttachmentTypeFile: '文件',
     coworkFileAttachmentRevealHint: '点击在文件夹中显示',
     coworkFileAttachmentMissing: '文件不存在，可能已被移动或删除',
     coworkFileAttachmentRevealFailed: '无法在文件夹中显示该文件',
@@ -347,6 +359,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutDescOpenSettingsTab: '切换到设置里的「{tab}」页',
     shortcutAgentTaskSlotUnavailable: '当前 Agent 没有第 {slot} 个任务记录',
     close: '关闭',
+    sidebarFilter: '筛选任务',
+    sidebarActivity: '任务动态',
+    sidebarActivityPriority: '优先级',
+    sidebarActivityNoPriority: '没有需要关注的任务',
+    sidebarActivityRecent: '最近',
+    sidebarActivityNoRecent: '暂无最近任务',
+    sidebarTaskOpenFailed: '打开任务失败，请重试',
+    sidebarCarouselPrevious: '上一项',
+    sidebarCarouselNext: '下一项',
     dailyCheckInRewardPerDay: '每日可领 {credits} 积分',
     dailyCheckInProgress: '本期已领 {claimed}/{total} · 累计 {credits} 积分',
     dailyCheckInClaimNow: '立即领取',
@@ -425,6 +446,43 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authFinalRewardClaimSuccess: '{credits}积分领取成功，有效期至 {date}',
     authFinalRewardClaimFailed: '活动积分领取失败',
     authZeroCredits: '0积分',
+    enterpriseAccountBelongsTo: '所属团队：{name}',
+    enterpriseAccountRoleSuperAdmin: '超级管理员',
+    enterpriseAccountRoleMember: '团队身份',
+    enterpriseAccountManagement: '团队管理后台',
+    enterpriseAccountQuota: '我的额度',
+    enterpriseAccountChooseEnterprise: '选择团队',
+    enterpriseAccountEnter: '进入',
+    enterpriseAccountAdjustQuota: '调整额度',
+    enterpriseQuotaMemberTitle: '你的额度已用完',
+    enterpriseQuotaMemberMemberDesc: '向团队管理员申请提高成员额度后继续使用 LobsterAI。',
+    enterpriseQuotaMemberAdminDesc: '调整额度后继续使用 LobsterAI。',
+    enterpriseQuotaMemberInterrupt: '你已达到使用上限，请联系团队管理员。',
+    enterpriseQuotaMemberAdminInterrupt: '你已达到个人额度上限，可调整额度。',
+    enterpriseQuotaPoolTitle: '团队积分已用完',
+    enterpriseQuotaPoolMemberDesc: '通知团队管理员购买团队积分包后继续使用 LobsterAI。',
+    enterpriseQuotaPoolAdminDesc: '购买团队积分包后，团队成员可继续使用 LobsterAI。',
+    enterpriseQuotaPoolInterrupt: '团队积分已达到使用上限，请补充积分后继续。',
+    enterpriseQuotaExpiredTitle: '团队积分已过期',
+    enterpriseQuotaExpiredMemberDesc: '团队积分批次已全部过期，请联系团队管理员。',
+    enterpriseQuotaExpiredAdminDesc: '团队积分批次已全部过期，请购买团队积分包后继续使用。',
+    enterpriseQuotaPurchaseCredits: '购买团队积分包',
+    enterpriseQuotaRequestIncrease: '申请提高额度',
+    enterpriseQuotaNotifyAdmin: '通知管理员购买',
+    enterpriseQuotaRequestSubmitting: '提交中…',
+    enterpriseQuotaRequestSubmitted: '申请已提交，团队管理员会在管理后台收到通知。',
+    enterpriseQuotaRequestAlreadyPending: '申请已提交，请等待团队管理员处理。',
+    enterpriseQuotaRequestSubmittedButton: '已提交申请',
+    enterpriseQuotaRequestFailed: '额度申请提交失败，请稍后重试。',
+    enterpriseQuotaCheckAction: '检测额度',
+    enterpriseQuotaChecking: '检测中…',
+    enterpriseQuotaCheckFailed: '额度检测失败，请稍后重试。',
+    enterpriseQuotaCheckRestored: '额度已恢复，可以继续对话。',
+    enterpriseQuotaCheckUnavailable: '额度尚未恢复，请确认额度调整完成后重试。',
+    enterpriseQuotaHomeSubmitBlocked: '当前额度不足，请先处理额度问题后再创建任务。',
+    enterpriseMediaUnavailableTitle: '团队媒体服务暂不可用',
+    enterpriseMediaUnavailableDesc: '暂时无法确认当前团队的媒体权益，请重新检查或联系团队管理员。',
+    enterpriseMediaRetry: '重新检查',
     planFree: '免费',
     planStandard: '标准',
     planAdvanced: '进阶',
@@ -545,6 +603,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactNoContent: '无内容',
     artifactSourceLoading: '正在加载源码...',
     artifactSourceLoadFailed: '源码加载失败',
+    artifactSourceTooLarge: '文件过大，无法完整刷新预览',
     artifactSourceTruncated: '文件较大，仅显示前 {size}',
     markdownLargePreviewNotice: '内容较大，已显示轻量预览',
     artifactPanelToggle: '预览面板',
@@ -634,6 +693,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     htmlShareSubscriptionRequiredTitle: '开通订阅后即可分享内容',
     htmlShareSubscriptionRequiredMessage:
       '分享功能需要有效订阅。开通后即可生成分享链接，并可选择分享码或公开访问。',
+    htmlShareEnterpriseUnavailableTitle: '当前团队账号暂不可分享内容',
+    htmlShareEnterpriseUnavailableMessage:
+      '未获取到当前团队的分享权益。请重新登录后重试，或联系团队管理员。',
     htmlShareOpenSubscription: '去订阅',
     subscriptionGateOpenAction: '去订阅',
     htmlShareUnavailableInProduction: '分享功能暂不可用。',
@@ -687,6 +749,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentSubscriptionRequiredTitle: '开通订阅后即可部署网站',
     nodeDeploymentSubscriptionRequiredMessage:
       '网站部署需要有效订阅。开通后即可将本地网站部署到云端，并生成可访问链接。',
+    nodeDeploymentEnterpriseUnavailableTitle: '当前团队账号暂不可部署网站',
+    nodeDeploymentEnterpriseUnavailableMessage:
+      '未获取到当前团队的网站部署权益。请重新登录后重试，或联系团队管理员。',
     nodeDeploymentLookupFailed: '获取部署信息失败。',
     nodeDeploymentAccessStatusApplyFailed: '服务已部署，但访问状态更新失败：{message}',
     nodeDeploymentStoppedNotice: '该服务已停止',
@@ -1604,6 +1669,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkConversationSearchClose: '关闭搜索',
     coworkConversationSearchLoading: '正在搜索…',
     coworkConversationSearchFailed: '无法搜索当前对话',
+    coworkConversationSearchTooLarge: '对话过大，无法完整搜索',
     coworkConversationSearchTargetUnavailable: '无法定位到该搜索结果',
     coworkConversationSearchResults: '{current} / {total} 个结果',
     coworkRemoteManagedPlaceholder: '该会话由 IM 通道创建，请在对应的 IM 平台操作',
@@ -1806,6 +1872,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork 错误消息
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请在设置中检查并更新您的 API 密钥。',
+    coworkErrorEnterpriseMembershipRevoked: '你已被移出当前团队，已退出登录。请重新登录并选择可用身份。',
     coworkErrorLobsterAILoginExpired: '登录状态已过期，请重新登录后继续使用 LobsterAI 套餐模型。',
     coworkErrorOAuthInvalid: 'OAuth 授权已失效或权限不足，请重新授权后重试。',
     coworkErrorModelAccessDenied: '当前账号无权访问该模型，请切换模型或检查服务商账号权限。',
@@ -1910,13 +1977,27 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noSkillsAvailable: '暂无可用技能',
     skillsDescription: '为您的智能体提供预封装且可重复的最佳实践与工具',
     skillInstalled: '已安装',
-    skillMarketplace: '技能市场',
+    skillMarketplace: '市场',
     skillMarketplaceEmpty: '暂无可用技能',
     skillCategoryAll: '全部',
     skillInstall: '安装',
     skillInstalling: '安装中',
     skillInstallFailed: '安装失败',
     skillAlreadyInstalled: '已安装',
+    skillDetailId: '标识',
+    skillDetailCategory: '类别',
+    skillDetailUpdated: '更新',
+    skillDetailAbout: '简介',
+    skillDetailInfo: '信息',
+    skillDetailProject: '项目地址',
+    skillUse: '使用',
+    skillMoreActions: '更多操作',
+    skillGroupMine: '我的',
+    skillGroupBuiltIn: '内置',
+    skillOriginMine: '我的',
+    skillOriginBuiltIn: '内置',
+    skillGroupMineEmptyHint: '还没有自己的技能，可以从这里开始',
+    skillGroupMineEmptyMarket: '从市场安装',
 
     // Security scan
     lobsterGuardEnabled: '安全防护中',
@@ -2353,6 +2434,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     fileMenuSaveAs: '另存为…',
     fileMenuCopyPath: '复制路径',
     fileMenuCopyContents: '复制文件内容',
+    fileMenuCopyContentsTooLarge: '文件过大，未复制，以避免只复制部分内容',
     fileMenuCopyImage: '复制图片',
     fileMenuRevealFinder: '在 Finder 中显示',
     fileMenuRevealExplorer: '在文件资源管理器中显示',
@@ -3465,6 +3547,18 @@ const translations: Record<LanguageType, Record<string, string>> = {
     inputFileLabel: 'Input Files',
     inputFolderLabel: 'Input Folder',
     folderAttachmentType: 'Folder',
+    fileAttachmentTypeWord: 'Word document',
+    fileAttachmentTypeSpreadsheet: 'Spreadsheet',
+    fileAttachmentTypePresentation: 'Presentation',
+    fileAttachmentTypePdf: 'PDF document',
+    fileAttachmentTypeArchive: 'Archive',
+    fileAttachmentTypeCode: 'Code file',
+    fileAttachmentTypeText: 'Text file',
+    fileAttachmentTypeSubtitle: 'Subtitle file',
+    fileAttachmentTypeAudio: 'Audio file',
+    fileAttachmentTypeVideo: 'Video file',
+    fileAttachmentTypeImage: 'Image file',
+    fileAttachmentTypeFile: 'File',
     coworkFileAttachmentRevealHint: 'Click to reveal in folder',
     coworkFileAttachmentMissing: 'File not found. It may have been moved or deleted.',
     coworkFileAttachmentRevealFailed: 'Could not reveal this file in its folder.',
@@ -3671,6 +3765,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutDescOpenSettingsTab: 'Switch to the {tab} tab in settings',
     shortcutAgentTaskSlotUnavailable: 'The current agent does not have task {slot}',
     close: 'Close',
+    sidebarFilter: 'Filter tasks',
+    sidebarActivity: 'Task activity',
+    sidebarActivityPriority: 'Priority',
+    sidebarActivityNoPriority: 'No tasks need your attention',
+    sidebarActivityRecent: 'Recent',
+    sidebarActivityNoRecent: 'No recent tasks',
+    sidebarTaskOpenFailed: 'Failed to open the task. Please try again.',
+    sidebarCarouselPrevious: 'Previous item',
+    sidebarCarouselNext: 'Next item',
     dailyCheckInRewardPerDay: 'Claim {credits} credits daily',
     dailyCheckInProgress: '{claimed}/{total} claimed · {credits} credits in total',
     dailyCheckInClaimNow: 'Claim now',
@@ -3749,6 +3852,43 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authFinalRewardClaimSuccess: '{credits} credits claimed. Valid until {date}',
     authFinalRewardClaimFailed: 'Failed to claim campaign credits',
     authZeroCredits: '0 credits',
+    enterpriseAccountBelongsTo: 'Team: {name}',
+    enterpriseAccountRoleSuperAdmin: 'Super administrator',
+    enterpriseAccountRoleMember: 'Team identity',
+    enterpriseAccountManagement: 'Team admin',
+    enterpriseAccountQuota: 'My quota',
+    enterpriseAccountChooseEnterprise: 'Choose a team',
+    enterpriseAccountEnter: 'Open',
+    enterpriseAccountAdjustQuota: 'Adjust quota',
+    enterpriseQuotaMemberTitle: 'Your quota has been used up',
+    enterpriseQuotaMemberMemberDesc: 'Request a higher member quota from your team administrator to continue using LobsterAI.',
+    enterpriseQuotaMemberAdminDesc: 'Adjust your quota to continue using LobsterAI.',
+    enterpriseQuotaMemberInterrupt: 'You have reached your usage limit. Contact your team administrator.',
+    enterpriseQuotaMemberAdminInterrupt: 'You have reached your personal quota. You can adjust it.',
+    enterpriseQuotaPoolTitle: 'Team credits have been used up',
+    enterpriseQuotaPoolMemberDesc: 'Notify your team administrator to purchase a Team credit pack and continue using LobsterAI.',
+    enterpriseQuotaPoolAdminDesc: 'Purchase a Team credit pack so members can continue using LobsterAI.',
+    enterpriseQuotaPoolInterrupt: 'Team credits have reached the limit. Add credits to continue.',
+    enterpriseQuotaExpiredTitle: 'Team credits have expired',
+    enterpriseQuotaExpiredMemberDesc: 'All Team credit batches have expired. Contact your team administrator.',
+    enterpriseQuotaExpiredAdminDesc: 'All Team credit batches have expired. Purchase a Team credit pack to continue.',
+    enterpriseQuotaPurchaseCredits: 'Purchase a Team credit pack',
+    enterpriseQuotaRequestIncrease: 'Request a higher quota',
+    enterpriseQuotaNotifyAdmin: 'Notify administrator',
+    enterpriseQuotaRequestSubmitting: 'Submitting…',
+    enterpriseQuotaRequestSubmitted: 'Request submitted. Your team administrator will be notified.',
+    enterpriseQuotaRequestAlreadyPending: 'A request is already pending. Please wait for your administrator.',
+    enterpriseQuotaRequestSubmittedButton: 'Request submitted',
+    enterpriseQuotaRequestFailed: 'Failed to submit the quota request. Please try again later.',
+    enterpriseQuotaCheckAction: 'Check quota',
+    enterpriseQuotaChecking: 'Checking…',
+    enterpriseQuotaCheckFailed: 'Failed to check quota. Please try again later.',
+    enterpriseQuotaCheckRestored: 'Quota restored. You can continue the conversation.',
+    enterpriseQuotaCheckUnavailable: 'Quota is still unavailable. Confirm the adjustment is complete and try again.',
+    enterpriseQuotaHomeSubmitBlocked: 'Your current quota is unavailable. Resolve it before creating a task.',
+    enterpriseMediaUnavailableTitle: 'Team media is unavailable',
+    enterpriseMediaUnavailableDesc: 'Unable to verify media access for this team. Try again or contact your administrator.',
+    enterpriseMediaRetry: 'Check again',
     planFree: 'Free',
     planStandard: 'Standard',
     planAdvanced: 'Advanced',
@@ -3873,6 +4013,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactNoContent: 'No content',
     artifactSourceLoading: 'Loading source...',
     artifactSourceLoadFailed: 'Failed to load source',
+    artifactSourceTooLarge: 'The file is too large to refresh the preview completely',
     artifactSourceTruncated: 'Large file, showing the first {size}',
     markdownLargePreviewNotice: 'Large content, showing a lightweight preview',
     artifactPanelToggle: 'Artifacts',
@@ -3970,6 +4111,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     htmlShareSubscriptionRequiredTitle: 'Subscribe to share content',
     htmlShareSubscriptionRequiredMessage:
       'Sharing requires an active subscription. After subscribing, you can create links with share-code or public access.',
+    htmlShareEnterpriseUnavailableTitle: 'Sharing is unavailable for this team account',
+    htmlShareEnterpriseUnavailableMessage:
+      'Sharing entitlement was not available for the current team. Sign in again or contact your team administrator.',
     htmlShareOpenSubscription: 'View subscription',
     subscriptionGateOpenAction: 'View subscription',
     htmlShareUnavailableInProduction: 'Sharing is currently unavailable.',
@@ -4029,6 +4173,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentSubscriptionRequiredTitle: 'Subscribe to deploy a website',
     nodeDeploymentSubscriptionRequiredMessage:
       'Website deployment requires an active subscription. After subscribing, you can deploy a local website to the cloud and get an access link.',
+    nodeDeploymentEnterpriseUnavailableTitle: 'Deployment is unavailable for this team account',
+    nodeDeploymentEnterpriseUnavailableMessage:
+      'Deployment entitlement was not available for the current team. Sign in again or contact your team administrator.',
     nodeDeploymentLookupFailed: 'Failed to load deployment information.',
     nodeDeploymentAccessStatusApplyFailed:
       'The service was deployed, but its access status could not be updated: {message}',
@@ -4999,6 +5146,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkConversationSearchClose: 'Close search',
     coworkConversationSearchLoading: 'Searching…',
     coworkConversationSearchFailed: 'Unable to search this conversation',
+    coworkConversationSearchTooLarge: 'This conversation is too large to search completely',
     coworkConversationSearchTargetUnavailable: 'Unable to navigate to this search result',
     coworkConversationSearchResults: '{current} / {total} results',
     coworkRemoteManagedPlaceholder:
@@ -5216,6 +5364,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Cowork error messages
     coworkErrorAuthInvalid:
       'Invalid or expired API key. Please check and update your API key in settings.',
+    coworkErrorEnterpriseMembershipRevoked:
+      'You have been removed from the current team and signed out. Sign in again to choose an available identity.',
     coworkErrorLobsterAILoginExpired:
       'Your login session has expired. Sign in again to continue using LobsterAI plan models.',
     coworkErrorOAuthInvalid:
@@ -5337,13 +5487,27 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noSkillsAvailable: 'No skills available',
     skillsDescription: 'Pre-packaged best practices and tools for your AI agent',
     skillInstalled: 'Installed',
-    skillMarketplace: 'Marketplace',
+    skillMarketplace: 'Market',
     skillMarketplaceEmpty: 'No skills available yet',
     skillCategoryAll: 'All',
     skillInstall: 'Install',
     skillInstalling: 'Installing',
     skillInstallFailed: 'Install failed',
     skillAlreadyInstalled: 'Installed',
+    skillDetailId: 'ID',
+    skillDetailCategory: 'Category',
+    skillDetailUpdated: 'Updated',
+    skillDetailAbout: 'About',
+    skillDetailInfo: 'Information',
+    skillDetailProject: 'Project',
+    skillUse: 'Use',
+    skillMoreActions: 'More actions',
+    skillGroupMine: 'Mine',
+    skillGroupBuiltIn: 'Built-in',
+    skillOriginMine: 'Mine',
+    skillOriginBuiltIn: 'Built-in',
+    skillGroupMineEmptyHint: 'No skills of your own yet — start here',
+    skillGroupMineEmptyMarket: 'Install from Marketplace',
 
     // Security scan
     lobsterGuardEnabled: 'Security Active',
@@ -5804,6 +5968,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     fileMenuSaveAs: 'Save As…',
     fileMenuCopyPath: 'Copy Path',
     fileMenuCopyContents: 'Copy File Contents',
+    fileMenuCopyContentsTooLarge: 'File is too large and was not copied, to avoid copying partial content',
     fileMenuCopyImage: 'Copy Image',
     fileMenuRevealFinder: 'Reveal in Finder',
     fileMenuRevealExplorer: 'Reveal in File Explorer',
@@ -6830,6 +6995,7 @@ const readLanguageHint = (): LanguageType => {
 class I18nService {
   private currentLanguage: LanguageType = 'zh';
   private listeners = new Set<() => void>();
+  private initializeGeneration = 0;
 
   constructor() {
     this.currentLanguage = readLanguageHint();
@@ -6837,6 +7003,10 @@ class I18nService {
 
   // 初始化语言设置
   async initialize(): Promise<void> {
+    const initializeGeneration = ++this.initializeGeneration;
+    let nextLanguage: LanguageType = 'en';
+    let configUpdate: { language?: LanguageType; language_initialized?: boolean } | undefined;
+
     try {
       const config = configService.getConfig();
 
@@ -6851,10 +7021,10 @@ class I18nService {
         if (hasCustomLanguage) {
           // 旧用户已手动设置过语言(非默认值),保留他们的设置
           console.log(`[i18n] Legacy user detected with custom language: ${config.language}`);
-          this.currentLanguage = config.language;
-          configService.updateConfig({
+          nextLanguage = config.language;
+          configUpdate = {
             language_initialized: true,
-          });
+          };
         } else {
           // 新用户或使用默认中文的旧用户:检测系统语言
           try {
@@ -6865,41 +7035,64 @@ class I18nService {
               `[i18n] First run detected. System locale: ${systemLocale}, default language: ${defaultLanguage}`,
             );
 
-            this.currentLanguage = defaultLanguage;
+            nextLanguage = defaultLanguage;
 
             // 保存语言配置和初始化标记
-            configService.updateConfig({
+            configUpdate = {
               language: defaultLanguage,
               language_initialized: true,
-            });
+            };
           } catch (error) {
-            console.error('Failed to get system locale:', error);
+            console.error('[i18n] Failed to get system locale:', error);
             // 如果获取系统语言失败,默认使用英文
-            this.currentLanguage = 'en';
-            configService.updateConfig({
+            nextLanguage = 'en';
+            configUpdate = {
               language: 'en',
               language_initialized: true,
-            });
+            };
           }
         }
       } else {
         // 非首次启动:使用已保存的语言配置
         if (config.language && (config.language === 'zh' || config.language === 'en')) {
-          this.currentLanguage = config.language;
+          nextLanguage = config.language;
         } else {
           // 如果配置无效,fallback 到英文
-          this.currentLanguage = 'en';
-          configService.updateConfig({
+          nextLanguage = 'en';
+          configUpdate = {
             language: 'en',
-          });
+          };
         }
       }
     } catch (error) {
-      console.error('Failed to initialize language:', error);
+      console.error('[i18n] Failed to initialize language:', error);
       // 默认使用英文
-      this.currentLanguage = 'en';
+      nextLanguage = 'en';
     }
-    this.persistLanguageHint(this.currentLanguage);
+
+    // App may start a fresh attempt after timing out an IPC call. Only the
+    // newest invocation may change language, persistence, or the splash hint.
+    if (initializeGeneration !== this.initializeGeneration) {
+      return;
+    }
+
+    this.applyLanguage(nextLanguage);
+    this.persistLanguageHint(nextLanguage);
+    if (configUpdate) {
+      try {
+        await configService.updateConfig(configUpdate);
+      } catch (error) {
+        console.error('[i18n] Failed to persist initialized language:', error);
+      }
+    }
+  }
+
+  private applyLanguage(language: LanguageType): void {
+    const hasChanged = this.currentLanguage !== language;
+    this.currentLanguage = language;
+    if (hasChanged) {
+      this.listeners.forEach(listener => listener());
+    }
   }
 
   // 持久化语言提示，供 index.html 的启动屏在下次启动时读取
@@ -6922,30 +7115,24 @@ class I18nService {
 
   // 设置语言
   setLanguage(language: LanguageType, options: { persist?: boolean } = {}): void {
+    // Explicit repair/user choices supersede any locale lookup that is still
+    // in flight from degraded startup.
+    this.initializeGeneration += 1;
     const { persist = true } = options;
-    const hasChanged = this.currentLanguage !== language;
-    this.currentLanguage = language;
+    this.applyLanguage(language);
 
-    if (hasChanged) {
-      this.listeners.forEach(listener => listener());
-    }
+    // The lightweight splash hint is safe to refresh even when callers are
+    // applying already-persisted config and must avoid another config write.
+    this.persistLanguageHint(language);
 
     if (!persist) {
       return;
     }
 
-    this.persistLanguageHint(language);
-
-    // 更新配置
-    try {
-      const config = configService.getConfig();
-      configService.updateConfig({
-        ...config,
-        language,
-      });
-    } catch (error) {
-      console.error('Failed to save language setting:', error);
-    }
+    // 更新配置；只提交语言字段，避免用旧快照覆盖并发设置修改。
+    void configService.updateConfig({ language }).catch((error) => {
+      console.error('[i18n] Failed to save language setting:', error);
+    });
   }
 
   // 获取当前语言

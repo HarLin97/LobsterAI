@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe('daily check-in auto refresh', () => {
-  test('refreshes on focus and visible transitions with a cooldown', async () => {
+  test('refreshes on focus and visible transitions with a one-minute cooldown', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const windowTarget = new EventTarget();
@@ -55,7 +55,11 @@ describe('daily check-in auto refresh', () => {
     windowTarget.dispatchEvent(new Event('focus'));
     expect(refresh).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(DAILY_CHECK_IN_AUTO_REFRESH_COOLDOWN_MS);
+    vi.advanceTimersByTime(DAILY_CHECK_IN_AUTO_REFRESH_COOLDOWN_MS - 1);
+    windowTarget.dispatchEvent(new Event('focus'));
+    expect(refresh).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
     windowTarget.dispatchEvent(new Event('focus'));
     expect(refresh).toHaveBeenCalledTimes(1);
     await flushPromises();
@@ -119,7 +123,9 @@ describe('daily check-in auto refresh', () => {
       }),
     );
 
-    await vi.advanceTimersByTimeAsync(fallbackDelay);
+    await vi.advanceTimersByTimeAsync(fallbackDelay - 1);
+    expect(refresh).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(refresh).toHaveBeenCalledTimes(1);
 
     documentTarget.focused = false;

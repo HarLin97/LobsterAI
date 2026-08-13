@@ -4,7 +4,7 @@ import {
   type ModelThinkingConfig,
   ModelThinkingLevel,
 } from '@shared/providers/modelThinking';
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 
 import { i18nService } from '../../services/i18n';
 
@@ -35,6 +35,7 @@ const ModelThinkingMenu: React.FC<ModelThinkingMenuProps> = ({
   onSelect,
   onEscape,
 }) => {
+  const menuRef = useRef<HTMLDivElement>(null);
   const levels = getModelThinkingLevels(config);
   const supportsOff = levels.includes(ModelThinkingLevel.Off);
   const enabledLevels = levels.filter(level => level !== ModelThinkingLevel.Off);
@@ -43,15 +44,41 @@ const ModelThinkingMenu: React.FC<ModelThinkingMenuProps> = ({
     ? config.defaultLevel
     : enabledLevels[0];
 
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const selected = menuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]');
+      const first = menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)');
+      (selected ?? first)?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
   return (
     <div
+      ref={menuRef}
       role="menu"
       aria-label={i18nService.t('modelThinkingStrength')}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.stopPropagation();
           onEscape();
+          return;
         }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+        const items = Array.from(
+          menuRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [],
+        );
+        if (items.length === 0) return;
+        event.preventDefault();
+        const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+        const nextIndex = event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? items.length - 1
+            : event.key === 'ArrowDown'
+              ? (currentIndex + 1 + items.length) % items.length
+              : (currentIndex - 1 + items.length) % items.length;
+        items[nextIndex]?.focus();
       }}
       className="overflow-hidden rounded-xl border border-border bg-surface shadow-popover"
     >
@@ -67,12 +94,14 @@ const ModelThinkingMenu: React.FC<ModelThinkingMenuProps> = ({
               onSelect(enabledFallback);
             }
           }}
-          className="flex w-full items-center justify-between border-b border-border/60 px-4 py-3 text-left text-[13px] font-medium text-foreground transition-colors hover:bg-surface-raised"
+          // A switch row, not a menu item: the toggle carries the state, so it
+          // never paints a hover background the way the strength options do.
+          className="flex w-full items-center justify-between gap-3 border-b border-border/60 px-3 py-2.5 text-left text-[13px] font-medium leading-5 text-foreground"
         >
           <span>{i18nService.t('modelThinkingMode')}</span>
           <span
             aria-hidden="true"
-            className={`relative h-5 w-9 rounded-full transition-colors ${
+            className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
               thinkingEnabled ? 'bg-emerald-500' : 'bg-border'
             }`}
           >
@@ -85,10 +114,10 @@ const ModelThinkingMenu: React.FC<ModelThinkingMenuProps> = ({
         </button>
       )}
 
-      <div className="px-4 pb-1 pt-3 text-[11px] font-medium text-secondary">
+      <div className="px-3 pb-0.5 pt-2 text-[11px] font-medium leading-4 text-secondary">
         {i18nService.t('modelThinkingStrength')}
       </div>
-      <div className="p-2 pt-1">
+      <div className="p-1.5 pt-0.5">
         {enabledLevels.map(level => {
           const selected = selectedLevel === level;
           return (
@@ -98,14 +127,14 @@ const ModelThinkingMenu: React.FC<ModelThinkingMenuProps> = ({
               role="menuitemradio"
               aria-checked={selected}
               onClick={() => onSelect(level)}
-              className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors ${
-                selected
-                  ? 'bg-surface-raised font-semibold text-foreground'
-                  : 'text-foreground hover:bg-surface-raised'
+              // The persistent selected fill stays lighter than the hover fill so
+              // the pointer highlight always reads stronger than the current value.
+              className={`flex h-8 w-full items-center justify-between gap-3 rounded-lg px-2.5 text-left text-[13px] leading-5 text-foreground transition-colors hover:bg-surface-raised ${
+                selected ? 'bg-surface-raised/45 font-semibold' : ''
               }`}
             >
-              <span>{getModelThinkingLevelLabel(level)}</span>
-              {selected && <CheckIcon className="h-4 w-4 text-emerald-500" strokeWidth={2.5} />}
+              <span className="min-w-0 truncate">{getModelThinkingLevelLabel(level)}</span>
+              {selected && <CheckIcon className="h-4 w-4 shrink-0 text-emerald-500" strokeWidth={2.5} />}
             </button>
           );
         })}

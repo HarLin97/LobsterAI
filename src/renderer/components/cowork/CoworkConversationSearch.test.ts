@@ -4,6 +4,7 @@ import { expect, test } from 'vitest';
 
 import {
   CONVERSATION_SEARCH_MATCH_LIMIT,
+  ConversationSearchErrorReason,
   ConversationSearchStatus,
 } from './conversationSearch';
 import CoworkConversationSearch from './CoworkConversationSearch';
@@ -45,6 +46,26 @@ test('shows loading status without navigation before a query is entered', () => 
   expect(html).not.toMatch(/(?:下一个结果|Next result)/);
 });
 
+test('shows a specific message when the conversation exceeds the safe search budget', () => {
+  const html = renderToStaticMarkup(React.createElement(CoworkConversationSearch, {
+    query: 'needle',
+    status: ConversationSearchStatus.Error,
+    errorReason: ConversationSearchErrorReason.HistoryTooLarge,
+    activeMatchIndex: -1,
+    resultCount: 0,
+    isResultLimitReached: false,
+    focusRequestKey: 1,
+    onQueryChange: () => undefined,
+    onNavigate: () => undefined,
+    onClose: () => undefined,
+  }));
+
+  expect(html).toMatch(/(?:对话过大，无法完整搜索|too large to search completely)/i);
+  expect(html).not.toMatch(/(?:无法搜索当前对话|Unable to search this conversation)/);
+  expect(html).not.toMatch(/(?:上一个结果|Previous result)/);
+  expect(html).not.toMatch(/(?:下一个结果|Next result)/);
+});
+
 test('renders the Codex-style two-row search surface and result count', () => {
   const html = renderToStaticMarkup(React.createElement(CoworkConversationSearch, {
     query: 'needle',
@@ -66,6 +87,26 @@ test('renders the Codex-style two-row search surface and result count', () => {
   expect(html).toContain('bg-surface-overlay');
   expect(html).toContain('rounded-3xl');
   expect(html).toContain('rounded-full');
+});
+
+test('keeps a 240px design minimum without overflowing narrower viewports', () => {
+  const html = renderToStaticMarkup(React.createElement(CoworkConversationSearch, {
+    query: '',
+    status: ConversationSearchStatus.Ready,
+    activeMatchIndex: -1,
+    resultCount: 0,
+    isResultLimitReached: false,
+    focusRequestKey: 1,
+    onQueryChange: () => undefined,
+    onNavigate: () => undefined,
+    onClose: () => undefined,
+  }));
+  const rootClassName = /^<div class="([^"]+)"/.exec(html)?.[1] ?? '';
+
+  expect(rootClassName.split(' ')).toContain('w-[340px]');
+  expect(rootClassName.split(' ')).toContain('min-w-[min(240px,calc(100vw_-_24px))]');
+  expect(rootClassName.split(' ')).toContain('max-w-[calc(100vw_-_24px)]');
+  expect(rootClassName.split(' ')).not.toContain('min-w-0');
 });
 
 test('disables navigation buttons when the query has no results', () => {

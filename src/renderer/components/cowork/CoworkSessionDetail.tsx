@@ -24,6 +24,10 @@ import {
   COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
   type CoworkMessageRailIndexItem,
 } from '../../../shared/cowork/rail';
+import type {
+  CoworkSearchMessageCursor,
+  CoworkSearchMessagePage,
+} from '../../../shared/cowork/search';
 import {
   type CoworkSelectedTextSnippet,
   CoworkSelectedTextSource,
@@ -32,6 +36,12 @@ import {
 } from '../../../shared/cowork/selectedText';
 import { ShareDeploymentCandidateSource } from '../../../shared/shareDeployment/constants';
 import { resolveArtifactAutoPreviewEnabled } from '../../config';
+import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
+import {
+  findCurrentEnterpriseQuotaSignal,
+  resolveActiveEnterpriseQuotaSignal,
+} from '../../features/enterpriseAccount/quotaPromptState';
+import { selectEnterpriseAccountContext } from '../../features/enterpriseAccount/selectors';
 import { collectSessionArtifacts, loadDetectedFileArtifact } from '../../services/artifactDetection';
 import {
   dedupeArtifactsForDisplay,
@@ -48,6 +58,7 @@ import { readLocalServiceProjectDirectoryCandidate } from '../../services/localS
 import { RootState } from '../../store';
 import {
   selectCurrentMessagesLength,
+  selectCurrentMessagesWithDetachedTail,
   selectCurrentSession,
   selectIsStreaming,
   selectLastMessageContent,
@@ -121,6 +132,7 @@ import SidebarSearchIcon from '../icons/SidebarSearchIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
+import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
 import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlock';
 import { type CoworkOpenShareOptionsEventDetail, CoworkUiEvent } from './constants';
 import ContextUsageIndicator from './ContextUsageIndicator';
@@ -1236,6 +1248,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
   const currentSession = useSelector(selectCurrentSession);
+  const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const isStreaming = useSelector(selectIsStreaming);
   const remoteManaged = useSelector(selectRemoteManaged);
   const lastMessageContent = useSelector(selectLastMessageContent);
@@ -1245,6 +1258,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const activeKitIds = useSelector((state: RootState) => state.kit.activeKitIds);
   const installedKits = useSelector((state: RootState) => state.kit.installedKits);
   const marketplaceKits = useSelector((state: RootState) => state.kit.marketplaceKits);
+  const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const agents = useSelector((state: RootState) => state.agent.agents);
+  const availableModels = useSelector((state: RootState) => state.model.availableModels);
+  const coworkAgentEngine = useSelector((state: RootState) => state.cowork.config.agentEngine);
+  const currentAgent = agents.find(agent => agent.id === currentAgentId);
+  const currentAgentSelectedModel = useAgentSelectedModel(
+    currentAgentId,
+    currentAgent?.model ?? '',
+  );
   const selectedDraftSnippets = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.draftSelectedTextSnippets[currentSession.id] ?? [] : []
   );
@@ -1272,6 +1294,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const messageRailIndex = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.messageRailIndexBySessionId[currentSession.id] ?? [] : []
   );
+  const currentMessagesWithDetachedTail = useSelector(selectCurrentMessagesWithDetachedTail);
   const isContextCompacting = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.compactingSessionIds.includes(currentSession.id) : false
   );
@@ -3462,6 +3485,43 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return mergeCoworkTextExportMessages(storedMessages, loadedMessages);
   }, [currentSession]);
 
+  const loadConversationSearchMessagePage = useCallback(async (
+    options: {
+      offset: number;
+      limit: number;
+      cursor?: CoworkSearchMessageCursor;
+      knownTotal?: number;
+    },
+  ): Promise<CoworkSearchMessagePage> => {
+    const targetSessionId = currentSession?.id;
+    if (!targetSessionId) {
+      throw new Error('Cannot load conversation search history without a session');
+    }
+    const result = await window.electron.cowork.getSessionSearchMessages({
+      sessionId: targetSessionId,
+      offset: options.offset,
+      limit: options.limit,
+      cursor: options.cursor,
+      knownTotal: options.knownTotal,
+    });
+    if (
+      !result.success
+      || !result.messages
+      || result.offset === undefined
+      || result.nextOffset === undefined
+      || result.total === undefined
+    ) {
+      throw new Error(result.error || 'Failed to load conversation search history');
+    }
+    return {
+      messages: result.messages,
+      offset: result.offset,
+      nextOffset: result.nextOffset,
+      nextCursor: result.nextCursor,
+      total: result.total,
+    };
+  }, [currentSession?.id]);
+
   const handleExportText = useCallback(async (format: CoworkTextExportFormatValue) => {
     if (!currentSession || isExportingText) return;
     setIsExportingText(true);
@@ -3919,6 +3979,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         isStreaming,
       },
     });
+    const activeSearchMatchKey = conversationSearchActiveMatchKeyRef.current;
+    if (conversationSearchViewportLockedRef.current && activeSearchMatchKey) {
+      markConversationSearchViewportAsManual();
+      clearConversationSearchHighlights();
+    }
     const requestId = ++scrollToBottomRequestRef.current;
     const scrollLoadedWindowToBottom = () => {
       if (requestId !== scrollToBottomRequestRef.current) return;
@@ -3983,11 +4048,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     clearScrollToBottomSettleTimers();
     scrollToBottomIntentRef.current = false;
     updateShouldAutoScroll(false);
-    const activeSearchMatchKey = conversationSearchActiveMatchKeyRef.current;
-    if (conversationSearchViewportLockedRef.current && activeSearchMatchKey) {
-      markConversationSearchViewportAsManual();
-      clearConversationSearchHighlights();
-    }
     logRailNavigationDiagnostic(
       `loading final message window before scrolling to session bottom; offset=${loadedMessageOffset}; loaded=${loadedMessageCount}; total=${totalMessageCount}.`,
     );
@@ -4396,10 +4456,46 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const messages = currentSession?.messages;
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
+  const enterpriseQuotaSignal = useMemo(
+    () => findCurrentEnterpriseQuotaSignal(currentSession, currentMessagesWithDetachedTail),
+    [currentMessagesWithDetachedTail, currentSession],
+  );
+  const sessionModelSelection = useMemo(() => resolveAgentModelSelection({
+    sessionModel: currentSession?.modelOverride,
+    agentModel: currentAgent?.model ?? '',
+    availableModels,
+    fallbackModel: currentAgentSelectedModel,
+    engine: coworkAgentEngine,
+  }), [
+    availableModels,
+    coworkAgentEngine,
+    currentAgent?.model,
+    currentAgentSelectedModel,
+    currentSession?.modelOverride,
+  ]);
+  const activeEnterpriseQuotaSignal = useMemo(
+    () => resolveActiveEnterpriseQuotaSignal(
+      enterpriseQuotaSignal,
+      enterpriseAccountContext,
+      sessionModelSelection.hasInvalidExplicitModel
+        ? null
+        : sessionModelSelection.selectedModel,
+    ),
+    [
+      enterpriseAccountContext,
+      enterpriseQuotaSignal,
+      sessionModelSelection.hasInvalidExplicitModel,
+      sessionModelSelection.selectedModel,
+    ],
+  );
+  const enterpriseQuotaPromptMessageId = enterpriseAccountContext
+    ? enterpriseQuotaSignal?.messageId ?? null
+    : null;
   const {
     isOpen: isConversationSearchOpen,
     query: conversationSearchQuery,
     status: conversationSearchStatus,
+    errorReason: conversationSearchErrorReason,
     matches: conversationSearchMatches,
     isResultLimitReached: isConversationSearchResultLimitReached,
     activeMatch: activeConversationSearchMatch,
@@ -4411,8 +4507,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     navigate: navigateConversationSearch,
   } = useCoworkConversationSearch({
     sessionId,
-    currentMessages: currentSession?.messages ?? [],
-    loadFullMessages: loadTextExportMessages,
+    currentMessages: currentMessagesWithDetachedTail,
+    currentTotalMessages: currentSession?.totalMessages,
+    loadMessagePage: loadConversationSearchMessagePage,
   });
   conversationSearchViewportLockedRef.current = isConversationSearchOpen;
   const activeConversationSearchMatchKey = activeConversationSearchMatch?.key ?? null;
@@ -4620,6 +4717,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       }
       if (conversationSearchLoadingTargetRef.current) return undefined;
       const targetMatchKey = activeConversationSearchMatchKey;
+      const isTargetRequestCurrent = () => (
+        requestId === conversationSearchNavigationRequestRef.current
+        && conversationSearchViewportLockedRef.current
+        && conversationSearchActiveMatchKeyRef.current === targetMatchKey
+        && conversationSearchManualViewportMatchKeyRef.current !== targetMatchKey
+      );
       conversationSearchLoadingTargetRef.current = targetMatchKey;
       logConversationSearchDebug(
         `Loading message window for search target; absoluteIndex=${activeConversationSearchAbsoluteIndex}.`,
@@ -4627,8 +4730,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       void coworkService.loadMessageWindowAroundIndex(
         activeConversationSearchSessionId,
         activeConversationSearchAbsoluteIndex,
+        {
+          expectedMessageId: activeConversationSearchMessageId,
+          isRequestCurrent: isTargetRequestCurrent,
+        },
       ).then(loaded => {
-        const targetIsStillActive = conversationSearchActiveMatchKeyRef.current === targetMatchKey;
+        const targetIsStillActive = isTargetRequestCurrent();
         if (!loaded) {
           if (targetIsStillActive) {
             conversationSearchFailedTargetRef.current = targetMatchKey;
@@ -5260,6 +5367,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   isContextMaintenance ? i18nService.t('coworkContextMaintenanceRunning') : null
                 }
                 showCopyButtons={!isStreaming || !isLastTurn}
+                hiddenSystemMessageId={enterpriseQuotaPromptMessageId}
                 completedGoal={
                   isLastTurn && currentSession.goal?.status === CoworkGoalStatus.Complete
                     ? currentSession.goal
@@ -5319,6 +5427,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           <CoworkConversationSearch
             query={conversationSearchQuery}
             status={conversationSearchStatus}
+            errorReason={conversationSearchErrorReason}
             activeMatchIndex={activeConversationSearchMatchIndex}
             resultCount={conversationSearchMatches.length}
             isResultLimitReached={isConversationSearchResultLimitReached}
@@ -6082,6 +6191,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </div>
         )}
         <div ref={promptContentAnchorRef} className={COWORK_DETAIL_CONTENT_CLASS}>
+          <EnterpriseQuotaPrompt signal={activeEnterpriseQuotaSignal} surface="task" />
           {btwThread && (
             <CoworkBtwFloatingPanel
               thread={btwThread}
@@ -6124,6 +6234,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             canSteer={isStreaming && !isContextBusy}
             placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
             disabled={remoteManaged}
+            submitDisabled={Boolean(activeEnterpriseQuotaSignal)}
             size={isArtifactPanelExpanded ? 'compact' : 'large'}
             remoteManaged={remoteManaged}
             onManageSkills={remoteManaged ? undefined : onManageSkills}

@@ -18,7 +18,10 @@ import {
   resolveLobsterAIRequestThinkingLevel,
 } from './requestOptions';
 import { LOBSTERAI_REQUEST_OPTIONS_VERSION } from './requestOptionsProtocol';
-import { parseThinkingProfileMap } from './thinkingProfileMapping';
+import {
+  parseThinkingProfileMap,
+  resolveOpenClawThinkingProfile,
+} from './thinkingProfileMapping';
 
 const PLUGIN_ID = 'lobsterai-model-compat';
 const OPENAI_COMPLETIONS_API = 'openai-completions';
@@ -107,29 +110,10 @@ const register = (api: OpenClawPluginApi): void => {
       }
       return baseStreamFn;
     },
-    resolveThinkingProfile: ({ provider, modelId }) => {
-      if (isKimiK3Profile(provider, modelId)) {
-        return {
-          levels: [{ id: 'max', label: 'max' }],
-          defaultLevel: 'max',
-          preserveWhenCatalogReasoningFalse: true,
-        };
-      }
-      const profile = thinkingProfiles[`${provider}/${modelId}`];
-      if (!profile) return undefined;
-      const defaultOpenClawLevel = profile.options.find(
-        option => option.level === profile.defaultLevel,
-      )?.openclawLevel;
-      if (!defaultOpenClawLevel) return undefined;
-      return {
-        levels: profile.options.map(option => ({
-          id: option.openclawLevel,
-          label: option.level,
-        })),
-        defaultLevel: defaultOpenClawLevel,
-        preserveWhenCatalogReasoningFalse: true,
-      };
-    },
+    resolveThinkingProfile: ({ provider, modelId }) => resolveOpenClawThinkingProfile(
+      thinkingProfiles[`${provider}/${modelId}`],
+      isKimiK3Profile(provider, modelId),
+    ),
     isModernModelRef: ({ provider, modelId }) => (
       isKimiK3Profile(provider, modelId) || undefined
     ),

@@ -25,6 +25,12 @@ export const getCronRunHistorySessionKey = (metadata: unknown): string | null =>
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 };
 
+export const getCronRunHistoryEntryIndex = (metadata: unknown): number | null => {
+  if (!isRecord(metadata)) return null;
+  const value = metadata[OpenClawCronRunMetadataKey.EntryIndex];
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+};
+
 const withCronRunHistoryMetadata = (
   entry: CronRunHistoryEntry,
   sessionKey: string,
@@ -144,4 +150,21 @@ export const findCronRunHistoryLocalMatch = (
     const importedSessionKey = getCronRunHistorySessionKey(entry.metadata);
     return !importedSessionKey || importedSessionKey === sessionKey;
   });
+};
+
+export const findCronRunHistoryLocalIndexMatch = (
+  authoritative: CronRunHistoryEntry,
+  localEntries: ReadonlyArray<CronRunLocalHistoryEntry>,
+  usedLocalMessageIds: ReadonlySet<string>,
+  sessionKey: string,
+): CronRunLocalHistoryEntry | undefined => {
+  const authoritativeIndex = getCronRunHistoryEntryIndex(authoritative.metadata);
+  if (authoritativeIndex === null) return undefined;
+
+  return localEntries.find((entry) => (
+    !usedLocalMessageIds.has(entry.id)
+    && entry.role === authoritative.role
+    && getCronRunHistorySessionKey(entry.metadata) === sessionKey
+    && getCronRunHistoryEntryIndex(entry.metadata) === authoritativeIndex
+  ));
 };

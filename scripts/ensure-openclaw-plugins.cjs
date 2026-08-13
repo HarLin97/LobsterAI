@@ -372,22 +372,44 @@ function runOpenClawCli(args, opts = {}) {
  * Run npm to pack a plugin into a .tgz file.
  * Returns the path to the packed .tgz.
  */
-function npmPack(packSpec, registry, outputDir) {
-  const isWin = process.platform === 'win32';
-  const npmBin = isWin ? 'npm.cmd' : 'npm';
-  const args = ['pack', packSpec, '--pack-destination', outputDir];
+function resolveNpmCliPath() {
+  const npmPackageJson = require.resolve('npm/package.json');
+  const npmCliPath = path.join(path.dirname(npmPackageJson), 'bin', 'npm-cli.js');
+  if (!fs.existsSync(npmCliPath)) {
+    throw new Error(`npm CLI not found at ${npmCliPath}`);
+  }
+  return npmCliPath;
+}
+
+function buildNpmPackInvocation(packSpec, registry, outputDir) {
+  const args = [
+    resolveNpmCliPath(),
+    'pack',
+    packSpec,
+    '--pack-destination',
+    outputDir,
+  ];
   if (registry) {
     args.push(`--registry=${registry}`);
   }
+  return {
+    command: process.execPath,
+    args,
+  };
+}
 
-  const result = spawnSync(npmBin, args, {
+function npmPack(packSpec, registry, outputDir) {
+  const invocation = buildNpmPackInvocation(packSpec, registry, outputDir);
+
+  // Invoke npm's JS entry directly. Using `npm.cmd` with `shell: true` makes
+  // Node concatenate arguments into a command string on Windows, so profile
+  // or TEMP paths containing spaces are split before npm sees them.
+  const result = spawnSync(invocation.command, invocation.args, {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd: outputDir,
     env: buildNpmPackEnv(),
-    shell: isWin,
     timeout: 3 * 60 * 1000,
-    windowsVerbatimArguments: isWin,
   });
 
   if (result.error) {
@@ -784,6 +806,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildNpmPackInvocation,
   buildPluginInstallEnv,
   buildNpmPackEnv,
   buildGitEnv,

@@ -21,6 +21,7 @@ import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
 import InformationCircleIcon from '../icons/InformationCircleIcon';
 import MarkdownContent from '../MarkdownContent';
 import ActivityGroupBlock from './ActivityGroupBlock';
+import { activityItemHasError } from './ActivityGroupBlock';
 import AssistantMessageItem from './AssistantMessageItem';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
@@ -180,11 +181,20 @@ const ActivityIndicator: React.FC<{
     ?? getActivityIndicatorStatusText(false, isLongWaiting, hasContent);
 
   return (
-    <div className="flex items-center gap-2 py-1 animate-fade-in" role="status" aria-live="polite">
+    <div className="flex items-center gap-2 py-1 animate-fade-in">
       <span className="activity-indicator-dot h-2 w-2 rounded-full bg-primary flex-shrink-0" aria-hidden="true" />
-      <span className="shimmer-text text-sm text-secondary min-w-0 truncate">{statusText}</span>
+      <span
+        className="shimmer-text text-sm text-secondary min-w-0 truncate"
+        role="status"
+        aria-live="polite"
+      >
+        {statusText}
+      </span>
       {elapsedMs != null && elapsedMs >= ACTIVITY_TIMER_APPEAR_DELAY_MS && (
-        <span className="text-xs text-muted tabular-nums flex-shrink-0 animate-fade-in">
+        <span
+          className="text-xs text-muted tabular-nums flex-shrink-0 animate-fade-in"
+          aria-hidden="true"
+        >
           {formatElapsedDuration(elapsedMs)}
         </span>
       )}
@@ -353,6 +363,7 @@ const AssistantTurnBlock: React.FC<{
   activityStatusOverride?: string | null;
   showCopyButtons?: boolean;
   completedGoal?: CoworkGoal | null;
+  hiddenSystemMessageId?: string | null;
   searchTargetMessageId?: string | null;
   /** True when this turn is the one currently streaming; keeps the latest activity step visible. */
   isStreamingTurn?: boolean;
@@ -377,17 +388,31 @@ const AssistantTurnBlock: React.FC<{
   activityStatusOverride = null,
   showCopyButtons = true,
   completedGoal,
+  hiddenSystemMessageId,
   searchTargetMessageId,
   isStreamingTurn = false,
   hasRunningSubagents = false,
 }) => {
   const [artifactCardsExpanded, setArtifactCardsExpanded] = useState(false);
   const [processExpanded, setProcessExpanded] = useState(false);
-  const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
+  const visibleAssistantItems = useMemo(
+    () => getVisibleAssistantItems(turn.assistantItems),
+    [turn.assistantItems],
+  );
   const consolidatedItems = useMemo(
     () => consolidateMediaPolling(visibleAssistantItems),
     [visibleAssistantItems],
   );
+  const toolGroupOverrides = useMemo(() => {
+    const overrides = new Map<string, React.ReactNode>();
+    if (!renderToolGroupOverride) return overrides;
+    for (const item of consolidatedItems) {
+      if (item.type !== 'tool_group') continue;
+      const override = renderToolGroupOverride(item.group);
+      if (override) overrides.set(item.group.toolUse.id, override);
+    }
+    return overrides;
+  }, [consolidatedItems, renderToolGroupOverride]);
   const videoPathArtifacts = useMemo(
     () => getVideoPathArtifacts(artifacts),
     [artifacts],
@@ -428,6 +453,9 @@ const AssistantTurnBlock: React.FC<{
   }, [turn.id]);
 
   const renderSystemMessage = (message: CoworkMessage) => {
+    if (message.id === hiddenSystemMessageId) {
+      return null;
+    }
     const isError = !hasText(message.content) && typeof message.metadata?.error === 'string';
     const rawContent = hasText(message.content)
       ? message.content
@@ -531,7 +559,7 @@ const AssistantTurnBlock: React.FC<{
   const renderChunks = chunkConsolidatedItemsForDisplay(
     consolidatedItems,
     (item) => isActivityConsolidatedItem(item)
-      && !(item.type === 'tool_group' && renderToolGroupOverride?.(item.group)),
+      && !(item.type === 'tool_group' && toolGroupOverrides.has(item.group.toolUse.id)),
   );
 
   // Indices that render as standalone timeline rows; the timeline connector
@@ -626,7 +654,7 @@ const AssistantTurnBlock: React.FC<{
     }
 
     if (item.type === 'tool_group') {
-      const override = renderToolGroupOverride?.(item.group);
+      const override = toolGroupOverrides.get(item.group.toolUse.id);
       if (override) {
         return (
           <div key={`tool-${item.group.toolUse.id}`}>
@@ -695,7 +723,12 @@ const AssistantTurnBlock: React.FC<{
       && chunk.item.type === 'assistant'
       && chunk.item.message.id === searchTargetMessageId,
   );
-  const isProcessExpanded = processExpanded || processContainsSearchTarget;
+  const processHasError = processChunks.some(chunk => (
+    chunk.kind === 'item'
+      ? activityItemHasError(chunk.item)
+      : chunk.entries.some(entry => activityItemHasError(entry.item))
+  ));
+  const isProcessExpanded = processExpanded || processContainsSearchTarget || processHasError;
   const turnStartTimestamp = getTurnStartTimestamp(turn);
   const turnEndTimestamp = getTurnEndTimestamp(turn);
   const processDurationMs = turnStartTimestamp != null && turnEndTimestamp != null
@@ -732,7 +765,9 @@ const AssistantTurnBlock: React.FC<{
                     className="group flex max-w-full items-center gap-1.5 text-left"
                     aria-expanded={isProcessExpanded}
                   >
-                    <span className="min-w-0 truncate text-sm text-secondary transition-colors group-hover:text-foreground">
+                    <span className={`min-w-0 truncate text-sm transition-colors group-hover:text-foreground ${
+                      processHasError ? 'text-red-500' : 'text-secondary'
+                    }`}>
                       {processLabel}
                     </span>
                     <ChevronRightIcon

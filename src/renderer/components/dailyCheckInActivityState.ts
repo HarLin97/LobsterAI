@@ -20,6 +20,11 @@ const isNonEmptyString = (value: unknown): value is string => (
   typeof value === 'string' && value.trim().length > 0
 );
 
+export const getDailyCheckInAuthScopeKey = (
+  ownerAccountKey: string | null,
+  accountGeneration: number,
+): string => `${ownerAccountKey ?? 'anonymous'}:${accountGeneration}`;
+
 export function isDailyCheckInDescriptor(
   value: unknown,
 ): value is DailyCheckInDescriptor {

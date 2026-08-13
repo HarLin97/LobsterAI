@@ -22,7 +22,6 @@ const LABEL_ALTERNATION = [...FOLDER_LABELS, ...FILE_LABELS].map(escapeRegExp).j
 // Paths may contain spaces, so the path part runs to end of line.
 const ATTACHMENT_LINE_RE = new RegExp(
   `^[ \\t]*(${LABEL_ALTERNATION}): ((?:\\/|[A-Za-z]:[\\\\/]|\\\\\\\\)[^\\n]*?)[ \\t]*$`,
-  'gm',
 );
 
 export interface UserMessageFileAttachment {
@@ -44,14 +43,15 @@ function deriveAttachmentName(rawPath: string): string {
 }
 
 function normalizePathKey(rawPath: string): string {
-  return rawPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const normalized = rawPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^(?:[A-Za-z]:\/|\/\/)/.test(normalized)
+    ? normalized.toLowerCase()
+    : normalized;
 }
 
 /**
- * Splits attachment lines out of a user message. Returns the remaining text
- * (with attachment lines removed and blank runs collapsed) plus the parsed
- * attachments in appearance order. Content without attachment lines is
- * returned unchanged.
+ * Splits the machine-generated trailing attachment block out of a user
+ * message. Attachment-looking text in the body is intentionally preserved.
  */
 export function extractUserMessageFileAttachments(
   content: string,
@@ -60,33 +60,35 @@ export function extractUserMessageFileAttachments(
     return { text: content, attachments: [] };
   }
 
-  const attachments: UserMessageFileAttachment[] = [];
-  const seenPathKeys = new Set<string>();
-
-  const re = new RegExp(ATTACHMENT_LINE_RE.source, ATTACHMENT_LINE_RE.flags);
-  const text = content
-    .replace(re, (_match, label: string, rawPath: string) => {
-      const path = rawPath.trim();
-      if (path) {
-        const key = normalizePathKey(path);
-        if (!seenPathKeys.has(key)) {
-          seenPathKeys.add(key);
-          attachments.push({
-            path,
-            name: deriveAttachmentName(path),
-            isDirectory: (FOLDER_LABELS as readonly string[]).includes(label),
-          });
-        }
-      }
-      return '';
-    });
-
-  if (attachments.length === 0) {
+  const parsedLines: Array<{ label: string; path: string }> = [];
+  const lines = content.split('\n');
+  let attachmentStart = lines.length;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = ATTACHMENT_LINE_RE.exec(lines[index]);
+    if (!match) break;
+    parsedLines.push({ label: match[1], path: match[2].trim() });
+    attachmentStart = index;
+  }
+  if (parsedLines.length === 0) {
     return { text: content, attachments: [] };
   }
 
+  const attachments: UserMessageFileAttachment[] = [];
+  const seenPathKeys = new Set<string>();
+  for (const { label, path } of parsedLines.reverse()) {
+    if (!path) continue;
+    const key = normalizePathKey(path);
+    if (seenPathKeys.has(key)) continue;
+    seenPathKeys.add(key);
+    attachments.push({
+      path,
+      name: deriveAttachmentName(path),
+      isDirectory: (FOLDER_LABELS as readonly string[]).includes(label),
+    });
+  }
+
   return {
-    text: text.replace(/\n{3,}/g, '\n\n').trim(),
+    text: lines.slice(0, attachmentStart).join('\n').trim(),
     attachments,
   };
 }

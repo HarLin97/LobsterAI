@@ -354,6 +354,21 @@ export class SqliteStore {
       // Migration not needed
     }
 
+    // `thinking_level` is selected by every Cowork session read after this
+    // release. Keep this required migration independent from the legacy
+    // best-effort block below so an unrelated ALTER failure cannot skip it.
+    try {
+      const sessionCols = this.db.pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
+      if (!sessionCols.some(column => column.name.toLowerCase() === 'thinking_level')) {
+        this.db.exec("ALTER TABLE cowork_sessions ADD COLUMN thinking_level TEXT NOT NULL DEFAULT '';");
+        this.didRunMigration = true;
+        console.log('[SqliteStore] added required cowork_sessions.thinking_level column');
+      }
+    } catch (error) {
+      console.error('[SqliteStore] failed to add cowork_sessions.thinking_level:', error);
+      throw error;
+    }
+
     // Migrations - safely add columns if they don't exist
     try {
       // Check if execution_mode column exists
@@ -382,11 +397,6 @@ export class SqliteStore {
 
       if (!colNames.includes('model_override')) {
         this.db.exec("ALTER TABLE cowork_sessions ADD COLUMN model_override TEXT NOT NULL DEFAULT '';");
-        this.didRunMigration = true;
-      }
-
-      if (!colNames.includes('thinking_level')) {
-        this.db.exec("ALTER TABLE cowork_sessions ADD COLUMN thinking_level TEXT NOT NULL DEFAULT '';");
         this.didRunMigration = true;
       }
 
@@ -453,6 +463,29 @@ export class SqliteStore {
       }
     } catch {
       // Column already exists or migration not needed.
+    }
+
+    // Keep mixed-message pagination (history rail and conversation search)
+    // index-backed. This must run after the legacy `sequence` migration above:
+    // older installations can still have a cowork_messages table without that
+    // column when initializeTables starts.
+    try {
+      const indexName = 'idx_cowork_messages_session_order';
+      const existingIndex = this.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?")
+        .get(indexName);
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_cowork_messages_session_order
+        ON cowork_messages(session_id, COALESCE(sequence, created_at), created_at);
+      `);
+      if (!existingIndex) {
+        this.didRunMigration = true;
+        console.log('[SqliteStore] created cowork message pagination index');
+      }
+    } catch (error) {
+      // Index creation is an optimization; keep startup compatible with a
+      // recoverable legacy schema and leave the existing pagination path usable.
+      console.warn('[SqliteStore] failed to create cowork message pagination index:', error);
     }
 
     // This column is required by all Cowork session reads after this release.
@@ -557,16 +590,27 @@ export class SqliteStore {
       console.warn('[SqliteStore] failed to backfill scheduled task session ids:', error);
     }
 
+    // `thinking_level` is also required by all agent reads. Migrate it before
+    // optional layout columns so upgrades from partially migrated databases
+    // cannot leave the agents table unreadable.
+    try {
+      const agentCols = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
+      if (!agentCols.some(column => column.name.toLowerCase() === 'thinking_level')) {
+        this.db.exec("ALTER TABLE agents ADD COLUMN thinking_level TEXT NOT NULL DEFAULT '';");
+        this.didRunMigration = true;
+        console.log('[SqliteStore] added required agents.thinking_level column');
+      }
+    } catch (error) {
+      console.error('[SqliteStore] failed to add agents.thinking_level:', error);
+      throw error;
+    }
+
     // Migration: Add model preference and layout columns to agents
     try {
       const agentCols = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
       const agentColNames = agentCols.map(c => c.name);
       if (!agentColNames.includes('working_directory')) {
         this.db.exec("ALTER TABLE agents ADD COLUMN working_directory TEXT NOT NULL DEFAULT '';");
-        this.didRunMigration = true;
-      }
-      if (!agentColNames.includes('thinking_level')) {
-        this.db.exec("ALTER TABLE agents ADD COLUMN thinking_level TEXT NOT NULL DEFAULT '';");
         this.didRunMigration = true;
       }
       if (!agentColNames.includes('pinned')) {

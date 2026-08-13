@@ -8,6 +8,22 @@ import type { UserMessageFileAttachment } from '../../utils/userMessageFileAttac
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
 import { getFileTypeInfo } from '../icons/fileTypes/index';
 
+const FILE_TYPE_I18N_KEYS: Record<string, string> = {
+  Word: 'fileAttachmentTypeWord',
+  Excel: 'fileAttachmentTypeSpreadsheet',
+  PPT: 'fileAttachmentTypePresentation',
+  PDF: 'fileAttachmentTypePdf',
+  Archive: 'fileAttachmentTypeArchive',
+  Code: 'fileAttachmentTypeCode',
+  Text: 'fileAttachmentTypeText',
+  SRT: 'fileAttachmentTypeSubtitle',
+  VTT: 'fileAttachmentTypeSubtitle',
+  Audio: 'fileAttachmentTypeAudio',
+  Video: 'fileAttachmentTypeVideo',
+  Image: 'fileAttachmentTypeImage',
+  File: 'fileAttachmentTypeFile',
+};
+
 const showToast = (message: string): void => {
   window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
 };
@@ -50,9 +66,10 @@ const UserMessageFileAttachments: React.FC<UserMessageFileAttachmentsProps> = ({
   return (
     <div className={`flex flex-wrap gap-2 ${className}`}>
       {attachments.map(attachment => {
+        const fileTypeLabel = getFileTypeInfo(attachment.name).label;
         const typeLabel = attachment.isDirectory
           ? i18nService.t('folderAttachmentType')
-          : getFileTypeInfo(attachment.name).label;
+          : i18nService.t(FILE_TYPE_I18N_KEYS[fileTypeLabel] ?? 'fileAttachmentTypeFile');
         return (
           <button
             key={attachment.path}

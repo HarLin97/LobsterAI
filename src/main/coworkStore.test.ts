@@ -22,7 +22,11 @@ import BetterSqlite3 from 'better-sqlite3';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
-import { CoworkForkMode } from '../shared/cowork/constants';
+import {
+  COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
+  COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES,
+  CoworkForkMode,
+} from '../shared/cowork/constants';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
@@ -219,6 +223,194 @@ test('getSession returns all messages when one has corrupt metadata', () => {
   // Null metadata → undefined
   const nullMsg = session!.messages.find((m) => m.id === 'msg-null')!;
   expect(nullMsg.metadata).toBeUndefined();
+});
+
+test('getSessionSearchMessagePage keeps absolute mixed-message offsets without returning metadata or tool content', () => {
+  const sid = 'search-page-session';
+  insertSession(sid);
+
+  insertMessage('user-0', sid, 'user', 'first visible message', '{"localMediaAttachments":[{"localPath":"/large/path.png"}]}', 1);
+  insertMessage('tool-1', sid, 'tool_result', 'x'.repeat(20_000), '{"large":"metadata"}', 2);
+  insertMessage('thinking-2', sid, 'assistant', 'private chain of thought', '{"isThinking":true,"large":"metadata"}', 3);
+  insertMessage('assistant-3', sid, 'assistant', 'visible response', '{"large":"metadata"}', 4);
+  insertMessage('system-4', sid, 'system', 'large system payload', null, 5);
+  insertMessage('user-5', sid, 'user', 'last visible message', null, 6);
+
+  const countMessagesSpy = vi.spyOn(store, 'countSessionMessages');
+  const firstPage = store.getSessionSearchMessagePage(sid, 3, 0);
+  expect(firstPage).toEqual({
+    messages: [{
+      id: 'user-0',
+      type: 'user',
+      content: 'first visible message',
+      timestamp: expect.any(Number),
+      absoluteMessageIndex: 0,
+    }],
+    offset: 0,
+    nextOffset: 3,
+    nextCursor: {
+      sortValue: 3,
+      createdAt: expect.any(Number),
+      rowId: expect.any(Number),
+    },
+    total: 6,
+  });
+
+  expect(store.getSessionSearchMessagePage(
+    sid,
+    3,
+    3,
+    firstPage.nextCursor,
+    firstPage.total,
+  )).toEqual({
+    messages: [
+      {
+        id: 'assistant-3',
+        type: 'assistant',
+        content: 'visible response',
+        timestamp: expect.any(Number),
+        absoluteMessageIndex: 3,
+      },
+      {
+        id: 'user-5',
+        type: 'user',
+        content: 'last visible message',
+        timestamp: expect.any(Number),
+        absoluteMessageIndex: 5,
+      },
+    ],
+    offset: 3,
+    nextOffset: 6,
+    nextCursor: {
+      sortValue: 6,
+      createdAt: expect.any(Number),
+      rowId: expect.any(Number),
+    },
+    total: 6,
+  });
+  expect(countMessagesSpy).toHaveBeenCalledTimes(1);
+});
+
+test('getSessionSearchMessagePage treats corrupt assistant metadata as non-thinking', () => {
+  const sid = 'search-corrupt-metadata-session';
+  insertSession(sid);
+  insertMessage('assistant-corrupt', sid, 'assistant', 'still searchable', '{broken', 1);
+
+  expect(store.getSessionSearchMessagePage(sid, 10, 0).messages).toEqual([{
+    id: 'assistant-corrupt',
+    type: 'assistant',
+    content: 'still searchable',
+    timestamp: expect.any(Number),
+    absoluteMessageIndex: 0,
+  }]);
+});
+
+test('getSessionSearchMessagePage bounds user and assistant content while preserving an over-limit sentinel', () => {
+  const sid = 'search-content-limit-session';
+  insertSession(sid);
+  const projectedLength = COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS + 1;
+  const userContent = `${'u'.repeat(projectedLength)}user tail`;
+  const assistantContent = `${'a'.repeat(projectedLength)}assistant tail`;
+  insertMessage('oversized-user', sid, 'user', userContent, null, 1);
+  insertMessage('oversized-assistant', sid, 'assistant', assistantContent, null, 2);
+
+  const messages = store.getSessionSearchMessagePage(sid, 10, 0).messages;
+
+  expect(messages).toHaveLength(2);
+  expect(messages[0].content).toBe(userContent.slice(0, projectedLength));
+  expect(messages[1].content).toBe(assistantContent.slice(0, projectedLength));
+  expect(messages.every(message => message.content.length === projectedLength)).toBe(true);
+});
+
+test('getSessionSearchMessagePage leaves UTF-16 surrogate overflow detectable by the renderer', () => {
+  const sid = 'search-surrogate-limit-session';
+  insertSession(sid);
+  const content = '🦞'.repeat(
+    Math.floor(COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS / 2) + 1,
+  );
+  insertMessage('oversized-surrogate-user', sid, 'user', content, null, 1);
+
+  const [message] = store.getSessionSearchMessagePage(sid, 10, 0).messages;
+
+  // SQLite SUBSTR counts Unicode code points, while JavaScript String.length
+  // counts UTF-16 code units. Returning this bounded value still crosses the
+  // renderer's explicit per-message limit instead of silently truncating it.
+  expect(message.content).toBe(content);
+  expect(message.content.length).toBeGreaterThan(
+    COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
+  );
+});
+
+test('getSessionSearchMessagePage enforces its aggregate UTF-8 payload budget without losing page progress', () => {
+  const sid = 'search-page-payload-limit-session';
+  insertSession(sid);
+  const fullSizeMessage = 'p'.repeat(
+    COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
+  );
+  const messagesAtLimit = Math.floor(
+    COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES
+      / COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
+  );
+  for (let index = 0; index < messagesAtLimit; index += 1) {
+    insertMessage(`payload-${index}`, sid, 'user', fullSizeMessage, null, index + 1);
+  }
+
+  const exactLimitPage = store.getSessionSearchMessagePage(sid, 20, 0);
+  expect(exactLimitPage.messages).toHaveLength(messagesAtLimit);
+  expect(exactLimitPage.messages.reduce(
+    (total, message) => total + Buffer.byteLength(message.content, 'utf8'),
+    0,
+  )).toBe(COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES);
+
+  insertMessage('payload-overflow', sid, 'user', 'x', null, messagesAtLimit + 1);
+  const overLimitPage = store.getSessionSearchMessagePage(sid, 20, 0);
+
+  expect(overLimitPage.messages).toEqual([{
+    id: 'payload-0',
+    type: 'user',
+    content: expect.any(String),
+    timestamp: expect.any(Number),
+    absoluteMessageIndex: 0,
+  }]);
+  expect(overLimitPage.messages[0].content).toHaveLength(
+    COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS + 1,
+  );
+  expect(overLimitPage).toMatchObject({
+    offset: 0,
+    nextOffset: messagesAtLimit + 1,
+    nextCursor: {
+      sortValue: messagesAtLimit + 1,
+      createdAt: expect.any(Number),
+      rowId: expect.any(Number),
+    },
+    total: messagesAtLimit + 1,
+  });
+});
+
+test('getSessionSearchMessagePage keyset cursor preserves ROWID order for legacy ties', () => {
+  const sid = 'search-keyset-tie-session';
+  insertSession(sid);
+  for (let index = 0; index < 5; index += 1) {
+    insertMessage(`tie-${index}`, sid, 'user', `message ${index}`, null, index + 1, 100);
+  }
+  db.prepare('UPDATE cowork_messages SET sequence = NULL WHERE session_id = ?').run(sid);
+
+  const firstPage = store.getSessionSearchMessagePage(sid, 2, 0);
+  const secondPage = store.getSessionSearchMessagePage(sid, 2, 2, firstPage.nextCursor);
+  const thirdPage = store.getSessionSearchMessagePage(sid, 2, 4, secondPage.nextCursor);
+
+  expect([
+    ...firstPage.messages,
+    ...secondPage.messages,
+    ...thirdPage.messages,
+  ].map(message => [message.id, message.absoluteMessageIndex])).toEqual([
+    ['tie-0', 0],
+    ['tie-1', 1],
+    ['tie-2', 2],
+    ['tie-3', 3],
+    ['tie-4', 4],
+  ]);
+  expect(thirdPage.nextOffset).toBe(5);
 });
 
 test('searchSessions finds matching titles beyond the recent page', () => {
