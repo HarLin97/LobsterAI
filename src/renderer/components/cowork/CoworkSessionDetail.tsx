@@ -86,6 +86,7 @@ import {
 import {
   addDraftSelectedTextSnippet,
   clearBtwComposerIfUnchanged,
+  clearBtwEntries,
   closeBtwThread,
   openBtwThread,
   PlanConfirmationState,
@@ -6198,6 +6199,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               promptAnchorRef={promptContentAnchorRef}
               resolveLocalFilePath={resolveLocalFilePath}
               onClose={() => dispatch(closeBtwThread(btwThread.sessionId))}
+              onClearEntries={() => dispatch(clearBtwEntries(btwThread.sessionId))}
               onDraftChange={draft => dispatch(setBtwDraft({
                 sessionId: btwThread.sessionId,
                 draft,

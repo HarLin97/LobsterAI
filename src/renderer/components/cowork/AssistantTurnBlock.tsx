@@ -147,7 +147,7 @@ const ContextCompactionDivider: React.FC<{ label: string; active?: boolean }> = 
 const ACTIVITY_TIMER_APPEAR_DELAY_MS = 1000;
 const ACTIVITY_LONG_WAIT_HINT_DELAY_MS = 30_000;
 
-const ActivityIndicator: React.FC<{
+export const ActivityIndicator: React.FC<{
   fingerprint: string;
   hasContent: boolean;
   startTimestamp: number | null;

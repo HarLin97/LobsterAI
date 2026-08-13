@@ -873,6 +873,13 @@ const coworkSlice = createSlice({
       thread.updatedAt = Date.now();
     },
 
+    clearBtwEntries(state, action: PayloadAction<string>) {
+      const thread = state.btwThreadsBySessionId[action.payload];
+      if (!thread || thread.entries.length === 0) return;
+      thread.entries = [];
+      thread.updatedAt = Date.now();
+    },
+
     appendBtwEntry(state, action: PayloadAction<CoworkBtwEntry>) {
       const entry = action.payload;
       const sessionExists = state.currentSession?.id === entry.sessionId
@@ -1540,6 +1547,7 @@ export const {
   setBtwSelectedTextSnippets,
   clearBtwDraftIfUnchanged,
   clearBtwComposerIfUnchanged,
+  clearBtwEntries,
   appendBtwEntry,
   settleBtwEntry,
   deleteSession,

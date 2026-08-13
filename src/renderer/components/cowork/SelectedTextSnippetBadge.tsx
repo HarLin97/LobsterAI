@@ -42,7 +42,32 @@ const SelectedTextSnippetBadge: React.FC<SelectedTextSnippetBadgeProps> = ({
   onLocate,
 }) => {
   const [expanded, setExpanded] = useState(false);
+  const [dropDirection, setDropDirection] = useState<'up' | 'down'>('up');
   const rootRef = useRef<HTMLDivElement>(null);
+
+  // The popover is clipped by the nearest overflow ancestor (message list,
+  // panel body), so flip it below the pill when the space above cannot fit it.
+  const resolveDropDirection = (): 'up' | 'down' => {
+    const root = rootRef.current;
+    if (!root) return 'up';
+    let boundaryTop = 0;
+    let boundaryBottom = window.innerHeight;
+    for (let node = root.parentElement; node; node = node.parentElement) {
+      const { overflowY } = window.getComputedStyle(node);
+      if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'hidden') {
+        const rect = node.getBoundingClientRect();
+        boundaryTop = rect.top;
+        boundaryBottom = rect.bottom;
+        break;
+      }
+    }
+    const rootRect = root.getBoundingClientRect();
+    // Rows are ~52px within the max-h-56 popover body.
+    const estimatedHeight = Math.min(236, snippets.length * 56 + 12);
+    const spaceAbove = rootRect.top - boundaryTop;
+    if (spaceAbove >= estimatedHeight) return 'up';
+    return boundaryBottom - rootRect.bottom > spaceAbove ? 'down' : 'up';
+  };
 
   useEffect(() => {
     if (!expanded) return undefined;
@@ -70,7 +95,10 @@ const SelectedTextSnippetBadge: React.FC<SelectedTextSnippetBadgeProps> = ({
   if (snippets.length === 0) return null;
   const canRemove = Boolean(onClear || onRemove);
   const popoverAlignmentClass = align === 'right' ? 'right-0' : 'left-0';
-  const popoverOriginClass = align === 'right' ? 'origin-bottom-right' : 'origin-bottom-left';
+  const popoverPlacementClass = dropDirection === 'down' ? 'top-full mt-1.5' : 'bottom-full mb-1.5';
+  const popoverOriginClass = dropDirection === 'down'
+    ? (align === 'right' ? 'origin-top-right' : 'origin-top-left')
+    : (align === 'right' ? 'origin-bottom-right' : 'origin-bottom-left');
   const pillSurfaceClass = expanded
     ? 'bg-surface-raised/70'
     : 'bg-surface hover:bg-surface-raised/50';
@@ -99,7 +127,10 @@ const SelectedTextSnippetBadge: React.FC<SelectedTextSnippetBadgeProps> = ({
       <div className={`inline-flex h-7 max-w-full items-center rounded-full border border-border text-xs text-foreground shadow-subtle transition-colors ${pillSurfaceClass}`}>
         <button
           type="button"
-          onClick={() => setExpanded(value => !value)}
+          onClick={() => {
+            if (!expanded) setDropDirection(resolveDropDirection());
+            setExpanded(value => !value);
+          }}
           aria-expanded={expanded}
           className="inline-flex h-full min-w-0 items-center gap-1.5 rounded-full pl-2.5 pr-2 text-left"
         >
@@ -122,7 +153,7 @@ const SelectedTextSnippetBadge: React.FC<SelectedTextSnippetBadgeProps> = ({
       </div>
       {expanded && (
         <div
-          className={`absolute bottom-full ${popoverAlignmentClass} z-50 mb-1.5 max-w-[calc(100vw-48px)] ${popoverOriginClass} animate-scale-in rounded-xl border border-border bg-surface p-1.5 shadow-popover`}
+          className={`absolute ${popoverPlacementClass} ${popoverAlignmentClass} z-50 max-w-[calc(100vw-48px)] ${popoverOriginClass} animate-scale-in rounded-xl border border-border bg-surface p-1.5 shadow-popover`}
           style={popoverStyle}
         >
           <div className="flex max-h-56 max-w-full flex-col items-stretch gap-1 overflow-y-auto">

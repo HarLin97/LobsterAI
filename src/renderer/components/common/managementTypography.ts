@@ -13,6 +13,10 @@
  * wants 12 uses `text-xs`, which already scales.
  */
 
+/** Page header titles in the top bar (Kits / Scheduled Tasks / Skills tabs). */
+export const MANAGEMENT_PAGE_TITLE_TEXT =
+  'text-[length:calc(var(--lobster-ui-font-size)_+_0.5px)]';
+
 /** Card and tab titles, and detail-dialog prose. */
 export const MANAGEMENT_TITLE_TEXT =
   'text-[length:calc(var(--lobster-ui-font-size)_-_0.5px)]';
