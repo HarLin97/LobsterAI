@@ -4,7 +4,9 @@ import {
   DAILY_CHECK_IN_AUTO_REFRESH_COOLDOWN_MS,
   DAILY_CHECK_IN_AUTO_REFRESH_INTERVAL_MS,
   DAILY_CHECK_IN_AUTO_REFRESH_JITTER_MS,
+  DAILY_CHECK_IN_DAY_BOUNDARY_BUFFER_MS,
   type DailyCheckInAutoRefreshEnvironment,
+  getDailyCheckInDayBoundaryDelay,
   startDailyCheckInAutoRefresh,
 } from './dailyCheckInAutoRefresh';
 
@@ -140,5 +142,21 @@ describe('daily check-in auto refresh', () => {
     expect(refresh).toHaveBeenCalledTimes(2);
 
     stop();
+  });
+
+  test('calculates the next Asia/Shanghai business-day boundary', () => {
+    expect(getDailyCheckInDayBoundaryDelay(
+      '2026-08-11T15:59:59.500Z',
+      'Asia/Shanghai',
+    )).toBe(500 + DAILY_CHECK_IN_DAY_BOUNDARY_BUFFER_MS);
+    expect(getDailyCheckInDayBoundaryDelay(
+      '2026-08-11T16:00:00.000Z',
+      'Asia/Shanghai',
+    )).toBe(24 * 60 * 60 * 1000 + DAILY_CHECK_IN_DAY_BOUNDARY_BUFFER_MS);
+    expect(getDailyCheckInDayBoundaryDelay('invalid', 'Asia/Shanghai')).toBeNull();
+    expect(getDailyCheckInDayBoundaryDelay(
+      '2026-08-11T16:00:00.000Z',
+      'Invalid/Timezone',
+    )).toBeNull();
   });
 });

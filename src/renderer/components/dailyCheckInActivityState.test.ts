@@ -17,7 +17,7 @@ import {
   isDailyCheckInContext,
   isDailyCheckInDescriptor,
   isDailyCheckInState,
-  shouldShowDailyCheckInSidebar,
+  shouldShowDailyCheckInEntry,
 } from './dailyCheckInActivityState';
 
 const context = (
@@ -56,26 +56,31 @@ describe('dailyCheckInActivityState', () => {
 
   test('allows an authenticated active user to claim', () => {
     expect(canClaimDailyCheckIn(context())).toBe(true);
-    expect(shouldShowDailyCheckInSidebar(context())).toBe(true);
+    expect(shouldShowDailyCheckInEntry(context())).toBe(true);
   });
 
-  test('hides the sidebar after today is claimed but keeps valid profile state', () => {
+  test('hides the entry after today is claimed but keeps valid activity state', () => {
     const claimed = context({ claimedToday: true });
 
     expect(canClaimDailyCheckIn(claimed)).toBe(false);
-    expect(shouldShowDailyCheckInSidebar(claimed)).toBe(false);
+    expect(shouldShowDailyCheckInEntry(claimed)).toBe(false);
     expect(isDailyCheckInState(claimed.state)).toBe(true);
   });
 
-  test('never shows a completed activity after every configured day is claimed', () => {
+  test('shows the entry to guests but hides completed campaigns', () => {
+    expect(shouldShowDailyCheckInEntry({
+      ...context(),
+      authenticated: false,
+    })).toBe(true);
     const completed = context({
-      claimedDays: 7,
-      remainingDays: 0,
       completed: true,
+      claimedToday: false,
+      remainingDays: 0,
+      claimedDays: 7,
     });
 
     expect(canClaimDailyCheckIn(completed)).toBe(false);
-    expect(shouldShowDailyCheckInSidebar(completed)).toBe(false);
+    expect(shouldShowDailyCheckInEntry(completed)).toBe(false);
     expect(isDailyCheckInState(completed.state)).toBe(true);
   });
 

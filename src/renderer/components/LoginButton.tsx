@@ -1,4 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react';
+import {
+  ChevronRightIcon,
+  PlusCircleIcon,
+} from '@heroicons/react/24/outline';
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useSelector } from 'react-redux';
 
 import inviteCreditsIconUrl from '../assets/icons/invite-credits.svg';
@@ -11,6 +20,7 @@ import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/
 import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
 import { authService } from '../services/auth';
 import {
+  getPortalCreditsDetailUrl,
   getPortalCreditsResetActivityUrl,
   getPortalInvitationUrl,
   getPortalProfileUrl,
@@ -19,15 +29,13 @@ import {
 import { i18nService } from '../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
 import { RootState } from '../store';
-import type {
-  CreditItem,
-  CreditsResetCampaignStatus,
-  FreeCreditsReward,
-} from '../store/slices/authSlice';
+import type { FreeCreditsReward } from '../store/slices/authSlice';
+import {
+  getAccountPlanPresentation,
+  getFinalRewards,
+} from './accountMenuState';
 import CreditsFinalRewardModal from './CreditsFinalRewardModal';
-import { DailyCheckInProfileCard } from './DailyCheckInActivity';
 import UserAvatarIcon from './icons/UserAvatarIcon';
-import { useDailyCheckInActivity } from './useDailyCheckInActivity';
 
 const ACCOUNT_MENU_ANALYTICS_SOURCE = 'home_account_menu';
 
@@ -52,49 +60,6 @@ const reportAccountMenuAction = (
   });
 };
 
-const getSubscriptionBadge = (label: string) => {
-  // Determine badge style based on label
-  const isStandard = /标准|Standard/i.test(label);
-  const isAdvanced = /进阶|Advanced/i.test(label);
-  const isPro = /专业|Pro/i.test(label);
-
-  if (isPro) {
-    return {
-      bg: 'bg-gradient-to-r from-amber-500 to-yellow-400',
-      text: 'text-white',
-      icon: (
-        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="currentColor" className="shrink-0">
-          <path d="M2 4l3 12h14l3-12-5 4-5-6-5 6z" /><path d="M5 16l-1.5 4h17L19 16" />
-        </svg>
-      ),
-    };
-  }
-  if (isAdvanced) {
-    return {
-      bg: 'bg-gradient-to-r from-purple-500 to-violet-400',
-      text: 'text-white',
-      icon: (
-        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-        </svg>
-      ),
-    };
-  }
-  if (isStandard) {
-    return {
-      bg: 'bg-gradient-to-r from-blue-500 to-cyan-400',
-      text: 'text-white',
-      icon: (
-        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="currentColor" className="shrink-0">
-          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-        </svg>
-      ),
-    };
-  }
-
-  return null;
-};
-
 const formatDate = (dateStr: string | null): string => {
   if (!dateStr) return '';
   // Format "2026-03-29" to "26.03.29"
@@ -106,15 +71,6 @@ const formatDate = (dateStr: string | null): string => {
 const formatCredits = (n: number): string => {
   if (Number.isInteger(n)) return n.toString();
   return n.toFixed(2);
-};
-
-const getFinalRewards = (status?: CreditsResetCampaignStatus): FreeCreditsReward[] => {
-  const rewards = status?.freeCreditsRewards?.length
-    ? status.freeCreditsRewards
-    : status?.freeCreditsReward
-      ? [status.freeCreditsReward]
-      : [];
-  return [...rewards].sort((a, b) => a.claimDeadline.localeCompare(b.claimDeadline));
 };
 
 const getFinalRewardText = (reward: FreeCreditsReward | undefined) => {
@@ -130,43 +86,11 @@ const getFinalRewardText = (reward: FreeCreditsReward | undefined) => {
   };
 };
 
-const CreditItemRow: React.FC<{ item: CreditItem; isEn: boolean }> = ({ item, isEn }) => {
-  const label = isEn ? item.labelEn : item.label;
-  const badge = item.type === 'subscription' ? getSubscriptionBadge(label) : null;
-  const expiresText = item.expiresAt
-    ? `${i18nService.t('authExpiresAt')}${formatDate(item.expiresAt)}`
-    : '';
-
-  return (
-    <div className="flex flex-col gap-0.5 py-1.5 first:pt-0 last:pb-0">
-      <div className="flex items-center gap-1.5">
-        {badge ? (
-          <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium ${badge.bg} ${badge.text}`}>
-            {badge.icon}
-            {label}
-          </span>
-        ) : (
-          <span className="text-xs text-secondary">
-            {label}
-          </span>
-        )}
-        <span className="text-xs font-medium text-foreground">
-          {formatCredits(item.creditsRemaining)}{i18nService.t('authCreditsUnit')}
-        </span>
-      </div>
-      {expiresText && (
-        <span className="text-[10px] text-secondary pl-0.5">
-          {expiresText}
-        </span>
-      )}
-    </div>
-  );
-};
-
 interface AccountMenuActionProps {
   icon: React.ReactNode;
   label: string;
   onClick: () => void | Promise<void>;
+  trailing?: React.ReactNode;
   danger?: boolean;
 }
 
@@ -174,17 +98,19 @@ const AccountMenuAction: React.FC<AccountMenuActionProps> = ({
   icon,
   label,
   onClick,
+  trailing,
   danger = false,
 }) => (
   <button
     type="button"
     onClick={() => void onClick()}
-    className={`w-full px-4 py-2 text-left text-sm hover:bg-surface-raised transition-colors cursor-pointer flex items-center gap-2 ${
+    className={`flex w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-[13px] transition-colors hover:bg-surface-raised ${
       danger ? 'text-red-500' : 'text-foreground'
     }`}
   >
     {icon}
-    <span>{label}</span>
+    <span className="min-w-0 flex-1 truncate">{label}</span>
+    {trailing}
   </button>
 );
 
@@ -202,7 +128,7 @@ const PortalMenuIcon: React.FC<{ src: string; darkInvert?: boolean }> = ({
 
 interface UserMenuProps {
   onClose: () => void;
-  onOpenFinalReward: () => void;
+  onOpenFinalReward: (campaignCode: string) => void;
 }
 
 const UserMenu: React.FC<UserMenuProps> = ({
@@ -211,12 +137,6 @@ const UserMenu: React.FC<UserMenuProps> = ({
 }) => {
   const user = useSelector((state: RootState) => state.auth.user);
   const profileSummary = useSelector((state: RootState) => state.auth.profileSummary);
-  const [creditsExpanded, setCreditsExpanded] = useState(false);
-  const {
-    snapshot: dailyCheckIn,
-    claiming: dailyCheckInClaiming,
-    claim: claimDailyCheckIn,
-  } = useDailyCheckInActivity();
   const isEn = i18nService.getLanguage() === 'en';
 
   useEffect(() => {
@@ -239,6 +159,24 @@ const UserMenu: React.FC<UserMenuProps> = ({
       onClose();
     } catch (error) {
       reportAccountMenuAction('logout', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'failed',
+      });
+      throw error;
+    }
+  };
+
+  const handleCreditsDetail = async () => {
+    try {
+      await openPortalUrl(getPortalCreditsDetailUrl());
+      reportAccountMenuAction('open_credits_detail', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'success',
+      });
+    } catch (error) {
+      reportAccountMenuAction('open_credits_detail', {
         creditItemCount: creditItems.length,
         hasCredits,
         result: 'failed',
@@ -319,14 +257,14 @@ const UserMenu: React.FC<UserMenuProps> = ({
     }
   };
 
-  const handleFinalReward = () => {
+  const handleFinalReward = (reward: FreeCreditsReward) => {
     reportAccountMenuAction('open_credits_final_reward', {
       creditItemCount: creditItems.length,
       hasCredits,
       result: 'success',
     });
     onClose();
-    onOpenFinalReward();
+    onOpenFinalReward(reward.campaignCode);
   };
 
   const phoneSuffix = user?.phone ? user.phone.slice(-4) : '';
@@ -334,6 +272,10 @@ const UserMenu: React.FC<UserMenuProps> = ({
   const totalCredits = profileSummary?.totalCreditsRemaining ?? 0;
   const creditItems = profileSummary?.creditItems ?? [];
   const hasCredits = creditItems.length > 0;
+  const accountName = profileSummary?.nickname
+    || user?.nickname
+    || (phoneSuffix ? `****${phoneSuffix}` : i18nService.t('myAccount'));
+  const accountPlan = getAccountPlanPresentation(creditItems, isEn);
   const availableResetCount = profileSummary?.availableResetCount ?? 0;
   const availablePromoSubscriptionCount = profileSummary?.availablePromoSubscriptionCount ?? 0;
   const campaignActionLabel = availableResetCount > 0
@@ -341,131 +283,45 @@ const UserMenu: React.FC<UserMenuProps> = ({
     : availablePromoSubscriptionCount > 0
       ? i18nService.t('authPromoSubscriptionAction')
       : null;
-  const finalReward = getFinalRewards(profileSummary?.creditsResetCampaign)[0];
-  const finalRewardText = getFinalRewardText(finalReward);
-
-  const handleDailyCheckIn = async () => {
-    try {
-      const response = await claimDailyCheckIn();
-      reportAccountMenuAction('claim_daily_check_in', {
-        creditItemCount: creditItems.length,
-        hasCredits,
-        result: 'success',
-      });
-      window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: i18nService.t('dailyCheckInClaimSuccess').replace(
-          '{credits}',
-          formatCredits(response.result.creditsGranted),
-        ),
-      }));
-    } catch (error) {
-      reportAccountMenuAction('claim_daily_check_in', {
-        creditItemCount: creditItems.length,
-        hasCredits,
-        result: 'failed',
-      });
-      window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: error instanceof Error
-          ? error.message
-          : i18nService.t('dailyCheckInClaimFailed'),
-      }));
-    }
-  };
+  const finalRewards = getFinalRewards(profileSummary?.creditsResetCampaign);
 
   return (
-    <div className="absolute bottom-full left-[-0.5rem] mb-1 w-[14.5rem] bg-surface rounded-xl shadow-popover border border-border overflow-hidden z-50 popover-enter">
+    <div className="absolute bottom-full left-[-0.5rem] z-50 mb-1 max-h-[calc(100vh-4rem)] w-[14.5rem] overflow-y-auto rounded-xl border border-border bg-surface shadow-popover popover-enter">
       {/* Account info */}
-      <div className="px-4 py-3 border-b border-border">
-        <div className="text-sm font-medium text-foreground truncate">
-          {user?.nickname || phoneSuffix}
+      <div className="border-b border-border px-4 py-3">
+        <div className="truncate text-sm font-medium text-foreground">
+          {accountName}
         </div>
-        {phoneSuffix && (
-          <div className="text-xs text-secondary mt-0.5">
-            ****{phoneSuffix}
-          </div>
-        )}
-      </div>
-
-      {/* Credits section - collapsible */}
-      <div className="border-b border-border">
-        <button
-          type="button"
-          onClick={() => {
-            const nextExpanded = !creditsExpanded;
-            setCreditsExpanded(nextExpanded);
-            reportAccountMenuAction(nextExpanded ? 'expand_credits' : 'collapse_credits', {
-              creditItemCount: creditItems.length,
-              hasCredits,
-            });
-          }}
-          className="w-full px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-surface-raised transition-colors"
-        >
-          <span className="text-xs text-secondary">
-            {i18nService.t('authCreditsRemaining')}
-          </span>
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-medium text-foreground">
-              {formatCredits(totalCredits)}{i18nService.t('authCreditsUnit')}
+        {accountPlan && (
+          <div className="mt-1 flex min-w-0 items-center gap-1.5">
+            <span className="inline-flex max-w-[112px] shrink-0 items-center truncate rounded bg-[#EDF4FF] px-1.5 py-0.5 text-[10px] font-medium leading-none text-[#4D73E8] dark:bg-[#26334F] dark:text-[#9CB5FF]">
+              {accountPlan.label}
             </span>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className={`text-secondary transition-transform duration-200 ${creditsExpanded ? 'rotate-180' : ''}`}
-            >
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </div>
-        </button>
-
-        {/* Expanded credit details */}
-        {creditsExpanded && (
-          <div className="px-4 pb-3">
-            {hasCredits ? (
-              <div className="divide-y divide-border">
-                {creditItems.map((item, idx) => (
-                  <CreditItemRow key={idx} item={item} isEn={isEn} />
-                ))}
-              </div>
-            ) : (
-              <div className="text-xs text-secondary py-1">
-                {i18nService.t('authZeroCredits')}
-              </div>
+            {accountPlan.expiresAt && (
+              <span className="truncate text-[10px] text-secondary">
+                {i18nService.t('authPlanExpiresAt').replace(
+                  '{date}',
+                  formatDate(accountPlan.expiresAt),
+                )}
+              </span>
             )}
           </div>
         )}
       </div>
 
-      {dailyCheckIn && (
-        <DailyCheckInProfileCard
-          snapshot={dailyCheckIn}
-          claiming={dailyCheckInClaiming}
-          onClaim={handleDailyCheckIn}
+      {/* Account destinations */}
+      <div className="border-b border-border py-1">
+        <AccountMenuAction
+          icon={<PlusCircleIcon className="h-4 w-4 shrink-0 text-secondary" />}
+          label={i18nService.t('authCreditsRemaining')}
+          trailing={(
+            <span className="ml-auto flex shrink-0 items-center gap-1 text-xs font-medium text-foreground">
+              {formatCredits(totalCredits)}
+              <ChevronRightIcon className="h-3.5 w-3.5 text-secondary" />
+            </span>
+          )}
+          onClick={handleCreditsDetail}
         />
-      )}
-
-      {/* Actions */}
-      <div className="py-1">
-        {campaignActionLabel && (
-          <AccountMenuAction
-            icon={<PortalMenuIcon src={promoSubscriptionIconUrl} darkInvert />}
-            label={campaignActionLabel}
-            onClick={handleCreditsResetActivity}
-          />
-        )}
-        {finalReward ? (
-          <AccountMenuAction
-            icon={<PortalMenuIcon src={finalReward.presentation?.iconUrl || soccerBallIconUrl} darkInvert />}
-            label={finalRewardText.actionText}
-            onClick={handleFinalReward}
-          />
-        ) : null}
         <AccountMenuAction
           icon={<PortalMenuIcon src={usageOverviewIconUrl} darkInvert />}
           label={i18nService.t('authUsageOverview')}
@@ -476,11 +332,37 @@ const UserMenu: React.FC<UserMenuProps> = ({
           label={i18nService.t('authGoRecharge')}
           onClick={handleRecharge}
         />
+      </div>
+
+      {/* Campaigns and invitations */}
+      <div className="border-b border-border py-1">
+        {campaignActionLabel && (
+          <AccountMenuAction
+            icon={<PortalMenuIcon src={promoSubscriptionIconUrl} darkInvert />}
+            label={campaignActionLabel}
+            onClick={handleCreditsResetActivity}
+          />
+        )}
+        {finalRewards.map(reward => {
+          const rewardText = getFinalRewardText(reward);
+          return (
+            <AccountMenuAction
+              key={`${reward.campaignCode}:${reward.claimDeadline}`}
+              icon={<PortalMenuIcon src={reward.presentation?.iconUrl || soccerBallIconUrl} darkInvert />}
+              label={rewardText.actionText}
+              onClick={() => handleFinalReward(reward)}
+            />
+          );
+        })}
         <AccountMenuAction
           icon={<PortalMenuIcon src={inviteCreditsIconUrl} darkInvert />}
           label={i18nService.t('authInviteFriendsForCredits')}
           onClick={handleInvite}
         />
+      </div>
+
+      {/* Session action */}
+      <div className="py-1">
         <AccountMenuAction
           icon={<PortalMenuIcon src={logoutIconUrl} darkInvert />}
           label={i18nService.t('authLogout')}
@@ -504,12 +386,18 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
   const { isLoggedIn, isLoading, profileSummary, user } = useSelector((state: RootState) => state.auth);
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const [showMenu, setShowMenu] = useState(false);
-  const [finalRewardOpen, setFinalRewardOpen] = useState(false);
+  const [selectedFinalRewardCode, setSelectedFinalRewardCode] = useState<string | null>(null);
   const [finalRewardLoading, setFinalRewardLoading] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const finalReward = getFinalRewards(profileSummary?.creditsResetCampaign)[0];
+  const finalRewards = useMemo(
+    () => getFinalRewards(profileSummary?.creditsResetCampaign),
+    [profileSummary?.creditsResetCampaign],
+  );
+  const finalReward = finalRewards.find(
+    reward => reward.campaignCode === selectedFinalRewardCode,
+  );
   const finalRewardText = getFinalRewardText(finalReward);
-  const finalRewardAvailable = finalReward !== undefined;
+  const finalRewardOpen = finalReward !== undefined;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -533,10 +421,10 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
   }, [showMenu]);
 
   useEffect(() => {
-    if (!isLoggedIn || !finalRewardAvailable) {
-      setFinalRewardOpen(false);
+    if (!isLoggedIn || (selectedFinalRewardCode && !finalReward)) {
+      setSelectedFinalRewardCode(null);
     }
-  }, [finalRewardAvailable, isLoggedIn]);
+  }, [finalReward, isLoggedIn, selectedFinalRewardCode]);
 
   if (isLoading) {
     return null;
@@ -571,7 +459,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
 
   const closeFinalReward = () => {
     if (finalRewardLoading) return;
-    setFinalRewardOpen(false);
+    setSelectedFinalRewardCode(null);
   };
 
   const claimFinalReward = async () => {
@@ -579,7 +467,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
     setFinalRewardLoading(true);
     try {
       const claimed = await authService.claimCreditsFinalReward(finalReward.campaignCode);
-      setFinalRewardOpen(false);
+      setSelectedFinalRewardCode(null);
       window.dispatchEvent(new CustomEvent('app:showToast', {
         detail: i18nService.t('authFinalRewardClaimSuccess')
           .replace('{credits}', formatCredits(claimed.creditsGranted))
@@ -629,7 +517,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({ contentLeftOffset = 0 }) => {
           : (
             <UserMenu
               onClose={() => setShowMenu(false)}
-              onOpenFinalReward={() => setFinalRewardOpen(true)}
+              onOpenFinalReward={setSelectedFinalRewardCode}
             />
           )
       )}

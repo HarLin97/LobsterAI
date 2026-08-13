@@ -8,27 +8,49 @@ import {
 export const STARTUP_CREDIT_OPEN_EVENT = 'lobster:startup-credit-campaign-open';
 
 export interface StartupCreditCampaignEntry {
+  resolved: boolean;
   available: boolean;
   label: string;
 }
 
-const unavailableEntry: StartupCreditCampaignEntry = {
+type StartupCreditCampaignEntryUpdate = Omit<
+  StartupCreditCampaignEntry,
+  'resolved'
+>;
+
+const unresolvedEntry: StartupCreditCampaignEntry = {
+  resolved: false,
   available: false,
   label: '',
 };
 
-let entrySnapshot = unavailableEntry;
+const unavailableEntry: StartupCreditCampaignEntry = {
+  resolved: true,
+  available: false,
+  label: '',
+};
+
+let entrySnapshot = unresolvedEntry;
 const listeners = new Set<() => void>();
 
 export function setStartupCreditCampaignEntry(
-  entry: StartupCreditCampaignEntry | null,
+  entry: StartupCreditCampaignEntryUpdate | null,
 ): void {
-  const next = entry ?? unavailableEntry;
-  if (entrySnapshot.available === next.available
+  const next = entry
+    ? { ...entry, resolved: true }
+    : unavailableEntry;
+  if (entrySnapshot.resolved === next.resolved
+      && entrySnapshot.available === next.available
       && entrySnapshot.label === next.label) {
     return;
   }
   entrySnapshot = next;
+  listeners.forEach(listener => listener());
+}
+
+export function resetStartupCreditCampaignEntry(): void {
+  if (!entrySnapshot.resolved) return;
+  entrySnapshot = unresolvedEntry;
   listeners.forEach(listener => listener());
 }
 
@@ -49,6 +71,6 @@ export function useStartupCreditCampaignEntry(): StartupCreditCampaignEntry {
       };
     },
     () => entrySnapshot,
-    () => unavailableEntry,
+    () => unresolvedEntry,
   );
 }

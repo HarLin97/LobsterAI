@@ -1,6 +1,9 @@
 export const DAILY_CHECK_IN_AUTO_REFRESH_COOLDOWN_MS = 60 * 1000;
 export const DAILY_CHECK_IN_AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 export const DAILY_CHECK_IN_AUTO_REFRESH_JITTER_MS = 2 * 60 * 1000;
+export const DAILY_CHECK_IN_DAY_BOUNDARY_BUFFER_MS = 1000;
+
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 export interface DailyCheckInAutoRefreshEnvironment {
   windowTarget: Pick<Window, 'addEventListener' | 'removeEventListener'>;
@@ -19,6 +22,43 @@ const getFallbackDelay = (random: () => number): number => {
     : 0;
   return DAILY_CHECK_IN_AUTO_REFRESH_INTERVAL_MS
     + Math.floor(normalizedRandomValue * DAILY_CHECK_IN_AUTO_REFRESH_JITTER_MS);
+};
+
+export const getDailyCheckInDayBoundaryDelay = (
+  serverTime: string,
+  timezone: string,
+): number | null => {
+  const serverDate = new Date(serverTime);
+  if (Number.isNaN(serverDate.getTime()) || !timezone.trim()) return null;
+
+  try {
+    const parts = new Intl.DateTimeFormat('en-US-u-nu-latn', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(serverDate);
+    const valueOf = (type: Intl.DateTimeFormatPartTypes): number => {
+      const value = parts.find(part => part.type === type)?.value;
+      return value === undefined ? Number.NaN : Number(value);
+    };
+    const hour = valueOf('hour');
+    const minute = valueOf('minute');
+    const second = valueOf('second');
+    if (![hour, minute, second].every(Number.isFinite)) return null;
+
+    const elapsedToday = hour * 60 * 60 * 1000
+      + minute * 60 * 1000
+      + second * 1000
+      + serverDate.getUTCMilliseconds();
+    return Math.max(
+      DAILY_CHECK_IN_DAY_BOUNDARY_BUFFER_MS,
+      DAY_IN_MS - elapsedToday + DAILY_CHECK_IN_DAY_BOUNDARY_BUFFER_MS,
+    );
+  } catch {
+    return null;
+  }
 };
 
 export const startDailyCheckInAutoRefresh = (

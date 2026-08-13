@@ -103,7 +103,7 @@ export function canClaimDailyCheckIn(context: ActivityContextResponse): boolean 
     && context.actions.includes(DailyCheckInAction.CheckIn);
 }
 
-export function shouldShowDailyCheckInSidebar(
+export function shouldShowDailyCheckInEntry(
   context: ActivityContextResponse,
 ): boolean {
   return isActiveDailyCheckInContext(context)

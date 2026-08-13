@@ -14,7 +14,10 @@ import {
   resolveBlockingEnterpriseQuotaReason,
   usesLobsterAIServerQuota,
 } from '../../features/enterpriseAccount/modelQuotaGate';
-import { selectEnterpriseAccountContext } from '../../features/enterpriseAccount/selectors';
+import {
+  selectEnterpriseAccountContext,
+  selectIsEnterpriseAccount,
+} from '../../features/enterpriseAccount/selectors';
 import { agentService } from '../../services/agent';
 import { coworkService } from '../../services/cowork';
 import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
@@ -44,6 +47,7 @@ import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
 import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import CreditsResetCampaignFloat from '../CreditsResetCampaignFloat';
+import { DailyCheckInHeaderEntry } from '../DailyCheckInActivity';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import { ModelAccessPromptKind, ModelAccessPromptModal } from '../ModelSelector';
@@ -135,6 +139,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const isStreaming = useSelector(selectIsStreaming);
   const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
+  const isEnterpriseAccount = useSelector(selectIsEnterpriseAccount);
   const enterpriseAccountId = enterpriseAccountContext?.enterpriseId;
   const hasEnterpriseAccount = enterpriseAccountContext !== null;
   const homeQuotaReason = enterpriseAccountContext?.quotaStatus.available === false
@@ -821,7 +826,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         )}
       </div>
       <div className="non-draggable flex items-center">
-        {startupCreditEntry.available && (
+        {!isEnterpriseAccount && startupCreditEntry.available && (
           <button
             type="button"
             onClick={() => openStartupCreditCampaign()}
@@ -838,6 +843,11 @@ const CoworkView: React.FC<CoworkViewProps> = ({
             </span>
           </button>
         )}
+        <DailyCheckInHeaderEntry
+          enabled={!isEnterpriseAccount}
+          suppressed={!startupCreditEntry.resolved
+            || startupCreditEntry.available}
+        />
       </div>
     </div>
   );
