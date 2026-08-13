@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 
 import { i18nService } from '../../services/i18n';
+import { MANAGEMENT_PAGE_TITLE_TEXT } from '../common/managementTypography';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarMcpIcon from '../icons/SidebarMcpIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
@@ -106,7 +107,7 @@ const SkillsAndConnectorsView: React.FC<SkillsAndConnectorsViewProps> = ({
                 role="tab"
                 aria-selected={isActive}
                 onClick={() => handleSectionSelect(section)}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[length:calc(var(--lobster-ui-font-size)_+_0.5px)] font-semibold transition-colors ${
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 ${MANAGEMENT_PAGE_TITLE_TEXT} font-semibold transition-colors ${
                   isActive
                     ? 'bg-surface-raised text-foreground'
                     : 'text-secondary hover:text-foreground'
