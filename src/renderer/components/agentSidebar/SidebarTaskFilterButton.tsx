@@ -2,6 +2,10 @@ import React from 'react';
 
 import SidebarFilterIcon from '../icons/SidebarFilterIcon';
 
+// Temporarily hidden until the task filter UX is polished. Flip to true to
+// restore the entry in both the macOS sidebar header and the Windows title bar.
+export const SIDEBAR_TASK_FILTER_ENABLED: boolean = false;
+
 interface SidebarTaskFilterButtonProps {
   isActive: boolean;
   hasUnreadCompletedTasks: boolean;
