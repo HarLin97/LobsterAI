@@ -7,6 +7,7 @@ import {
 import { i18nService } from '../../services/i18n';
 import SelectedTextIcon from '../icons/SelectedTextIcon';
 import XMarkIcon from '../icons/XMarkIcon';
+import { type PopoverPlacement, resolvePopoverPlacement } from './popoverPlacement';
 
 interface SelectedTextSnippetBadgeProps {
   snippets: CoworkSelectedTextSnippet[];
@@ -42,32 +43,12 @@ const SelectedTextSnippetBadge: React.FC<SelectedTextSnippetBadgeProps> = ({
   onLocate,
 }) => {
   const [expanded, setExpanded] = useState(false);
-  const [dropDirection, setDropDirection] = useState<'up' | 'down'>('up');
+  const [placement, setPlacement] = useState<PopoverPlacement>({
+    direction: 'up',
+    alignSide: align,
+    maxWidth: null,
+  });
   const rootRef = useRef<HTMLDivElement>(null);
-
-  // The popover is clipped by the nearest overflow ancestor (message list,
-  // panel body), so flip it below the pill when the space above cannot fit it.
-  const resolveDropDirection = (): 'up' | 'down' => {
-    const root = rootRef.current;
-    if (!root) return 'up';
-    let boundaryTop = 0;
-    let boundaryBottom = window.innerHeight;
-    for (let node = root.parentElement; node; node = node.parentElement) {
-      const { overflowY } = window.getComputedStyle(node);
-      if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'hidden') {
-        const rect = node.getBoundingClientRect();
-        boundaryTop = rect.top;
-        boundaryBottom = rect.bottom;
-        break;
-      }
-    }
-    const rootRect = root.getBoundingClientRect();
-    // Rows are ~52px within the max-h-56 popover body.
-    const estimatedHeight = Math.min(236, snippets.length * 56 + 12);
-    const spaceAbove = rootRect.top - boundaryTop;
-    if (spaceAbove >= estimatedHeight) return 'up';
-    return boundaryBottom - rootRect.bottom > spaceAbove ? 'down' : 'up';
-  };
 
   useEffect(() => {
     if (!expanded) return undefined;
@@ -94,11 +75,11 @@ const SelectedTextSnippetBadge: React.FC<SelectedTextSnippetBadgeProps> = ({
 
   if (snippets.length === 0) return null;
   const canRemove = Boolean(onClear || onRemove);
-  const popoverAlignmentClass = align === 'right' ? 'right-0' : 'left-0';
-  const popoverPlacementClass = dropDirection === 'down' ? 'top-full mt-1.5' : 'bottom-full mb-1.5';
-  const popoverOriginClass = dropDirection === 'down'
-    ? (align === 'right' ? 'origin-top-right' : 'origin-top-left')
-    : (align === 'right' ? 'origin-bottom-right' : 'origin-bottom-left');
+  const popoverAlignmentClass = placement.alignSide === 'right' ? 'right-0' : 'left-0';
+  const popoverPlacementClass = placement.direction === 'down' ? 'top-full mt-1.5' : 'bottom-full mb-1.5';
+  const popoverOriginClass = placement.direction === 'down'
+    ? (placement.alignSide === 'right' ? 'origin-top-right' : 'origin-top-left')
+    : (placement.alignSide === 'right' ? 'origin-bottom-right' : 'origin-bottom-left');
   const pillSurfaceClass = expanded
     ? 'bg-surface-raised/70'
     : 'bg-surface hover:bg-surface-raised/50';
@@ -111,6 +92,20 @@ const SelectedTextSnippetBadge: React.FC<SelectedTextSnippetBadgeProps> = ({
   );
   const popoverStyle: React.CSSProperties = {
     width: `min(calc(100vw - 48px), ${popoverWidthUnits}ch)`,
+  };
+  if (placement.maxWidth !== null) popoverStyle.maxWidth = placement.maxWidth;
+  const resolvePlacement = (): PopoverPlacement => {
+    const root = rootRef.current;
+    if (!root) return { direction: 'up', alignSide: align, maxWidth: null };
+    const fontSize = parseFloat(window.getComputedStyle(root).fontSize) || 14;
+    return resolvePopoverPlacement(root, {
+      preferredAlign: align,
+      // Rows are ~52px within the max-h-56 popover body.
+      estimatedHeight: Math.min(236, snippets.length * 56 + 12),
+      // The popover width is expressed in ch units; '0' is roughly 0.55em in
+      // the app's UI fonts, rounded up so the flip decision errs roomier.
+      desiredWidth: Math.min(window.innerWidth - 48, popoverWidthUnits * fontSize * 0.6),
+    });
   };
   const handleClear = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -128,7 +123,7 @@ const SelectedTextSnippetBadge: React.FC<SelectedTextSnippetBadgeProps> = ({
         <button
           type="button"
           onClick={() => {
-            if (!expanded) setDropDirection(resolveDropDirection());
+            if (!expanded) setPlacement(resolvePlacement());
             setExpanded(value => !value);
           }}
           aria-expanded={expanded}
