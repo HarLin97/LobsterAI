@@ -312,7 +312,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
       {/* Account destinations */}
       <div className="border-b border-border py-1">
         <AccountMenuAction
-          icon={<PlusCircleIcon className="h-4 w-4 shrink-0 text-secondary" />}
+          icon={<PlusCircleIcon className="h-4 w-4 shrink-0 text-black dark:text-white" />}
           label={i18nService.t('authCreditsRemaining')}
           trailing={(
             <span className="ml-auto flex shrink-0 items-center gap-1 text-xs font-medium text-foreground">
