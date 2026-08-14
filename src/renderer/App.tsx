@@ -11,6 +11,7 @@ import {
   isManualDownloadUrl,
 } from '../shared/appUpdate/constants';
 import { ProviderAuthType, ProviderName, ProviderRegistry } from '../shared/providers';
+import { SIDEBAR_TASK_FILTER_ENABLED } from './components/agentSidebar/SidebarTaskFilterButton';
 import { CoworkView } from './components/cowork';
 import {
   CoworkShortcutDirection,
@@ -35,7 +36,7 @@ import { SkillsAndConnectorsView, SkillsConnectorsSection } from './components/s
 import SkinBackdrop, { SkinBackdropVariant } from './components/skin/SkinBackdrop';
 import SkinPresentationScope from './components/skin/SkinPresentationScope';
 import StartupCreditCampaign from './components/StartupCreditCampaign';
-import Toast from './components/Toast';
+import Toast, { type ToastEventDetail } from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateBlockingPanel from './components/update/AppUpdateBlockingPanel';
 import AppUpdateCard from './components/update/AppUpdateCard';
@@ -161,7 +162,7 @@ const App: React.FC = () => {
   const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'sites'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<ToastEventDetail | null>(null);
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isTaskFilterActive, setIsTaskFilterActive] = useState(false);
@@ -794,15 +795,18 @@ const App: React.FC = () => {
     }, 0);
   }, [dispatch]);
 
-  const showToast = useCallback((message: string) => {
-    setToastMessage(message);
+  const showToast = useCallback((toast: string | ToastEventDetail) => {
+    const detail = typeof toast === 'string' ? { message: toast } : toast;
+    if (!detail.message) return;
+    setToastMessage(detail);
     if (toastTimerRef.current) {
       window.clearTimeout(toastTimerRef.current);
     }
+    // Toasts carrying an action button stay longer so the user can reach it.
     toastTimerRef.current = window.setTimeout(() => {
       setToastMessage(null);
       toastTimerRef.current = null;
-    }, 2200);
+    }, detail.actionLabel && detail.onAction ? 6000 : 2200);
   }, []);
 
   const startUserInitiatedUpdateFlow = useCallback((reason: string) => {
@@ -1374,8 +1378,8 @@ const App: React.FC = () => {
   // Listen for toast events from child components
   useEffect(() => {
     const handler = (e: Event) => {
-      const message = (e as CustomEvent<string>).detail;
-      if (message) showToast(message);
+      const detail = (e as CustomEvent<string | ToastEventDetail>).detail;
+      if (detail) showToast(detail);
     };
     window.addEventListener('app:showToast', handler);
     return () => window.removeEventListener('app:showToast', handler);
@@ -1588,7 +1592,7 @@ const App: React.FC = () => {
       onNewChat={canUseWindowsCollapsedTopBarActions ? handleNewChat : undefined}
       sidebarToggleLabel={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
       searchLabel={i18nService.t('search')}
-      showFilterIcon={canUseWindowsTopBarActions && !isSidebarCollapsed && mainView === 'cowork'}
+      showFilterIcon={SIDEBAR_TASK_FILTER_ENABLED && canUseWindowsTopBarActions && !isSidebarCollapsed && mainView === 'cowork'}
       filterLabel={i18nService.t('sidebarFilter')}
       isFilterActive={isTaskFilterActive}
       hasFilterNotice={hasUnreadCompletedTasks}
@@ -1669,7 +1673,9 @@ const App: React.FC = () => {
       <div className="relative h-screen overflow-hidden">
         {toastMessage && (
           <Toast
-            message={toastMessage}
+            message={toastMessage.message}
+            actionLabel={toastMessage.actionLabel}
+            onAction={toastMessage.onAction}
             closeLabel={i18nService.t('close')}
             onClose={() => setToastMessage(null)}
           />
@@ -1698,7 +1704,9 @@ const App: React.FC = () => {
       >
       {toastMessage && (
         <Toast
-          message={toastMessage}
+          message={toastMessage.message}
+          actionLabel={toastMessage.actionLabel}
+          onAction={toastMessage.onAction}
           closeLabel={i18nService.t('close')}
           onClose={() => setToastMessage(null)}
         />

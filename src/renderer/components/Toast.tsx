@@ -2,13 +2,26 @@ import { InformationCircleIcon } from '@heroicons/react/20/solid';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 
+/**
+ * Payload accepted by the global `app:showToast` event. Plain strings remain
+ * supported; pass an object to attach an action button (e.g. "Show in Folder"
+ * after an export completes).
+ */
+export interface ToastEventDetail {
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}
+
 interface ToastProps {
   message: string;
   closeLabel: string;
+  actionLabel?: string;
+  onAction?: () => void;
   onClose?: () => void;
 }
 
-const Toast: React.FC<ToastProps> = ({ message, closeLabel, onClose }) => {
+const Toast: React.FC<ToastProps> = ({ message, closeLabel, actionLabel, onAction, onClose }) => {
   return (
     <div className="pointer-events-none fixed left-1/2 top-1/2 z-[10000] w-max max-w-full -translate-x-1/2 -translate-y-1/2 px-4">
       <div
@@ -23,6 +36,17 @@ const Toast: React.FC<ToastProps> = ({ message, closeLabel, onClose }) => {
           <div className="min-w-0 flex-1 text-sm font-medium leading-snug [overflow-wrap:anywhere]">
             {message}
           </div>
+          {actionLabel && onAction && (
+            <button
+              onClick={() => {
+                onAction();
+                onClose?.();
+              }}
+              className="shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-sm font-medium text-primary transition-colors hover:bg-primary-muted"
+            >
+              {actionLabel}
+            </button>
+          )}
           {onClose && (
             <button
               onClick={onClose}

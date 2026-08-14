@@ -1951,6 +1951,74 @@ class CoworkService {
     return false;
   }
 
+  /**
+   * Load the entire message history of the current session into the active
+   * window (both older and newer pages), e.g. before exporting the whole
+   * conversation as an image. Returns false when the history could not be
+   * fully loaded (session switched away, aborted, or a page kept failing).
+   */
+  async loadFullSessionHistory(
+    sessionId: string,
+    options?: {
+      onProgress?: (loadedCount: number, totalCount: number) => void;
+      shouldAbort?: () => boolean;
+    },
+  ): Promise<boolean> {
+    const readWindow = () => {
+      const session = store.getState().cowork.currentSession;
+      if (!session || session.id !== sessionId) return null;
+      return {
+        offset: session.messagesOffset ?? 0,
+        loaded: session.messages.length,
+        total: Math.max(session.totalMessages ?? 0, session.messages.length),
+      };
+    };
+
+    const MAX_PAGE_LOADS = 500;
+    const MAX_STALLED_ATTEMPTS = 3;
+    let pageLoads = 0;
+
+    for (const direction of ['older', 'newer'] as const) {
+      let stalledAttempts = 0;
+      for (;;) {
+        if (options?.shouldAbort?.()) return false;
+        const view = readWindow();
+        if (!view) return false;
+        const hasMore = direction === 'older'
+          ? view.offset > 0
+          : view.offset + view.loaded < view.total;
+        if (!hasMore) break;
+        if (++pageLoads > MAX_PAGE_LOADS) {
+          this.logDiagnostic('warn', `aborted full history load for session ${sessionId} after ${MAX_PAGE_LOADS} page loads.`);
+          return false;
+        }
+        const progressed = direction === 'older'
+          ? await this.loadMoreMessages(sessionId)
+          : await this.loadNewerMessages(sessionId);
+        const next = readWindow();
+        if (!next) return false;
+        const madeProgress = progressed
+          || next.offset < view.offset
+          || next.loaded > view.loaded;
+        if (madeProgress) {
+          stalledAttempts = 0;
+          options?.onProgress?.(next.loaded, next.total);
+          continue;
+        }
+        if (++stalledAttempts >= MAX_STALLED_ATTEMPTS) {
+          this.logDiagnostic(
+            'warn',
+            `full history load stalled for session ${sessionId} while paging ${direction}; offset=${next.offset}, loaded=${next.loaded}, total=${next.total}.`,
+          );
+          return false;
+        }
+      }
+    }
+
+    const finalView = readWindow();
+    return Boolean(finalView && finalView.offset <= 0 && finalView.loaded >= finalView.total);
+  }
+
   async patchSession(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSession | null> {
     const sessionApi = window.electron?.openclaw?.session;
     if (!sessionApi?.patch) {
