@@ -17,6 +17,7 @@ import {
   useBrowserAnnotationAssetDataUrl,
 } from './BrowserAnnotationMessageAttachments';
 import type { ImagePreviewSource } from './ImagePreviewModal';
+import { type PopoverPlacement, resolvePopoverPlacement } from './popoverPlacement';
 
 interface BrowserAnnotationAttachmentBadgeProps {
   draftKey: string;
@@ -78,6 +79,9 @@ const AnnotationThumbnail: React.FC<{
   return <div className={frameClass}>{body}</div>;
 };
 
+// Popover width; keep in sync with the w-[360px] class on the popover below.
+const POPOVER_WIDTH = 360;
+
 const BrowserAnnotationAttachmentBadge: React.FC<BrowserAnnotationAttachmentBadgeProps> = ({
   draftKey,
   batches,
@@ -88,34 +92,25 @@ const BrowserAnnotationAttachmentBadge: React.FC<BrowserAnnotationAttachmentBadg
   readOnly = false,
 }) => {
   const [open, setOpen] = useState(false);
-  const [dropDirection, setDropDirection] = useState<'up' | 'down'>('up');
+  const [placement, setPlacement] = useState<PopoverPlacement>({
+    direction: 'up',
+    alignSide: align,
+    maxWidth: null,
+  });
   const rootRef = useRef<HTMLDivElement>(null);
   const annotations = useMemo(() => batches.flatMap(batch => (
     batch.annotations.map(annotation => ({ batch, annotation }))
   )), [batches]);
 
-  // The popover is clipped by the nearest overflow ancestor (message list,
-  // panel body), so flip it below the pill when the space above cannot fit it.
-  const resolveDropDirection = (): 'up' | 'down' => {
+  const resolvePlacement = (): PopoverPlacement => {
     const root = rootRef.current;
-    if (!root) return 'up';
-    let boundaryTop = 0;
-    let boundaryBottom = window.innerHeight;
-    for (let node = root.parentElement; node; node = node.parentElement) {
-      const { overflowY } = window.getComputedStyle(node);
-      if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'hidden') {
-        const rect = node.getBoundingClientRect();
-        boundaryTop = rect.top;
-        boundaryBottom = rect.bottom;
-        break;
-      }
-    }
-    const rootRect = root.getBoundingClientRect();
-    // Rows are ~60px within the max-h-72 popover body plus the header.
-    const estimatedHeight = Math.min(324, annotations.length * 60 + 45);
-    const spaceAbove = rootRect.top - boundaryTop;
-    if (spaceAbove >= estimatedHeight) return 'up';
-    return boundaryBottom - rootRect.bottom > spaceAbove ? 'down' : 'up';
+    if (!root) return { direction: 'up', alignSide: align, maxWidth: null };
+    return resolvePopoverPlacement(root, {
+      preferredAlign: align,
+      // Rows are ~60px within the max-h-72 popover body plus the header.
+      estimatedHeight: Math.min(324, annotations.length * 60 + 45),
+      desiredWidth: Math.min(POPOVER_WIDTH, window.innerWidth - 32),
+    });
   };
 
   useEffect(() => {
@@ -130,15 +125,15 @@ const BrowserAnnotationAttachmentBadge: React.FC<BrowserAnnotationAttachmentBadg
   }, [open]);
 
   if (annotations.length === 0) return null;
-  const popoverAlignmentClass = align === 'right' ? 'right-0' : 'left-0';
-  const popoverPlacementClass = dropDirection === 'down' ? 'top-full mt-2' : 'bottom-full mb-2';
+  const popoverAlignmentClass = placement.alignSide === 'right' ? 'right-0' : 'left-0';
+  const popoverPlacementClass = placement.direction === 'down' ? 'top-full mt-2' : 'bottom-full mb-2';
   return (
     <div ref={rootRef} className="relative inline-flex">
       <div className="inline-flex h-8 items-center rounded-full border border-border bg-surface-raised text-xs text-foreground transition-colors hover:bg-surface">
         <button
           type="button"
           onClick={() => {
-            if (!open) setDropDirection(resolveDropDirection());
+            if (!open) setPlacement(resolvePlacement());
             setOpen(value => !value);
           }}
           className={`inline-flex h-full items-center gap-1.5 rounded-l-full pl-3 ${(!readOnly && onClear) ? 'pr-2' : 'rounded-r-full pr-3'}`}
@@ -162,7 +157,10 @@ const BrowserAnnotationAttachmentBadge: React.FC<BrowserAnnotationAttachmentBadg
         ) : null}
       </div>
       {open ? (
-        <div className={`absolute ${popoverPlacementClass} ${popoverAlignmentClass} z-50 w-[360px] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl border border-border bg-surface-raised shadow-xl`}>
+        <div
+          className={`absolute ${popoverPlacementClass} ${popoverAlignmentClass} z-50 w-[360px] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl border border-border bg-surface-raised shadow-xl`}
+          style={placement.maxWidth === null ? undefined : { maxWidth: placement.maxWidth }}
+        >
           <div className="border-b border-border px-3 py-2 text-xs font-medium text-foreground">
             {i18nService.t('browserAnnotationsTitle')}
           </div>

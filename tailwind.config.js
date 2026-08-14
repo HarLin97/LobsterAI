@@ -81,7 +81,11 @@ export default {
         'scale-in': 'scale-in 0.2s ease-out',
         shimmer: 'shimmer 1.5s infinite',
         shake: 'shake 0.4s ease-in-out',
-        'message-in': 'message-in 0.25s ease-out both',
+        // No fill mode on purpose: a filled opacity/transform animation keeps
+        // the element a stacking context forever, which traps in-message
+        // popovers (z-50) below later sibling messages. The entry animation
+        // has no delay and ends at the natural state, so no fill is needed.
+        'message-in': 'message-in 0.25s ease-out',
       },
       transitionTimingFunction: {
         smooth: 'cubic-bezier(0.4, 0, 0.2, 1)',
