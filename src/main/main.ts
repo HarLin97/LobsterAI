@@ -2167,7 +2167,7 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
       getSkillsList: () =>
         getSkillManager()
           .listSkills()
-          .map(s => ({ id: s.id, enabled: s.enabled })),
+          .map(s => ({ id: s.id, name: s.name, enabled: s.enabled })),
       getTelegramInstances: () => {
         try {
           return getIMGatewayManager().getIMStore().getTelegramInstances();
