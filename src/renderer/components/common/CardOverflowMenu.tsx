@@ -25,8 +25,8 @@ interface CardOverflowMenuProps {
 }
 
 /**
- * Overflow menu for the low-frequency card actions (enable/disable, edit,
- * delete), keeping the card's own surface free for the one action people
+ * Overflow menu for the low-frequency card actions (edit, delete), keeping
+ * the card's own surface free for the enable switch — the one action people
  * actually reach for after installing something.
  */
 const CardOverflowMenu: React.FC<CardOverflowMenuProps> = ({ items, className = '' }) => {

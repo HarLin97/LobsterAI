@@ -18,6 +18,7 @@ import { setMcpServers } from '../../store/slices/mcpSlice';
 import { McpMarketplaceCategoryInfo,McpRegistryEntry, McpServerConfig, McpServerFormData } from '../../types/mcp';
 import { CARD_ACTION_PILL_CLASS, DETAIL_ACTION_PILL_CLASS } from '../common/actionPillStyles';
 import CardOverflowMenu, { type CardOverflowMenuItem } from '../common/CardOverflowMenu';
+import CardToggle from '../common/CardToggle';
 import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
@@ -31,7 +32,7 @@ import {
   getServerAnalyticsParams,
   reportMcpAction,
 } from './analytics';
-import McpCard, { McpToggle } from './McpCard';
+import McpCard from './McpCard';
 import McpDetailModal, { type McpDetailInfoRow, type McpDetailStat } from './McpDetailModal';
 import McpServerFormModal from './McpServerFormModal';
 import { MCP_TAB_LABEL_KEYS, MCP_TAB_ORDER, McpTab } from './mcpTabs';
@@ -831,7 +832,7 @@ const McpManager: React.FC = () => {
               className={CARD_MENU_REVEAL_CLASS}
               items={buildServerMenuItems(server)}
             />
-            <McpToggle
+            <CardToggle
               isOn={server.enabled}
               label={i18nService.t(server.enabled ? 'disable' : 'enable')}
               onToggle={() => handleToggleEnabled(server.id)}
@@ -911,7 +912,7 @@ const McpManager: React.FC = () => {
   const renderDetailToggle = (isOn: boolean, onToggle: () => void) => (
     <div className="flex items-center gap-2.5">
       <span className={`${MANAGEMENT_BODY_TEXT} text-secondary`}>{i18nService.t('enable')}</span>
-      <McpToggle
+      <CardToggle
         isOn={isOn}
         label={i18nService.t(isOn ? 'disable' : 'enable')}
         onToggle={onToggle}
@@ -1379,7 +1380,7 @@ const McpManager: React.FC = () => {
                             ),
                           }]}
                         />
-                        <McpToggle
+                        <CardToggle
                           isOn={groupEnabled}
                           label={i18nService.t(groupEnabled ? 'disable' : 'enable')}
                           onToggle={() => handleToggleRegistryEnabled(
