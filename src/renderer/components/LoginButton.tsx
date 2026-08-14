@@ -126,7 +126,7 @@ const PortalMenuIcon: React.FC<{ src: string; darkInvert?: boolean }> = ({
 const PointsStackIcon: React.FC = () => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 24 24"
+    viewBox="3 3 18 18"
     fill="none"
     stroke="currentColor"
     strokeWidth="1.4"
