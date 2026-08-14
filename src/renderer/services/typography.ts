@@ -6,6 +6,11 @@ import {
 
 type TypographyConfig = Pick<AppConfig, 'uiFontSize' | 'codeFontSize'>;
 
+// TEXT_SIZE_BASE and LINE_HEIGHT_BASE are designed at a 14px UI font size.
+// Scale relative to this baseline, not FontPreferences.UiFontSizeDefault, so
+// changing the default preference never rescales an explicitly stored size.
+const UI_FONT_SCALE_BASELINE = 14;
+
 const TEXT_SIZE_BASE = {
   xs: 12,
   sm: 14,
@@ -68,7 +73,7 @@ export const applyTypographyPreferences = (config: TypographyConfig): void => {
 
   const { uiFontSize, codeFontSize } = resolveTypographyPreferences(config);
   const root = document.documentElement;
-  const scale = uiFontSize / FontPreferences.UiFontSizeDefault;
+  const scale = uiFontSize / UI_FONT_SCALE_BASELINE;
 
   root.style.setProperty('--lobster-ui-font-size', `${uiFontSize}px`);
   root.style.setProperty('--lobster-code-font-size', `${codeFontSize}px`);
