@@ -319,6 +319,19 @@ export function resolveBrowserAnnotationMarkerViewportPoint(
   return { x: rect.x + offsetX, y: rect.y + offsetY };
 }
 
+/** Asset-store annotation id reserved for the batch-level full-page screenshot. */
+export const BrowserAnnotationPageScreenshotAnnotationId = 'page-screenshot' as const;
+
+/** Uncropped viewport screenshot captured alongside annotations for restore views. */
+export interface BrowserAnnotationPageScreenshot {
+  asset: BrowserAnnotationScreenshotRef;
+  viewportWidth: number;
+  viewportHeight: number;
+  scrollX: number;
+  scrollY: number;
+  capturedAt: number;
+}
+
 export interface CoworkBrowserAnnotationBatch {
   version: 1;
   id: string;
@@ -328,6 +341,7 @@ export interface CoworkBrowserAnnotationBatch {
   pageUrl: string;
   pageTitle?: string;
   annotations: CoworkBrowserAnnotation[];
+  pageScreenshot?: BrowserAnnotationPageScreenshot;
   createdAt: number;
   updatedAt: number;
 }
@@ -438,6 +452,29 @@ function normalizeElementEdit(value: unknown): BrowserAnnotationElementEdit | un
   };
 }
 
+function normalizePageScreenshot(value: unknown): BrowserAnnotationPageScreenshot | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as BrowserAnnotationPageScreenshot;
+  if (
+    !candidate.asset
+    || typeof candidate.asset !== 'object'
+    || typeof candidate.asset.assetId !== 'string'
+    || !candidate.asset.assetId
+    || !Number.isFinite(candidate.viewportWidth)
+    || candidate.viewportWidth <= 0
+    || !Number.isFinite(candidate.viewportHeight)
+    || candidate.viewportHeight <= 0
+  ) return undefined;
+  return {
+    asset: candidate.asset,
+    viewportWidth: candidate.viewportWidth,
+    viewportHeight: candidate.viewportHeight,
+    scrollX: Number.isFinite(candidate.scrollX) ? candidate.scrollX : 0,
+    scrollY: Number.isFinite(candidate.scrollY) ? candidate.scrollY : 0,
+    capturedAt: Number.isFinite(candidate.capturedAt) ? candidate.capturedAt : 0,
+  };
+}
+
 export function normalizeBrowserAnnotationBatches(
   value: unknown,
 ): CoworkBrowserAnnotationMessageBatch[] {
@@ -491,6 +528,7 @@ export function normalizeBrowserAnnotationBatches(
       pageUrl: clampText(batch.pageUrl, BrowserAnnotationLimit.MaxUrlLength),
       pageTitle: clampText(batch.pageTitle, BrowserAnnotationLimit.MaxTitleLength),
       annotations,
+      pageScreenshot: normalizePageScreenshot(batch.pageScreenshot),
     });
   }
   return batches;

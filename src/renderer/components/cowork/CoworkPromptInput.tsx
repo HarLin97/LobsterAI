@@ -31,6 +31,7 @@ import {
   formatCoworkGoalUsage,
 } from '../../../shared/cowork/goal';
 import {
+  CoworkImageAttachmentRole,
   formatCoworkImageAttachmentLimit,
 } from '../../../shared/cowork/imageAttachments';
 import { isPlanImplementationApproval } from '../../../shared/cowork/planMode';
@@ -413,6 +414,8 @@ export interface CoworkPromptInputRef {
   setSelectedTextSnippets: (snippets: CoworkSelectedTextSnippet[]) => void;
   /** 聚焦输入框 */
   focus: () => void;
+  /** 以当前草稿（文本/附件/浏览器注释）触发一次提交，等价于点击发送按钮 */
+  submit: () => void;
 }
 
 interface CoworkPromptInputProps {
@@ -570,6 +573,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const goalInputReturnDraftRef = useRef<string | null>(null);
     const draftStartedAnalyticsRef = useRef(false);
     const inputSourceOverrideRef = useRef<'template' | null>(null);
+    // handleSubmit is declared later in this component; the ref lets the
+    // imperative handle trigger it without depending on declaration order.
+    const handleSubmitRef = useRef<((submitMethod?: 'button' | 'keyboard' | 'voice') => Promise<void>) | null>(null);
 
   // 暴露方法给父组件
   React.useImperativeHandle(ref, () => ({
@@ -607,6 +613,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     },
     focus: () => {
       textareaRef.current?.focus();
+    },
+    submit: () => {
+      void handleSubmitRef.current?.('button');
     },
   }));
 
@@ -1763,6 +1772,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           mimeType: annotation.screenshot.asset.mimeType,
           base64Data: asset.dataUrl.slice(separator + 1),
           sizeBytes: asset.byteSize,
+          role: CoworkImageAttachmentRole.BrowserAnnotation,
         });
         preparedAnnotations.push({
           ...annotation,
@@ -1844,6 +1854,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     draftStartedAnalyticsRef.current = false;
     inputSourceOverrideRef.current = null;
   }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration]);
+  handleSubmitRef.current = handleSubmit;
 
   const handleSelectSkill = useCallback((skill: Skill) => {
     const willSelect = !activeSkillIds.includes(skill.id);

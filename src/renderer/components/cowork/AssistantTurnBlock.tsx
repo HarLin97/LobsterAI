@@ -21,7 +21,6 @@ import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
 import InformationCircleIcon from '../icons/InformationCircleIcon';
 import MarkdownContent from '../MarkdownContent';
 import ActivityGroupBlock from './ActivityGroupBlock';
-import { activityItemHasError } from './ActivityGroupBlock';
 import AssistantMessageItem from './AssistantMessageItem';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
@@ -723,12 +722,9 @@ const AssistantTurnBlock: React.FC<{
       && chunk.item.type === 'assistant'
       && chunk.item.message.id === searchTargetMessageId,
   );
-  const processHasError = processChunks.some(chunk => (
-    chunk.kind === 'item'
-      ? activityItemHasError(chunk.item)
-      : chunk.entries.some(entry => activityItemHasError(entry.item))
-  ));
-  const isProcessExpanded = processExpanded || processContainsSearchTarget || processHasError;
+  // Tool errors stay on their own step row (Codex app behavior); they do not
+  // color this duration line or force the fold open.
+  const isProcessExpanded = processExpanded || processContainsSearchTarget;
   const turnStartTimestamp = getTurnStartTimestamp(turn);
   const turnEndTimestamp = getTurnEndTimestamp(turn);
   const processDurationMs = turnStartTimestamp != null && turnEndTimestamp != null
@@ -765,9 +761,7 @@ const AssistantTurnBlock: React.FC<{
                     className="group flex max-w-full items-center gap-1.5 text-left"
                     aria-expanded={isProcessExpanded}
                   >
-                    <span className={`min-w-0 truncate text-sm transition-colors group-hover:text-foreground ${
-                      processHasError ? 'text-red-500' : 'text-secondary'
-                    }`}>
+                    <span className="min-w-0 truncate text-sm text-secondary transition-colors group-hover:text-foreground">
                       {processLabel}
                     </span>
                     <ChevronRightIcon

@@ -3,6 +3,7 @@ import {
   ArrowDownIcon,
   DocumentArrowDownIcon,
   ExclamationTriangleIcon,
+  PaperClipIcon,
   PhotoIcon,
   QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline';
@@ -11,6 +12,7 @@ import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { stripGoalCommandPrefixForDisplay } from '../../../common/sessionTitle';
+import type { CoworkBrowserAnnotationMessageBatch } from '../../../shared/cowork/browserAnnotations';
 import {
   buildCoworkBtwComposerQuestion,
   buildCoworkBtwContextualQuestion,
@@ -69,6 +71,7 @@ import {
   activateArtifactFileListTab,
   activateArtifactPreviewTab,
   activateArtifactSubagentTab,
+  activateArtifactUserAttachmentTab,
   addArtifact,
   type ArtifactPreviewTab,
   ArtifactSpecialTab,
@@ -119,6 +122,8 @@ import {
   ArtifactPanel,
   type LocalServiceDeploymentRequest,
   SubagentPanelContent,
+  UserAttachmentPanelContent,
+  type UserAttachmentPreviewPayload,
 } from '../artifacts';
 import { reportArtifactPreviewAction } from '../artifacts/artifactAnalytics';
 import { ArtifactFileShareProvider } from '../artifacts/ArtifactFileShareController';
@@ -135,6 +140,7 @@ import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
 import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
 import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlock';
+import type { BrowserAnnotationAttachmentOpenPayload } from './BrowserAnnotationMessageAttachments';
 import { type CoworkOpenShareOptionsEventDetail, CoworkUiEvent } from './constants';
 import ContextUsageIndicator from './ContextUsageIndicator';
 import {
@@ -1966,6 +1972,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [isFileListPreviewTabOpen, setIsFileListPreviewTabOpen] = useState(isPanelOpen);
   const [isBrowserPreviewTabOpen, setIsBrowserPreviewTabOpen] = useState(false);
   const [isSubagentPreviewTabOpen, setIsSubagentPreviewTabOpen] = useState(false);
+  const [isUserAttachmentPreviewTabOpen, setIsUserAttachmentPreviewTabOpen] = useState(false);
+  const [userAttachmentPreview, setUserAttachmentPreview] = useState<UserAttachmentPreviewPayload | null>(null);
   const [activeSpecialPreviewTab, setActiveSpecialPreviewTab] = useState<ArtifactSpecialTab>(ArtifactSpecialTab.FileList);
   const [browserPreviewAddress, setBrowserPreviewAddress] = useState('');
   const [browserPreviewUrl, setBrowserPreviewUrl] = useState('');
@@ -1996,6 +2004,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const fileListPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
   const browserPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
   const subagentPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
+  const userAttachmentPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
+  const userAttachmentPreviewBySessionRef = useRef<Record<string, UserAttachmentPreviewPayload>>({});
+  const userAttachmentFocusRequestKeyRef = useRef(0);
   const activeSpecialPreviewTabBySessionRef = useRef<Record<string, ArtifactSpecialTab>>({});
   const browserPreviewAddressBySessionRef = useRef<Record<string, string>>({});
   const browserPreviewUrlBySessionRef = useRef<Record<string, string>>({});
@@ -2314,6 +2325,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsFileListPreviewTabOpen(sessionId ? fileListPreviewTabOpenBySessionRef.current[sessionId] ?? false : false);
     setIsBrowserPreviewTabOpen(sessionId ? browserPreviewTabOpenBySessionRef.current[sessionId] ?? false : false);
     setIsSubagentPreviewTabOpen(sessionId ? subagentPreviewTabOpenBySessionRef.current[sessionId] ?? false : false);
+    setIsUserAttachmentPreviewTabOpen(sessionId ? userAttachmentPreviewTabOpenBySessionRef.current[sessionId] ?? false : false);
+    setUserAttachmentPreview(sessionId ? userAttachmentPreviewBySessionRef.current[sessionId] ?? null : null);
     setActiveSpecialPreviewTab(sessionId
       ? activeSpecialPreviewTabBySessionRef.current[sessionId] ?? ArtifactSpecialTab.FileList
       : ArtifactSpecialTab.FileList);
@@ -2371,6 +2384,20 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsSubagentPreviewTabOpen(open);
     if (sessionId) {
       subagentPreviewTabOpenBySessionRef.current[sessionId] = open;
+    }
+  }, [sessionId]);
+
+  const setSessionUserAttachmentPreviewTabOpen = useCallback((open: boolean) => {
+    setIsUserAttachmentPreviewTabOpen(open);
+    if (sessionId) {
+      userAttachmentPreviewTabOpenBySessionRef.current[sessionId] = open;
+    }
+  }, [sessionId]);
+
+  const setSessionUserAttachmentPreview = useCallback((payload: UserAttachmentPreviewPayload) => {
+    setUserAttachmentPreview(payload);
+    if (sessionId) {
+      userAttachmentPreviewBySessionRef.current[sessionId] = payload;
     }
   }, [sessionId]);
 
@@ -2812,6 +2839,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (isUserAttachmentPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.UserAttachment);
+      dispatch(activateArtifactUserAttachmentTab({ sessionId }));
+      return;
+    }
+
     dispatch(closePanel({ sessionId }));
   }, [
     activeArtifactPreviewTab,
@@ -2820,6 +2853,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     dispatch,
     isBrowserPreviewTabOpen,
     isSubagentPreviewTabOpen,
+    isUserAttachmentPreviewTabOpen,
     sessionId,
     setSessionActiveSpecialPreviewTab,
     setSessionFileListPreviewTabOpen,
@@ -2902,6 +2936,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (isUserAttachmentPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.UserAttachment);
+      dispatch(activateArtifactUserAttachmentTab({ sessionId }));
+      return;
+    }
+
     dispatch(closePanel({ sessionId }));
   }, [
     activeArtifactPreviewTab,
@@ -2911,6 +2951,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     clearBrowserPreviewState,
     isFileListPreviewTabOpen,
     isSubagentPreviewTabOpen,
+    isUserAttachmentPreviewTabOpen,
     sessionId,
     setSessionActiveSpecialPreviewTab,
     setSessionBrowserPreviewTabOpen,
@@ -2954,6 +2995,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (isUserAttachmentPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.UserAttachment);
+      dispatch(activateArtifactUserAttachmentTab({ sessionId }));
+      return;
+    }
+
     dispatch(closePanel({ sessionId }));
   }, [
     activeArtifactPreviewTab,
@@ -2962,10 +3009,112 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     dispatch,
     isBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
+    isUserAttachmentPreviewTabOpen,
     sessionId,
     setSessionActiveSpecialPreviewTab,
     setSessionSubagentPreviewTabOpen,
   ]);
+
+  const handleActivateArtifactUserAttachmentTab = useCallback(() => {
+    if (!sessionId) return;
+    reportArtifactPreviewAction({
+      actionType: 'panel_tab_switch',
+      source: 'artifact_panel',
+      params: {
+        tabType: 'user_attachment',
+        tabCount: artifactTabsWithArtifacts.length,
+      },
+    });
+    setSessionUserAttachmentPreviewTabOpen(true);
+    setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.UserAttachment);
+    dispatch(activateArtifactUserAttachmentTab({ sessionId }));
+  }, [artifactTabsWithArtifacts.length, dispatch, sessionId, setSessionActiveSpecialPreviewTab, setSessionUserAttachmentPreviewTabOpen]);
+
+  const handleCloseArtifactUserAttachmentTab = useCallback(() => {
+    const wasActive = !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.UserAttachment;
+    reportArtifactPreviewAction({
+      actionType: 'panel_tab_close',
+      source: 'artifact_panel',
+      params: {
+        tabType: 'user_attachment',
+        wasActive,
+        tabCount: artifactTabsWithArtifacts.length,
+      },
+    });
+    setSessionUserAttachmentPreviewTabOpen(false);
+    if (!sessionId) {
+      dispatch(closePanel(undefined));
+      return;
+    }
+
+    if (!wasActive) return;
+
+    const nextTabId = artifactTabsWithArtifacts[0]?.tab.id;
+    if (nextTabId) {
+      dispatch(activateArtifactPreviewTab({ sessionId, tabId: nextTabId }));
+      return;
+    }
+
+    if (isBrowserPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Browser);
+      dispatch(activateArtifactBrowserTab({ sessionId }));
+      return;
+    }
+
+    if (isFileListPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.FileList);
+      dispatch(activateArtifactFileListTab({ sessionId }));
+      return;
+    }
+
+    if (isSubagentPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Subagents);
+      dispatch(activateArtifactSubagentTab({ sessionId }));
+      return;
+    }
+
+    dispatch(closePanel({ sessionId }));
+  }, [
+    activeArtifactPreviewTab,
+    activeSpecialPreviewTab,
+    artifactTabsWithArtifacts,
+    dispatch,
+    isBrowserPreviewTabOpen,
+    isFileListPreviewTabOpen,
+    isSubagentPreviewTabOpen,
+    sessionId,
+    setSessionActiveSpecialPreviewTab,
+    setSessionUserAttachmentPreviewTabOpen,
+  ]);
+
+  const handleOpenMessageAnnotation = useCallback((
+    message: CoworkMessage,
+    payload: BrowserAnnotationAttachmentOpenPayload,
+  ) => {
+    if (!sessionId) return;
+    const metadata = message.metadata as CoworkMessageMetadata | undefined;
+    const batches = (metadata?.browserAnnotations ?? []) as CoworkBrowserAnnotationMessageBatch[];
+    if (batches.length === 0) return;
+    userAttachmentFocusRequestKeyRef.current += 1;
+    setSessionUserAttachmentPreview({
+      batches,
+      focusAnnotationId: payload.annotationId,
+      focusRequestKey: userAttachmentFocusRequestKeyRef.current,
+    });
+    setSessionUserAttachmentPreviewTabOpen(true);
+    setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.UserAttachment);
+    dispatch(activateArtifactUserAttachmentTab({ sessionId }));
+  }, [
+    dispatch,
+    sessionId,
+    setSessionActiveSpecialPreviewTab,
+    setSessionUserAttachmentPreview,
+    setSessionUserAttachmentPreviewTabOpen,
+  ]);
+
+  const handleAnnotationSendRequest = useCallback(() => {
+    promptInputRef.current?.submit();
+  }, []);
 
   const handleActivateArtifactTab = useCallback((tabId: string) => {
     if (!sessionId) return;
@@ -5331,8 +5480,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 message={turn.userMessage}
                 skills={skills}
                 marketplaceKits={marketplaceKits}
+                sessionId={sessionId}
                 onReEdit={remoteManaged ? undefined : handleReEdit}
                 onLocateSelectedText={handleLocateSelectedText}
+                onOpenAnnotation={handleOpenMessageAnnotation}
               />
             </div>
           )}
@@ -5557,6 +5708,41 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                         onClick={(event) => {
                           event.stopPropagation();
                           handleCloseArtifactSubagentTab();
+                        }}
+                        className={artifactTabCloseButtonClassName}
+                        title={i18nService.t('artifactCloseTab')}
+                      >
+                        <ArtifactTabCloseIcon className="h-2.5 w-2.5" />
+                      </button>
+                    </div>
+                  )}
+                  {isUserAttachmentPreviewTabOpen && (
+                    <div
+                      data-artifact-preview-active={
+                        !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.UserAttachment
+                          ? 'true'
+                          : undefined
+                      }
+                      className={`non-draggable group flex h-7 max-w-[190px] items-center rounded-lg text-xs transition-colors ${
+                        activeArtifactPreviewTab || activeSpecialPreviewTab !== ArtifactSpecialTab.UserAttachment
+                          ? 'text-secondary hover:bg-surface hover:text-foreground'
+                          : 'bg-surface-raised text-foreground shadow-sm'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={handleActivateArtifactUserAttachmentTab}
+                        className="flex min-w-0 items-center gap-1.5 px-2 text-left"
+                        title={i18nService.t('artifactUserAttachmentTab')}
+                      >
+                        <PaperClipIcon className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{i18nService.t('artifactUserAttachmentTab')}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleCloseArtifactUserAttachmentTab();
                         }}
                         className={artifactTabCloseButtonClassName}
                         title={i18nService.t('artifactCloseTab')}
@@ -6359,6 +6545,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   onSelectSubagent={handleSelectSubagent}
                 />
               )}
+              userAttachmentPanel={(
+                <UserAttachmentPanelContent
+                  sessionId={currentSession.id}
+                  payload={userAttachmentPreview}
+                />
+              )}
+              onAnnotationSend={handleAnnotationSendRequest}
               onAddSelectedText={addSelectedTextSnippetToDraft}
               selectedTextEnabled={!remoteManaged}
             />

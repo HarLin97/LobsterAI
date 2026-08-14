@@ -1636,10 +1636,21 @@ const sanitizeCoworkMessageForIpc = (message: unknown): unknown => {
 
   // Preserve image metadata as-is; previews are already size-bounded, while
   // legacy imageAttachments may contain historical base64 payloads.
+  // Browser annotations nest deeper than IPC_MAX_DEPTH (screenshot/anchor sit
+  // at depth 5), so re-normalize them instead of generic depth truncation;
+  // normalizeBrowserAnnotationBatches enforces its own count/length bounds.
   let sanitizedMetadata: unknown;
   if (messageRecord.metadata && typeof messageRecord.metadata === 'object') {
-    const { imageAttachments, imageAttachmentPreviews, ...rest } = messageRecord.metadata as Record<string, unknown>;
+    const {
+      imageAttachments,
+      imageAttachmentPreviews,
+      browserAnnotations,
+      ...rest
+    } = messageRecord.metadata as Record<string, unknown>;
     const sanitizedRest = sanitizeIpcPayload(rest) as Record<string, unknown> | undefined;
+    const sanitizedBrowserAnnotations = Array.isArray(browserAnnotations) && browserAnnotations.length > 0
+      ? normalizeBrowserAnnotationBatches(browserAnnotations)
+      : [];
     sanitizedMetadata = {
       ...(sanitizedRest && typeof sanitizedRest === 'object' ? sanitizedRest : {}),
       ...(Array.isArray(imageAttachments) && imageAttachments.length > 0
@@ -1647,6 +1658,9 @@ const sanitizeCoworkMessageForIpc = (message: unknown): unknown => {
         : {}),
       ...(Array.isArray(imageAttachmentPreviews) && imageAttachmentPreviews.length > 0
         ? { imageAttachmentPreviews }
+        : {}),
+      ...(sanitizedBrowserAnnotations.length > 0
+        ? { browserAnnotations: sanitizedBrowserAnnotations }
         : {}),
     };
   } else {
