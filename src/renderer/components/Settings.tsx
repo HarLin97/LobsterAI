@@ -2329,7 +2329,7 @@ const Settings: React.FC<SettingsProps> = ({
     // Find the first unused custom slot
     const usedKeys = new Set(Object.keys(providers));
     const newKey = CUSTOM_PROVIDER_KEYS.find(k => !usedKeys.has(k));
-    if (!newKey) return; // All 10 slots used
+    if (!newKey) return; // All custom provider slots used
     setProviders(prev => ({
       ...prev,
       [newKey]: {
