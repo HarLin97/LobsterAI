@@ -1,7 +1,4 @@
-import {
-  ChevronRightIcon,
-  PlusCircleIcon,
-} from '@heroicons/react/24/outline';
+import { ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, {
   useEffect,
   useMemo,
@@ -124,6 +121,22 @@ const PortalMenuIcon: React.FC<{ src: string; darkInvert?: boolean }> = ({
     className={`h-4 w-4 shrink-0 ${darkInvert ? 'dark:invert' : ''}`}
     aria-hidden="true"
   />
+);
+
+const PointsStackIcon: React.FC = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="3 3 18 18"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.4"
+    className="h-4 w-4 shrink-0 text-[#111111] dark:text-white"
+    aria-hidden="true"
+  >
+    <ellipse cx="12" cy="7.75" rx="5.75" ry="2.5" />
+    <path d="M6.25 7.75V12.25C6.25 13.63 8.82 14.75 12 14.75C15.18 14.75 17.75 13.63 17.75 12.25V7.75" />
+    <path d="M6.25 12.25V16.25C6.25 17.63 8.82 18.75 12 18.75C15.18 18.75 17.75 17.63 17.75 16.25V12.25" />
+  </svg>
 );
 
 interface UserMenuProps {
@@ -312,7 +325,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
       {/* Account destinations */}
       <div className="border-b border-border py-1">
         <AccountMenuAction
-          icon={<PlusCircleIcon className="h-4 w-4 shrink-0 text-black dark:text-white" />}
+          icon={<PointsStackIcon />}
           label={i18nService.t('authCreditsRemaining')}
           trailing={(
             <span className="ml-auto flex shrink-0 items-center gap-1 text-xs font-medium text-foreground">
