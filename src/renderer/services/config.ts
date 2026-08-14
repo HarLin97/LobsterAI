@@ -14,6 +14,7 @@ import { normalizeBrowserWebAccessConfig } from '../../shared/browserWebAccess/c
 import { normalizeNotificationSettings } from '../../shared/notifications/constants';
 import {
   AppConfig,
+  CODE_FONT_SIZE_MIGRATION_VERSION,
   CONFIG_KEYS,
   defaultConfig,
   FontPreferences,
@@ -22,6 +23,7 @@ import {
   resolveArtifactAutoPreviewEnabled,
   ShortcutAction,
   type ShortcutConfig,
+  UI_FONT_SIZE_MIGRATION_VERSION,
 } from '../config';
 import { localStore } from './store';
 
@@ -679,17 +681,31 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
     shortcuts: normalizeShortcutsConfig(storedConfig.shortcuts),
     providers: mergedProviders as AppConfig['providers'],
     providerModelMigrationVersions,
-    uiFontSize: normalizeFontPreference(
-      storedConfig.uiFontSize,
-      FontPreferences.UiFontSizeDefault,
-      FontPreferences.UiFontSizeMin,
-      FontPreferences.UiFontSizeMax,
+    // One-time forced resets to the current defaults (see
+    // *_FONT_SIZE_MIGRATION_VERSION); afterwards the stored choice wins.
+    uiFontSize: (storedConfig.uiFontSizeMigrationVersion ?? 0) >= UI_FONT_SIZE_MIGRATION_VERSION
+      ? normalizeFontPreference(
+        storedConfig.uiFontSize,
+        FontPreferences.UiFontSizeDefault,
+        FontPreferences.UiFontSizeMin,
+        FontPreferences.UiFontSizeMax,
+      )
+      : FontPreferences.UiFontSizeDefault,
+    uiFontSizeMigrationVersion: Math.max(
+      storedConfig.uiFontSizeMigrationVersion ?? 0,
+      UI_FONT_SIZE_MIGRATION_VERSION,
     ),
-    codeFontSize: normalizeFontPreference(
-      storedConfig.codeFontSize,
-      FontPreferences.CodeFontSizeDefault,
-      FontPreferences.CodeFontSizeMin,
-      FontPreferences.CodeFontSizeMax,
+    codeFontSize: (storedConfig.codeFontSizeMigrationVersion ?? 0) >= CODE_FONT_SIZE_MIGRATION_VERSION
+      ? normalizeFontPreference(
+        storedConfig.codeFontSize,
+        FontPreferences.CodeFontSizeDefault,
+        FontPreferences.CodeFontSizeMin,
+        FontPreferences.CodeFontSizeMax,
+      )
+      : FontPreferences.CodeFontSizeDefault,
+    codeFontSizeMigrationVersion: Math.max(
+      storedConfig.codeFontSizeMigrationVersion ?? 0,
+      CODE_FONT_SIZE_MIGRATION_VERSION,
     ),
     artifactAutoPreviewEnabled: resolveArtifactAutoPreviewEnabled(
       storedConfig.artifactAutoPreviewEnabled,

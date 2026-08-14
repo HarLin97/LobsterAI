@@ -58,13 +58,19 @@ export type ShortcutConfig = Record<ShortcutAction, string> & {
 };
 
 export const FontPreferences = {
-  UiFontSizeDefault: 14,
+  UiFontSizeDefault: 15,
   UiFontSizeMin: 11,
   UiFontSizeMax: 16,
-  CodeFontSizeDefault: 12,
+  CodeFontSizeDefault: 14,
   CodeFontSizeMin: 8,
   CodeFontSizeMax: 24,
 } as const;
+
+// Bump to force-reset every stored uiFontSize / codeFontSize to the current
+// default one more time. hydrateStoredConfig persists the applied versions, so
+// each version resets at most once and later user choices survive upgrades.
+export const UI_FONT_SIZE_MIGRATION_VERSION = 1;
+export const CODE_FONT_SIZE_MIGRATION_VERSION = 1;
 
 export const normalizeFontPreference = (
   value: unknown,
@@ -114,8 +120,12 @@ export interface AppConfig {
   themeId?: string;
   // UI 字号配置
   uiFontSize?: number;
+  // 已应用的 UI 字号强制重置版本(见 UI_FONT_SIZE_MIGRATION_VERSION)
+  uiFontSizeMigrationVersion?: number;
   // 代码字体大小配置
   codeFontSize?: number;
+  // 已应用的代码字号强制重置版本(见 CODE_FONT_SIZE_MIGRATION_VERSION)
+  codeFontSizeMigrationVersion?: number;
   // 语言配置
   language: 'zh' | 'en';
   // 是否使用系统代理
@@ -176,7 +186,9 @@ export const defaultConfig: AppConfig = {
   providers: buildDefaultProviders(),
   theme: 'system',
   uiFontSize: FontPreferences.UiFontSizeDefault,
+  uiFontSizeMigrationVersion: UI_FONT_SIZE_MIGRATION_VERSION,
   codeFontSize: FontPreferences.CodeFontSizeDefault,
+  codeFontSizeMigrationVersion: CODE_FONT_SIZE_MIGRATION_VERSION,
   language: 'zh',
   useSystemProxy: false,
   artifactAutoPreviewEnabled: true,

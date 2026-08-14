@@ -1,7 +1,7 @@
 import { ProviderName } from '@shared/providers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { type AppConfig, CONFIG_KEYS, defaultConfig, FontPreferences, resolveArtifactAutoPreviewEnabled, ShortcutAction } from '../config';
+import { type AppConfig, CODE_FONT_SIZE_MIGRATION_VERSION, CONFIG_KEYS, defaultConfig, FontPreferences, resolveArtifactAutoPreviewEnabled, ShortcutAction, UI_FONT_SIZE_MIGRATION_VERSION } from '../config';
 
 const makeLegacyConfigWithoutMiniMaxAddedModels = (): AppConfig => ({
   ...defaultConfig,
@@ -914,6 +914,68 @@ describe('configService provider migrations', () => {
 
     expect(configService.getConfig().uiFontSize).toBe(FontPreferences.UiFontSizeDefault);
     expect(configService.getConfig().codeFontSize).toBe(FontPreferences.CodeFontSizeDefault);
+  });
+
+  test('force-resets stored font sizes to the defaults exactly once', async () => {
+    const preMigrationConfig = {
+      ...defaultConfig,
+      uiFontSize: 12,
+      codeFontSize: 10,
+    } as AppConfig;
+    delete (preMigrationConfig as Partial<AppConfig>).uiFontSizeMigrationVersion;
+    delete (preMigrationConfig as Partial<AppConfig>).codeFontSizeMigrationVersion;
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(preMigrationConfig);
+
+    await configService.init();
+
+    expect(configService.getConfig().uiFontSize).toBe(FontPreferences.UiFontSizeDefault);
+    expect(configService.getConfig().codeFontSize).toBe(FontPreferences.CodeFontSizeDefault);
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(savedConfig.uiFontSize).toBe(FontPreferences.UiFontSizeDefault);
+    expect(savedConfig.uiFontSizeMigrationVersion).toBe(UI_FONT_SIZE_MIGRATION_VERSION);
+    expect(savedConfig.codeFontSize).toBe(FontPreferences.CodeFontSizeDefault);
+    expect(savedConfig.codeFontSizeMigrationVersion).toBe(CODE_FONT_SIZE_MIGRATION_VERSION);
+  });
+
+  test('keeps the stored font sizes once the forced reset has been applied', async () => {
+    const migratedConfig: AppConfig = {
+      ...defaultConfig,
+      uiFontSize: 12,
+      uiFontSizeMigrationVersion: UI_FONT_SIZE_MIGRATION_VERSION,
+      codeFontSize: 10,
+      codeFontSizeMigrationVersion: CODE_FONT_SIZE_MIGRATION_VERSION,
+    };
+    const { configService } = await loadConfigServiceWithStoredConfig(migratedConfig);
+
+    await configService.init();
+
+    expect(configService.getConfig().uiFontSize).toBe(12);
+    expect(configService.getConfig().codeFontSize).toBe(10);
+  });
+
+  test('preserves user font size changes made after the forced reset', async () => {
+    const preMigrationConfig = {
+      ...defaultConfig,
+      uiFontSize: 12,
+      codeFontSize: 10,
+    } as AppConfig;
+    delete (preMigrationConfig as Partial<AppConfig>).uiFontSizeMigrationVersion;
+    delete (preMigrationConfig as Partial<AppConfig>).codeFontSizeMigrationVersion;
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(preMigrationConfig);
+
+    await configService.init();
+    await configService.updateConfig({ uiFontSize: 13, codeFontSize: 16 });
+
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(savedConfig.uiFontSize).toBe(13);
+    expect(savedConfig.uiFontSizeMigrationVersion).toBe(UI_FONT_SIZE_MIGRATION_VERSION);
+    expect(savedConfig.codeFontSize).toBe(16);
+    expect(savedConfig.codeFontSizeMigrationVersion).toBe(CODE_FONT_SIZE_MIGRATION_VERSION);
+
+    const { configService: restartedService } = await loadConfigServiceWithStoredConfig(savedConfig);
+    await restartedService.init();
+    expect(restartedService.getConfig().uiFontSize).toBe(13);
+    expect(restartedService.getConfig().codeFontSize).toBe(16);
   });
 
   test('clamps font preferences when saving config updates', async () => {
