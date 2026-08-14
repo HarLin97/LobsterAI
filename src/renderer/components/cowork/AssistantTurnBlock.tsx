@@ -26,6 +26,7 @@ import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
 import { MessageCopyButton } from './MessageActionButton';
 import {
+  canFoldTurnProcess,
   chunkConsolidatedItemsForDisplay,
   collectMediaPollCounts,
   type ConsolidatedItem,
@@ -712,11 +713,16 @@ const AssistantTurnBlock: React.FC<{
   // Once the turn completes, everything before the final answer folds behind
   // a single duration line so the user reads input → answer, expanding only
   // when they want the process. A turn with subagents still running is not
-  // complete — their working cards must stay visible.
+  // complete — their working cards must stay visible. Neither is a turn with
+  // no trailing answer yet (it ended waiting for subagents, or sits in the
+  // gap before the parent run resumes after they hand back): folding then
+  // would hide everything behind an empty duration line.
   const answerStartIndex = getTurnAnswerStartIndex(renderChunks);
   const processChunks = renderChunks.slice(0, answerStartIndex);
   const answerChunks = renderChunks.slice(answerStartIndex);
-  const shouldFoldProcess = !isStreamingTurn && !hasRunningSubagents && processChunks.length > 0;
+  const shouldFoldProcess = !isStreamingTurn
+    && !hasRunningSubagents
+    && canFoldTurnProcess(renderChunks, answerStartIndex);
   const processContainsSearchTarget = Boolean(searchTargetMessageId) && processChunks.some(
     (chunk) => chunk.kind === 'item'
       && chunk.item.type === 'assistant'

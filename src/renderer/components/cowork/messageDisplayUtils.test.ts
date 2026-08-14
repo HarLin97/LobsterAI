@@ -5,6 +5,7 @@ import { computeDiffStats } from './DiffView';
 import {
   buildConversationTurns,
   buildDisplayItems,
+  canFoldTurnProcess,
   chunkConsolidatedItemsForDisplay,
   type ConsolidatedItem,
   formatElapsedDuration,
@@ -281,6 +282,31 @@ test('turn answer start index splits trailing answer text from the process', () 
   // an answer-only turn folds nothing
   const answerOnly = chunkConsolidatedItemsForDisplay([activityTextItem('text-1')]);
   expect(getTurnAnswerStartIndex(answerOnly)).toBe(0);
+});
+
+test('turn process only folds once a trailing answer exists', () => {
+  // Completed turn: tools followed by the final answer text → foldable.
+  const completed = chunkConsolidatedItemsForDisplay([
+    activityToolItem('tool-1'),
+    activityTextItem('text-final'),
+  ]);
+  expect(canFoldTurnProcess(completed, getTurnAnswerStartIndex(completed))).toBe(true);
+
+  // Multi-agent wait: the turn ends with a sessions_yield tool while the
+  // parent waits for subagents to hand back — no answer yet, never fold.
+  const waitingOnSubagents = chunkConsolidatedItemsForDisplay([
+    activityTextItem('text-plan'),
+    activityToolItem('spawn-1', 'sessions_spawn'),
+    activityTextItem('text-progress'),
+    activityToolItem('yield-1', 'sessions_yield'),
+  ]);
+  expect(
+    canFoldTurnProcess(waitingOnSubagents, getTurnAnswerStartIndex(waitingOnSubagents)),
+  ).toBe(false);
+
+  // Answer-only turn: nothing to fold.
+  const answerOnlyTurn = chunkConsolidatedItemsForDisplay([activityTextItem('text-1')]);
+  expect(canFoldTurnProcess(answerOnlyTurn, getTurnAnswerStartIndex(answerOnlyTurn))).toBe(false);
 });
 
 test('turn activity fingerprint changes as streamed content grows', () => {
