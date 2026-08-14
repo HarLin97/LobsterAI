@@ -20,7 +20,7 @@ import {
   createSessionBatchKey,
 } from './agentSidebar/batchSelection';
 import MyAgentSidebarTree from './agentSidebar/MyAgentSidebarTree';
-import SidebarTaskFilterButton from './agentSidebar/SidebarTaskFilterButton';
+import SidebarTaskFilterButton, { SIDEBAR_TASK_FILTER_ENABLED } from './agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from './agentSidebar/SidebarTaskSearchButton';
 import Modal from './common/Modal';
 import {
@@ -580,7 +580,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                       className="non-draggable"
                       label={i18nService.t('search')}
                     />
-                    {activeView === 'cowork' && (
+                    {SIDEBAR_TASK_FILTER_ENABLED && activeView === 'cowork' && (
                       <SidebarTaskFilterButton
                         isActive={isTaskFilterActive}
                         hasUnreadCompletedTasks={hasUnreadCompletedTasks}

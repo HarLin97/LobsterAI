@@ -2,8 +2,6 @@ import { ArrowPathIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react
 import {
   ArrowDownTrayIcon,
   CheckIcon,
-  PauseCircleIcon,
-  PlayCircleIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -19,6 +17,7 @@ import { setSkills } from '../../store/slices/skillSlice';
 import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
 import { CARD_ACTION_PILL_CLASS, DETAIL_ACTION_PILL_CLASS } from '../common/actionPillStyles';
 import CardOverflowMenu, { type CardOverflowMenuItem } from '../common/CardOverflowMenu';
+import CardToggle from '../common/CardToggle';
 import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
@@ -71,6 +70,10 @@ const importTabConfig: Record<ImportSourceType, {
     examplesKey: 'clawhubImportExamples',
   },
 };
+
+/** Hover/focus-revealed card actions, matching the MCP card treatment. */
+const CARD_ACTION_REVEAL_CLASS =
+  'opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100';
 
 interface SkillsManagerProps {
   readOnly?: boolean;
@@ -849,26 +852,20 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
     }
   };
 
+  /**
+   * Enable/disable lives on the card as an always-visible switch (same layout
+   * as an MCP card), so the menu keeps only the rare destructive action.
+   */
   const buildInstalledSkillMenuItems = (skill: Skill): CardOverflowMenuItem[] => {
     const items: CardOverflowMenuItem[] = [];
-    if (!readOnly) {
+    if (!readOnly && !skill.isBuiltIn) {
       items.push({
-        key: 'toggle',
-        label: i18nService.t(skill.enabled ? 'disable' : 'enable'),
-        icon: skill.enabled
-          ? <PauseCircleIcon className="h-3.5 w-3.5" />
-          : <PlayCircleIcon className="h-3.5 w-3.5" />,
-        onSelect: () => handleToggleSkill(skill.id),
+        key: 'delete',
+        label: i18nService.t('deleteSkill'),
+        icon: <TrashIcon className="h-3.5 w-3.5" />,
+        destructive: true,
+        onSelect: () => handleRequestDeleteSkill(skill),
       });
-      if (!skill.isBuiltIn) {
-        items.push({
-          key: 'delete',
-          label: i18nService.t('deleteSkill'),
-          icon: <TrashIcon className="h-3.5 w-3.5" />,
-          destructive: true,
-          onSelect: () => handleRequestDeleteSkill(skill),
-        });
-      }
     }
     return items;
   };
@@ -1022,20 +1019,29 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             {displayName}
           </div>
           {/* This is a management surface — the everyday "use a skill" path is
-              the picker in the composer. So actions stay out of the resting
-              grid and surface on hover/keyboard focus instead of repeating the
-              same word down every column. */}
-          <div className="flex flex-shrink-0 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-            {onUseSkill && skill.enabled && (
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); handleUseSkill(skill); }}
-                className={CARD_ACTION_PILL_CLASS}
-              >
-                {i18nService.t('skillUse')}
-              </button>
-            )}
-            <CardOverflowMenu items={buildInstalledSkillMenuItems(skill)} />
+              the picker in the composer. So use/menu surface on hover or
+              keyboard focus, while the enable switch stays on the resting card
+              (same layout as an MCP card): state is readable at a glance and
+              toggling is one click. */}
+          <div className="flex flex-shrink-0 items-center gap-1">
+            <div className={`flex items-center gap-1 ${CARD_ACTION_REVEAL_CLASS}`}>
+              {onUseSkill && skill.enabled && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); handleUseSkill(skill); }}
+                  className={CARD_ACTION_PILL_CLASS}
+                >
+                  {i18nService.t('skillUse')}
+                </button>
+              )}
+              <CardOverflowMenu items={buildInstalledSkillMenuItems(skill)} />
+            </div>
+            <CardToggle
+              isOn={skill.enabled}
+              label={i18nService.t(skill.enabled ? 'disable' : 'enable')}
+              disabled={readOnly}
+              onToggle={() => handleToggleSkill(skill.id)}
+            />
           </div>
         </div>
 
@@ -1045,12 +1051,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
 
         <div className={`mt-auto flex items-center justify-between gap-2 ${MANAGEMENT_META_TEXT} text-muted`}>
           <div className="flex min-w-0 items-center gap-1.5">
-            {/* Only the exceptional state is labelled; enabled is the norm. */}
-            {!skill.enabled && (
-              <span className="rounded bg-surface-raised px-1.5 py-0.5 font-medium text-secondary">
-                {i18nService.t('disabled')}
-              </span>
-            )}
+            {/* No "disabled" badge here — the switch above already carries the
+                state, and labelling it twice reads as two different facts. */}
             {showOriginBadge ? (
               <span className={`rounded px-1.5 py-0.5 font-medium ${
                 skill.isBuiltIn ? 'bg-surface-raised text-secondary' : 'bg-primary-muted text-primary'
@@ -1809,27 +1811,15 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-border px-6 py-3">
               <div className="flex items-center gap-2.5">
                 <span className={`${MANAGEMENT_BODY_TEXT} text-secondary`}>{i18nService.t('enable')}</span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={selectedSkill.enabled}
-                  aria-label={i18nService.t('enable')}
+                <CardToggle
+                  isOn={selectedSkill.enabled}
+                  label={i18nService.t(selectedSkill.enabled ? 'disable' : 'enable')}
                   disabled={readOnly}
-                  onClick={() => {
-                    if (readOnly) return;
+                  onToggle={() => {
                     handleToggleSkill(selectedSkill.id);
                     setSelectedSkill({ ...selectedSkill, enabled: !selectedSkill.enabled });
                   }}
-                  className={`flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
-                    readOnly ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
-                  } ${selectedSkill.enabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'}`}
-                >
-                  <span
-                    className={`h-3.5 w-3.5 rounded-full bg-white shadow-md transition-transform ${
-                      selectedSkill.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                    }`}
-                  />
-                </button>
+                />
               </div>
               {!readOnly && !selectedSkill.isBuiltIn && (
                 <button

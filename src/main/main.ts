@@ -1733,6 +1733,15 @@ const savePngWithDialog = async (
   defaultFileName?: string,
 ): Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }> => {
   const defaultName = getDefaultExportImageName(defaultFileName);
+  // Automation hook: end-to-end tests cannot drive the native save dialog, so
+  // an explicit directory override saves the PNG directly.
+  const autosaveDir = process.env.LOBSTERAI_EXPORT_IMAGE_AUTOSAVE_DIR;
+  if (autosaveDir) {
+    const outputPath = ensurePngFileName(path.join(autosaveDir, defaultName));
+    await fs.promises.mkdir(autosaveDir, { recursive: true });
+    await fs.promises.writeFile(outputPath, pngData);
+    return { success: true, canceled: false, path: outputPath };
+  }
   const ownerWindow = BrowserWindow.fromWebContents(webContents);
   const saveOptions = {
     title: 'Export Session Image',

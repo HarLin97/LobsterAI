@@ -154,37 +154,4 @@ const McpCard: React.FC<McpCardProps> = ({
   </div>
 );
 
-interface McpToggleProps {
-  isOn: boolean;
-  label: string;
-  onToggle: () => void;
-}
-
-/**
- * Enable switch — the one action that stays on the resting card.
- *
- * The knob is laid out as a flex item rather than absolutely positioned: inside
- * a button, an absolute box with no `left` resolves against the centered static
- * position, which pushes the knob off the track.
- */
-export const McpToggle: React.FC<McpToggleProps> = ({ isOn, label, onToggle }) => (
-  <button
-    type="button"
-    role="switch"
-    aria-checked={isOn}
-    aria-label={label}
-    title={label}
-    onClick={(event) => { event.stopPropagation(); onToggle(); }}
-    className={`flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
-      isOn ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
-    }`}
-  >
-    <span
-      className={`h-3.5 w-3.5 rounded-full bg-white shadow-md transition-transform ${
-        isOn ? 'translate-x-[18px]' : 'translate-x-[3px]'
-      }`}
-    />
-  </button>
-);
-
 export default McpCard;

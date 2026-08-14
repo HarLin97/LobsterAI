@@ -84,6 +84,13 @@ blockquote {
   contain-intrinsic-size: 500px;
 }
 
+/* While exporting the conversation as an image, hide the scrollbar so the
+   programmatic scrolling does not bake scrollbar thumbs into the capture.
+   scrollbar-gutter keeps the reserved width, so layout does not shift. */
+.cowork-export-capturing::-webkit-scrollbar {
+  display: none;
+}
+
 .artifact-preview-card-group {
   background-color: #ffffff;
 }

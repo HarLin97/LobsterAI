@@ -18,6 +18,10 @@ import { i18nService } from '../../services/i18n';
 export const CUSTOM_PROVIDER_KEYS = [
   'custom_0', 'custom_1', 'custom_2', 'custom_3', 'custom_4',
   'custom_5', 'custom_6', 'custom_7', 'custom_8', 'custom_9',
+  'custom_10', 'custom_11', 'custom_12', 'custom_13', 'custom_14',
+  'custom_15', 'custom_16', 'custom_17', 'custom_18', 'custom_19',
+  'custom_20', 'custom_21', 'custom_22', 'custom_23', 'custom_24',
+  'custom_25', 'custom_26', 'custom_27', 'custom_28', 'custom_29',
 ] as const;
 
 export const providerKeys = [
