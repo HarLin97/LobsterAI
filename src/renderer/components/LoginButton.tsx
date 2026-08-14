@@ -1,7 +1,4 @@
-import {
-  ChevronRightIcon,
-  PlusCircleIcon,
-} from '@heroicons/react/24/outline';
+import { ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, {
   useEffect,
   useMemo,
@@ -12,6 +9,8 @@ import { useSelector } from 'react-redux';
 
 import inviteCreditsIconUrl from '../assets/icons/invite-credits.svg';
 import logoutIconUrl from '../assets/icons/logout.svg';
+import pointsStackBlackIconUrl from '../assets/icons/points-stack-black.svg';
+import pointsStackWhiteIconUrl from '../assets/icons/points-stack-white.svg';
 import promoSubscriptionIconUrl from '../assets/icons/promo-subscription.svg';
 import rechargeIconUrl from '../assets/icons/recharge.svg';
 import soccerBallIconUrl from '../assets/icons/soccer-ball.svg';
@@ -312,7 +311,12 @@ const UserMenu: React.FC<UserMenuProps> = ({
       {/* Account destinations */}
       <div className="border-b border-border py-1">
         <AccountMenuAction
-          icon={<PlusCircleIcon className="h-4 w-4 shrink-0 text-black dark:text-white" />}
+          icon={(
+            <span className="relative h-4 w-4 shrink-0" aria-hidden="true">
+              <img src={pointsStackBlackIconUrl} alt="" className="h-full w-full dark:hidden" />
+              <img src={pointsStackWhiteIconUrl} alt="" className="hidden h-full w-full dark:block" />
+            </span>
+          )}
           label={i18nService.t('authCreditsRemaining')}
           trailing={(
             <span className="ml-auto flex shrink-0 items-center gap-1 text-xs font-medium text-foreground">
