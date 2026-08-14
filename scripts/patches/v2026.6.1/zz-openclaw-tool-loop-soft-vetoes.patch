@@ -60,7 +60,7 @@ index 5ebacc250d..4b5ae1ff5e 100644
 +++ b/src/agents/agent-tools.before-tool-call.blocked-result.test.ts
 @@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
  import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
- 
+
  describe("buildBlockedToolResult", () => {
 -  it("terminates critical tool-loop vetoes", () => {
 +  it("terminates tool-loop vetoes from legacy callers that omit terminateRun", () => {
@@ -124,11 +124,11 @@ index d03d2106a1..f31e09a585 100644
 +import { CRITICAL_THRESHOLD, WARNING_THRESHOLD } from "./tool-loop-detection.js";
  import type { AnyAgentTool } from "./tools/common.js";
  import { callGatewayTool } from "./tools/gateway.js";
- 
+
 @@ -210,7 +211,11 @@ describe("before_tool_call loop detection behavior", () => {
      expect(loopEvent?.toolName).toBe(params.toolName);
    }
- 
+
 -  function expectToolLoopBlockedResult(result: unknown, expectedReason: string) {
 +  function expectToolLoopBlockedResult(
 +    result: unknown,
@@ -151,12 +151,12 @@ index d03d2106a1..f31e09a585 100644
 +      expect(record.terminate).toBeUndefined();
 +    }
    }
- 
+
    async function expectUnblockedToolExecution(
 @@ -272,6 +283,62 @@ describe("before_tool_call loop detection behavior", () => {
      expectToolLoopBlockedResult(result, "CRITICAL");
    });
- 
+
 +  it("escalates repeated blocked poll calls to run termination", async () => {
 +    const { tool, params } = createNoProgressProcessFixture("sess-escalate");
 +
@@ -238,7 +238,7 @@ index 47026d650c..213d78cc22 100644
 +      loopWarning?: string;
      };
  type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
- 
+
 @@ -677,18 +683,26 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
  export function buildBlockedToolResult(params: {
    reason: string;
@@ -284,7 +284,7 @@ index 47026d650c..213d78cc22 100644
 @@ -738,6 +754,31 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
    return true;
  }
- 
+
 +function isToolLoopBlockedResult(result: unknown): boolean {
 +  if (!isPlainObject(result)) {
 +    return false;
@@ -329,7 +329,7 @@ index 47026d650c..213d78cc22 100644
 @@ -780,87 +827,173 @@ async function recordLoopOutcome(args: {
    }
  }
- 
+
 -export async function runBeforeToolCallHook(args: {
 +/**
 + * Consecutive critical loop vetoes for the same run+tool before the veto
@@ -383,7 +383,7 @@ index 47026d650c..213d78cc22 100644
 +    sessionKey: args.ctx.sessionKey,
 +    sessionId: args.ctx.sessionId,
 +  });
- 
+
 -  if (args.ctx?.sessionKey) {
 -    const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
 -      await loadBeforeToolCallRuntime();
@@ -456,7 +456,7 @@ index 47026d650c..213d78cc22 100644
 +      });
 +    }
 +  }
- 
+
 -    const loopScope = args.ctx.runId ? { runId: args.ctx.runId } : undefined;
 -    const loopResult = detectToolCallLoop(
 +  if (args.ctx.loopDetection?.enabled !== false) {
@@ -471,7 +471,7 @@ index 47026d650c..213d78cc22 100644
        loopScope,
      );
 +  }
- 
+
 -    if (loopResult.stuck) {
 -      if (loopResult.level === "critical") {
 -        log.error(`Blocking ${toolName} due to critical loop: ${loopResult.message}`);
@@ -513,7 +513,7 @@ index 47026d650c..213d78cc22 100644
 -    }
 +  return loopWarning ? { loopWarning } : {};
 +}
- 
+
 -    if (args.ctx.loopDetection?.enabled !== false) {
 -      recordToolCall(
 -        sessionState,
@@ -562,7 +562,7 @@ index 47026d650c..213d78cc22 100644
 +}): Promise<HookOutcome> {
 +  const toolName = normalizeToolName(args.toolName || "tool");
 +  const params = args.params;
- 
+
    const hookRunner = getGlobalHookRunner();
    try {
 @@ -1160,6 +1293,8 @@ export function wrapToolWithBeforeToolCallHook(
@@ -631,7 +631,7 @@ index 7833fcb73f..2af8992843 100644
 +       */
 +      hardStop?: boolean;
      };
- 
+
  export const TOOL_CALL_HISTORY_SIZE = 30;
 @@ -560,6 +567,7 @@ export function detectToolCallLoop(
        count: noProgressStreak,
@@ -640,7 +640,7 @@ index 7833fcb73f..2af8992843 100644
 +      hardStop: true,
      };
    }
- 
+
 @@ -574,6 +582,7 @@ export function detectToolCallLoop(
        count: abortedLoop.total,
        message: `CRITICAL: tool calls have returned aborted outcomes ${abortedLoop.total} times. Session execution blocked to prevent runaway retry loops.`,
@@ -648,7 +648,7 @@ index 7833fcb73f..2af8992843 100644
 +      hardStop: true,
      };
    }
- 
+
 @@ -588,6 +597,7 @@ export function detectToolCallLoop(
        count: abortedLoop.signatureStreak,
        message: `CRITICAL: ${toolName} has returned aborted outcomes ${abortedLoop.signatureStreak} times for identical arguments. Session execution blocked to prevent runaway retry loops.`,
@@ -656,7 +656,7 @@ index 7833fcb73f..2af8992843 100644
 +      hardStop: true,
      };
    }
- 
+
 @@ -616,7 +626,7 @@ export function detectToolCallLoop(
        level: "critical",
        detector: "known_poll_no_progress",
@@ -696,7 +696,7 @@ index 6dafdd06ef..949d729f8f 100644
 +  toolLoopVetoStreaks?: Map<string, number>;
    commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
  };
- 
+
 @@ -128,6 +130,12 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
        buckets.set(bucket, Math.max(buckets.get(bucket) ?? 0, count));
      }

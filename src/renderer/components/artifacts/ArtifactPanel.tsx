@@ -13,11 +13,13 @@ import {
   type BrowserAnnotationGuestEnvelope,
   BrowserAnnotationGuestEventType,
   BrowserAnnotationLimit,
+  BrowserAnnotationPageScreenshotAnnotationId,
   BrowserAnnotationProtocolVersion,
   type BrowserAnnotationScreenshotRef,
   BrowserAnnotationScreenshotStatus,
   type CoworkBrowserAnnotation,
   type CoworkBrowserAnnotationBatch,
+  hasBrowserAnnotationContent,
 } from '@shared/cowork/browserAnnotations';
 import type { CoworkSelectedTextSnippet } from '@shared/cowork/selectedText';
 import {
@@ -64,6 +66,7 @@ import {
   readLocalServiceProjectDirectoryCandidate as readNodeDeploymentProjectDirectoryCandidate,
   writeLocalServiceProjectDirectory as writeNodeDeploymentProjectDirectory,
 } from '@/services/localServiceProjectDirectoryCache';
+import { normalizeShellFilePath } from '@/services/shellAppsCache';
 import type { RootState } from '@/store';
 import {
   addArtifact,
@@ -111,6 +114,7 @@ import {
   ArtifactSubscriptionFeature,
   type ArtifactSubscriptionFeature as ArtifactSubscriptionFeatureValue,
   type ArtifactSubscriptionPromptState,
+  getArtifactSubscriptionDecision,
   resolveArtifactSubscriptionDecision,
 } from './artifactSubscriptionGate';
 import ArtifactSubscriptionPromptDialog from './ArtifactSubscriptionPromptDialog';
@@ -154,6 +158,16 @@ import { OfficeZoomControls } from './renderers/OfficeZoomControls';
 import SiteQuotaReplacementDialog from './SiteQuotaReplacementDialog';
 
 const t = (key: string) => i18nService.t(key);
+
+const logArtifactFileActionFailure = (operation: string, detail?: unknown): void => {
+  const message = `${operation} failed${detail ? `: ${String(detail)}` : ''}`;
+  console.warn(`[ArtifactPanel] ${message}`);
+  try {
+    window.electron?.log?.fromRenderer?.('warn', 'ArtifactPanel', message);
+  } catch {
+    // File action diagnostics must never affect the panel interaction.
+  }
+};
 
 const BROWSER_OPENABLE_TYPES = new Set<ArtifactType>(['html', 'svg', 'mermaid']);
 
@@ -653,6 +667,8 @@ interface ArtifactPanelProps {
   onAddSelectedText?: (snippet: CoworkSelectedTextSnippet) => void;
   selectedTextEnabled?: boolean;
   subagentPanel?: React.ReactNode;
+  userAttachmentPanel?: React.ReactNode;
+  onAnnotationSend?: () => void;
 }
 
 interface BrowserPublishAction {
@@ -740,6 +756,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   onAddSelectedText,
   selectedTextEnabled = false,
   subagentPanel,
+  userAttachmentPanel,
+  onAnnotationSend,
 }) => {
   const dispatch = useDispatch();
   const artifactFileShare = useOptionalArtifactFileShare();
@@ -754,6 +772,13 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       || EMPTY_BROWSER_ANNOTATION_BATCHES
     ),
   );
+  // Annotations that survive send-time normalization (comment or element edit).
+  const annotationSendCount = useMemo(() => browserAnnotationBatches.reduce(
+    (total, batch) => total + batch.annotations.filter(
+      annotation => hasBrowserAnnotationContent(annotation.comment, annotation.elementEdit),
+    ).length,
+    0,
+  ), [browserAnnotationBatches]);
   const [showFileListDrawer, setShowFileListDrawer] = useState(false);
   const [isFileListDrawerVisible, setIsFileListDrawerVisible] = useState(false);
   const [localBrowserAddress, setLocalBrowserAddress] = useState('');
@@ -803,6 +828,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const nodeDeploymentAccessRunIdRef = useRef(0);
   const nodeDeploymentPersistenceOperationRunIdRef = useRef(0);
   const handledLocalServiceDeploymentRequestIdRef = useRef<number | null>(null);
+  const publishingAccountGenerationRef = useRef(authState.accountGeneration);
+  publishingAccountGenerationRef.current = authState.accountGeneration;
   nodeDeploymentLookupRef.current = nodeDeploymentLookup;
 
   const previewableArtifacts = artifacts.filter(a => PREVIEWABLE_ARTIFACT_TYPES.has(a.type));
@@ -1244,11 +1271,42 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   }, []);
 
   useEffect(() => {
+    publishingAccountGenerationRef.current = authState.accountGeneration;
+    nodeDeploymentActionRunIdRef.current += 1;
+    nodeDeploymentAccessRunIdRef.current += 1;
+    nodeDeploymentPersistenceOperationRunIdRef.current += 1;
+    handledLocalServiceDeploymentRequestIdRef.current = null;
+    nodeDeploymentLookupRef.current = null;
+    if (nodeDeploymentLookupDialogTimerRef.current !== undefined) {
+      window.clearTimeout(nodeDeploymentLookupDialogTimerRef.current);
+      nodeDeploymentLookupDialogTimerRef.current = undefined;
+    }
+    setHtmlShareDialog(null);
+    setHtmlSharePendingRequest(null);
+    setHtmlShareLookup(null);
+    setHtmlSharePhase(HtmlSharePhase.Idle);
+    setSubscriptionPrompt(null);
+    setNodeDeploymentLookup(null);
+    setNodeDeploymentDialog(null);
+    setNodeDeploymentPersistenceOperations({});
+    setIsNodeDeploymentDialogOpen(false);
+    setIsNodeDeploymentLookupPending(false);
+    setIsNodeDeploymentBusy(false);
+    setIsNodeDeploymentAccessUpdating(false);
+    setIsHtmlShareStatusUpdating(false);
+  }, [authState.accountGeneration, authState.ownerAccountKey]);
+
+  useEffect(() => {
     if (
       !browserLocalServiceUrl ||
       !selectedNodeDeploymentLookupKey ||
-      !authState.isLoggedIn ||
-      authState.quota?.subscriptionStatus !== 'active'
+      !getArtifactSubscriptionDecision({
+        isLoggedIn: authState.isLoggedIn,
+        subscriptionStatus: authState.quota?.subscriptionStatus,
+        accountMode: authState.quota?.accountMode ?? authState.user?.accountMode,
+        shareEntitled: authState.quota?.shareEntitled,
+        deploymentEntitled: authState.quota?.deploymentEntitled,
+      }, ArtifactSubscriptionFeature.Deployment).allowed
     ) {
       setNodeDeploymentLookup(null);
       return;
@@ -1325,7 +1383,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     };
   }, [
     authState.isLoggedIn,
-    authState.quota?.subscriptionStatus,
+    authState.quota,
+    authState.user?.accountMode,
     browserLocalServiceUrl,
     browserLocalServiceProjectDirectory,
     selectedNodeDeploymentLookupKey,
@@ -1579,6 +1638,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             selectedArtifact.filePath,
           );
           if (!result?.success) {
+            logArtifactFileActionFailure('copy artifact image', result?.error);
             reportSelectedArtifactAction('copy_content', { result: 'failed' });
             window.dispatchEvent(
               new CustomEvent('app:showToast', { detail: result?.error || t('copyFailed') }),
@@ -1592,7 +1652,19 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       } else {
         if (selectedArtifact.filePath && !selectedArtifact.content && selectedArtifact.type !== 'document') {
           const result = await window.electron?.dialog?.readTextFile?.(selectedArtifact.filePath);
+          if (result?.truncated) {
+            logArtifactFileActionFailure(
+              'copy artifact content',
+              `file exceeds read limit; size=${result.size ?? 'unknown'}, readBytes=${result.readBytes ?? 'unknown'}`,
+            );
+            reportSelectedArtifactAction('copy_content', { result: 'failed' });
+            window.dispatchEvent(new CustomEvent('app:showToast', {
+              detail: t('fileMenuCopyContentsTooLarge'),
+            }));
+            return;
+          }
           if (!result?.success || typeof result.content !== 'string') {
+            logArtifactFileActionFailure('copy artifact content', result?.error);
             reportSelectedArtifactAction('copy_content', { result: 'failed' });
             window.dispatchEvent(new CustomEvent('app:showToast', { detail: result?.error || t('copyFailed') }));
             return;
@@ -1608,7 +1680,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       }
       reportSelectedArtifactAction('copy_content', { result: 'success' });
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: t('messageCopied') }));
-    } catch {
+    } catch (error) {
+      logArtifactFileActionFailure('copy artifact content', error);
       reportSelectedArtifactAction('copy_content', { result: 'failed' });
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: t('copyFailed') }));
     }
@@ -1707,16 +1780,26 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const ensureArtifactSubscriptionAllowed = useCallback(async (
     feature: ArtifactSubscriptionFeatureValue,
   ): Promise<boolean> => {
+    const requestAccountGeneration = publishingAccountGenerationRef.current;
     const decision = await resolveArtifactSubscriptionDecision({
       isLoggedIn: authState.isLoggedIn,
       subscriptionStatus: authState.quota?.subscriptionStatus,
+      accountMode: authState.quota?.accountMode ?? authState.user?.accountMode,
+      shareEntitled: authState.quota?.shareEntitled,
+      deploymentEntitled: authState.quota?.deploymentEntitled,
     }, async () => {
       const refreshed = await authService.refreshAuthState();
       return {
         isLoggedIn: refreshed.isLoggedIn,
         subscriptionStatus: refreshed.quota?.subscriptionStatus,
+        accountMode: refreshed.quota?.accountMode ?? refreshed.user?.accountMode,
+        shareEntitled: refreshed.quota?.shareEntitled,
+        deploymentEntitled: refreshed.quota?.deploymentEntitled,
       };
-    });
+    }, feature);
+    if (publishingAccountGenerationRef.current !== requestAccountGeneration) {
+      return false;
+    }
     if (!decision.allowed) {
       setHtmlShareDialog(null);
       setHtmlSharePendingRequest(null);
@@ -1724,7 +1807,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       return false;
     }
     return true;
-  }, [authState.isLoggedIn, authState.quota?.subscriptionStatus]);
+  }, [authState.isLoggedIn, authState.quota, authState.user?.accountMode]);
 
   const handleCopyShareLink = useCallback(
     async (url?: string, shareCode?: string) => {
@@ -3254,6 +3337,11 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         throw new Error(reservation?.error || t('siteQuotaReservationFailed'));
       }
       quotaReservationId = reservation.data.reservationId;
+      window.electron?.log?.fromRenderer?.(
+        'debug',
+        'ArtifactPanel',
+        `Reserved a site deployment slot; target=${currentDialog.deployment?.shareId ?? 'new'}.`,
+      );
       setNodeDeploymentDialog(previous => previous
         ? {
             ...previous,
@@ -3301,6 +3389,11 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         throw new Error(result?.error || t('nodeDeploymentFailedMessage'));
       }
       deploymentAccepted = true;
+      window.electron?.log?.fromRenderer?.(
+        'info',
+        'ArtifactPanel',
+        `Site deployment accepted; deployment=${result.deployment.deploymentId}.`,
+      );
       const deployment = result.deployment;
       const accessStatusError = result.accessSyncError;
       rememberLocalServiceProjectDirectory(
@@ -3346,7 +3439,26 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         : previous);
     } finally {
       if (quotaReservationId && !deploymentAccepted) {
-        await window.electron?.sites?.releaseQuotaReservation(quotaReservationId).catch(() => undefined);
+        try {
+          const released = await window.electron?.sites?.releaseQuotaReservation(
+            quotaReservationId,
+          );
+          if (!released?.success) {
+            window.electron?.log?.fromRenderer?.(
+              'warn',
+              'ArtifactPanel',
+              `Failed to release unused site deployment reservation; `
+              + `code=${released?.code ?? 'unknown'}.`,
+            );
+          }
+        } catch (releaseError) {
+          window.electron?.log?.fromRenderer?.(
+            'warn',
+            'ArtifactPanel',
+            `Site deployment reservation release IPC failed; `
+            + `errorType=${releaseError instanceof Error ? releaseError.name : typeof releaseError}.`,
+          );
+        }
       }
       if (nodeDeploymentActionRunIdRef.current === runId) {
         setIsNodeDeploymentBusy(false);
@@ -3582,6 +3694,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
   const createHtmlShare = useCallback(async (request: HtmlSharePendingRequest) => {
     if (isHtmlSharing) return;
+    const requestAccountGeneration = publishingAccountGenerationRef.current;
     setHtmlShareDialog(null);
     setHtmlSharePendingRequest(null);
     try {
@@ -3612,6 +3725,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
               content: request.content,
               remoteUrl: request.remoteUrl,
             });
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       await handleHtmlShareResult(result);
       rememberHtmlShare(request.lookupKey, result);
       window.electron?.log?.fromRenderer?.(
@@ -3620,6 +3734,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         `Created ${request.sourceType} share for artifact ${request.artifactId}.`,
       );
     } catch (error) {
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       window.electron?.log?.fromRenderer?.(
         'warn',
         'ArtifactPanel',
@@ -3665,6 +3780,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         !(allowActiveLimitRestore && canRestoreActiveLimitDisabledHtmlShare))
     )
       return;
+    const requestAccountGeneration = publishingAccountGenerationRef.current;
     const request = htmlSharePendingRequest;
     const shareId = htmlShareDialog.shareId;
     const currentStatus = htmlShareDialog.status;
@@ -3719,6 +3835,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
               remoteUrl: request.remoteUrl,
               currentStatus,
             });
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       if (!result?.success || !result.url) {
         throw new Error(getHtmlShareFailureMessage(result));
       }
@@ -3760,6 +3877,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         };
       });
     } catch (error) {
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       setHtmlSharePhase(HtmlSharePhase.Failed);
       const message = error instanceof Error ? error.message : t('htmlShareFailed');
       window.electron?.log?.fromRenderer?.(
@@ -3813,6 +3931,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     if (accessMode === normalizeHtmlShareAccessMode(htmlShareDialog.accessMode)) return;
     const shareId = htmlShareDialog.shareId;
     const request = htmlSharePendingRequest;
+    const requestAccountGeneration = publishingAccountGenerationRef.current;
     setIsHtmlShareStatusUpdating(true);
     setHtmlShareDialog(previous => previous && previous.shareId === shareId
       ? { ...previous, statusError: undefined }
@@ -3822,6 +3941,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         shareId,
         accessMode,
       });
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       if (!result?.success || !result.url) {
         throw new Error(getHtmlShareFailureMessage(result));
       }
@@ -3859,13 +3979,16 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         };
       });
     } catch (error) {
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       const message =
         error instanceof Error ? error.message : t('htmlShareAccessModeUpdateFailed');
       setHtmlShareDialog(previous => previous && previous.shareId === shareId
         ? { ...previous, statusError: message }
         : previous);
     } finally {
-      setIsHtmlShareStatusUpdating(false);
+      if (publishingAccountGenerationRef.current === requestAccountGeneration) {
+        setIsHtmlShareStatusUpdating(false);
+      }
     }
   }, [
     htmlShareDialog,
@@ -3886,6 +4009,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     }
     const shareId = htmlShareDialog.shareId;
     const previousStatus = htmlShareDialog.targetStatus;
+    const requestAccountGeneration = publishingAccountGenerationRef.current;
     const nextStatus =
       previousStatus === HtmlShareStatus.Live ? HtmlShareStatus.Disabled : HtmlShareStatus.Live;
     const request = htmlSharePendingRequest;
@@ -3899,7 +4023,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       try {
         await updateHtmlShare({ allowActiveLimitRestore: true });
       } finally {
-        setIsHtmlShareStatusUpdating(false);
+        if (publishingAccountGenerationRef.current === requestAccountGeneration) {
+          setIsHtmlShareStatusUpdating(false);
+        }
       }
       return;
     }
@@ -3925,6 +4051,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         shareId,
         status: nextStatus,
       });
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       if (!result?.success || !result.url) {
         throw new Error(getHtmlShareFailureMessage(result));
       }
@@ -3949,6 +4076,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
           refreshedShare = null;
         }
       }
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       const resultStatus =
         getConfigurableHtmlShareStatus(refreshedShare?.status ?? result.status) ?? nextStatus;
       const refreshedResult = {
@@ -3989,6 +4117,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         };
       });
     } catch (error) {
+      if (publishingAccountGenerationRef.current !== requestAccountGeneration) return;
       const message =
         error instanceof Error ? error.message : t('htmlShareStatusUpdateFailed');
       setHtmlShareDialog(previous => {
@@ -4007,7 +4136,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         };
       });
     } finally {
-      setIsHtmlShareStatusUpdating(false);
+      if (publishingAccountGenerationRef.current === requestAccountGeneration) {
+        setIsHtmlShareStatusUpdating(false);
+      }
     }
   }, [
     htmlShareDialog,
@@ -4023,19 +4154,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       reportSelectedArtifactAction('open_with_app', {
         openTarget: 'external_app',
       });
-      let filePath = selectedArtifact.filePath;
-      if (filePath.startsWith('file:///')) {
-        filePath = filePath.slice(7);
-      } else if (filePath.startsWith('file://')) {
-        filePath = filePath.slice(7);
-      } else if (filePath.startsWith('file:/')) {
-        filePath = filePath.slice(5);
-      }
-      // Strip leading / before Windows drive letter
-      if (/^\/[A-Za-z]:/.test(filePath)) {
-        filePath = filePath.slice(1);
-      }
-      void openLocalPathWithToast(filePath);
+      void openLocalPathWithToast(normalizeShellFilePath(selectedArtifact.filePath));
     }
   }, [reportSelectedArtifactAction, selectedArtifact]);
 
@@ -4065,6 +4184,17 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       const isTextType = selectedArtifact.type !== 'image' && selectedArtifact.type !== 'document';
       if (isTextType && window.electron?.dialog?.readTextFile) {
         const result = await window.electron.dialog.readTextFile(selectedArtifact.filePath);
+        if (result?.truncated) {
+          logArtifactFileActionFailure(
+            'refresh artifact source',
+            `file exceeds read limit; size=${result.size ?? 'unknown'}, readBytes=${result.readBytes ?? 'unknown'}`,
+          );
+          reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
+          window.dispatchEvent(new CustomEvent('app:showToast', {
+            detail: t('artifactSourceTooLarge'),
+          }));
+          return;
+        }
         if (result?.success && typeof result.content === 'string') {
           dispatch(addArtifact({
             sessionId: selectedArtifact.sessionId,
@@ -4072,7 +4202,11 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
           }));
           reportSelectedArtifactAction('refresh_preview', { result: 'success' });
         } else {
+          logArtifactFileActionFailure('refresh artifact source', result?.error);
           reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
+          window.dispatchEvent(new CustomEvent('app:showToast', {
+            detail: result?.error || t('artifactSourceLoadFailed'),
+          }));
         }
         return;
       }
@@ -4099,11 +4233,18 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         );
         reportSelectedArtifactAction('refresh_preview', { result: 'success' });
       } else {
+        logArtifactFileActionFailure('refresh artifact preview', result?.error);
         reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: result?.error || t('artifactSourceLoadFailed'),
+        }));
       }
-    } catch {
+    } catch (error) {
+      logArtifactFileActionFailure('refresh artifact preview', error);
       reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
-      // File unreadable or missing
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: t('artifactSourceLoadFailed'),
+      }));
     }
   }, [selectedArtifact, dispatch, reportSelectedArtifactAction]);
 
@@ -4647,9 +4788,13 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                 }));
               }
             }}
+            annotationSendCount={annotationSendCount}
+            onAnnotationSend={onAnnotationSend}
           />
         ) : activeSpecialTab === ArtifactSpecialTab.Subagents && subagentPanel ? (
           subagentPanel
+        ) : activeSpecialTab === ArtifactSpecialTab.UserAttachment && userAttachmentPanel ? (
+          userAttachmentPanel
         ) : (
           /* No artifact selected: show full-width file list */
           <div className="flex-1 flex flex-col h-full overflow-hidden">
@@ -6038,6 +6183,9 @@ interface BrowserTabContentProps {
   draftKey: string;
   annotationBatch?: CoworkBrowserAnnotationBatch;
   onAnnotationBatchChange: (batch: CoworkBrowserAnnotationBatch | null) => void;
+  /** Draft annotations (across pages) that would survive send-time normalization. */
+  annotationSendCount?: number;
+  onAnnotationSend?: () => void;
 }
 
 const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
@@ -6054,6 +6202,8 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
   draftKey,
   annotationBatch,
   onAnnotationBatchChange,
+  annotationSendCount = 0,
+  onAnnotationSend,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
@@ -6203,11 +6353,12 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
       });
       const image = await webviewNodeRef.current?.capturePage?.();
       if (!image) throw new Error('Browser screenshot capture is unavailable.');
+      const imageDataUrl = image.toDataURL();
       const saved = await window.electron?.artifact?.saveBrowserAnnotationAsset({
         draftKey,
         batchId: batch.id,
         annotationId: annotation.id,
-        imageDataUrl: image.toDataURL(),
+        imageDataUrl,
         viewportWidth: capture.viewportWidth,
         viewportHeight: capture.viewportHeight,
         targetRect: capture.targetRect,
@@ -6215,11 +6366,33 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         compact: batch.annotations.length >= BrowserAnnotationLimit.CompactThreshold,
       });
       if (!saved?.success || !saved.asset) throw new Error(saved?.error || 'Screenshot save failed.');
+      // Keep an uncropped batch-level page screenshot alongside the annotation
+      // crop; the restore view re-frames each annotation region on it.
+      const pageSaved = await window.electron?.artifact?.saveBrowserAnnotationAsset({
+        draftKey,
+        batchId: batch.id,
+        annotationId: BrowserAnnotationPageScreenshotAnnotationId,
+        imageDataUrl,
+        viewportWidth: capture.viewportWidth,
+        viewportHeight: capture.viewportHeight,
+      });
       const current = annotationBatchRef.current;
       if (!current || current.id !== batch.id) return;
+      const previousPageAsset = current.pageScreenshot?.asset;
+      const nextPageScreenshot = pageSaved?.success && pageSaved.asset
+        ? {
+            asset: pageSaved.asset,
+            viewportWidth: capture.viewportWidth,
+            viewportHeight: capture.viewportHeight,
+            scrollX: capture.scrollX,
+            scrollY: capture.scrollY,
+            capturedAt: Date.now(),
+          }
+        : current.pageScreenshot;
       const next = {
         ...current,
         updatedAt: Date.now(),
+        pageScreenshot: nextPageScreenshot,
         annotations: current.annotations.map(item => item.id === annotation.id
           ? {
               ...item,
@@ -6230,6 +6403,18 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
           : item),
       };
       commitAnnotationBatch(next);
+      if (
+        pageSaved?.success && pageSaved.asset
+        && previousPageAsset
+        && previousPageAsset.assetId !== pageSaved.asset.assetId
+      ) {
+        void window.electron?.artifact?.deleteBrowserAnnotationAsset({
+          draftKey,
+          batchId: batch.id,
+          annotationId: BrowserAnnotationPageScreenshotAnnotationId,
+          assetId: previousPageAsset.assetId,
+        });
+      }
       sendAnnotationCommand(BrowserAnnotationGuestCommandType.Sync, next, {
         annotations: next.annotations,
       });
@@ -7218,6 +7403,23 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
               ) : null}
             </button>
           </div>
+          {isAnnotating && annotationSendCount > 0 && onAnnotationSend ? (
+            <button
+              type="button"
+              onClick={() => {
+                reportBrowserAction('browser_annotation_send', {
+                  annotationCount: annotationSendCount,
+                });
+                onAnnotationSend();
+              }}
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-primary pl-2.5 pr-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+            >
+              <span className="whitespace-nowrap">{t('browserAnnotationsSend')}</span>
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-white/25 px-1 text-[10px] font-semibold">
+                {annotationSendCount}
+              </span>
+            </button>
+          ) : null}
           <button
             ref={browserMenuButtonRef}
             type="button"

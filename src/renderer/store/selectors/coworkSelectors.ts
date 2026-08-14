@@ -1,7 +1,10 @@
 import { createSelector } from '@reduxjs/toolkit';
 
 import { SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../../shared/cowork/constants';
+import type { CoworkMessage } from '../../types/cowork';
 import type { RootState } from '../index';
+
+const EMPTY_COWORK_MESSAGES: CoworkMessage[] = [];
 
 // --- Primitive (identity) selectors ---
 // These return stable references for primitive values or existing object refs,
@@ -20,6 +23,9 @@ export const selectCoworkConfig = (state: RootState) => state.cowork.config;
 export const selectDraftPrompts = (state: RootState) => state.cowork.draftPrompts;
 export const selectPendingPermissions = (state: RootState) => state.cowork.pendingPermissions;
 export const selectUnreadSessionIds = (state: RootState) => state.cowork.unreadSessionIds;
+export const selectCompletedUnreadSessionIds = (
+  state: RootState,
+) => state.cowork.completedUnreadSessionIds;
 
 // --- Derived (memoized) selectors ---
 // These compute new values from the store and use createSelector to avoid
@@ -38,6 +44,28 @@ export const selectIsOpenClawEngine = createSelector(
 export const selectCurrentMessages = createSelector(
   selectCurrentSession,
   (session) => session?.messages ?? null,
+);
+
+const selectCurrentSessionDetachedTailMessages = (state: RootState): CoworkMessage[] => {
+  const sessionId = state.cowork.currentSession?.id;
+  return sessionId
+    ? state.cowork.detachedTailMessagesBySessionId[sessionId] ?? EMPTY_COWORK_MESSAGES
+    : EMPTY_COWORK_MESSAGES;
+};
+
+export const selectCurrentMessagesWithDetachedTail = createSelector(
+  selectCurrentMessages,
+  selectCurrentSessionDetachedTailMessages,
+  (messages, detachedTailMessages) => {
+    if (!messages) return EMPTY_COWORK_MESSAGES;
+    if (detachedTailMessages.length === 0) return messages;
+    const detachedById = new Map(detachedTailMessages.map(message => [message.id, message]));
+    const loadedIds = new Set(messages.map(message => message.id));
+    return [
+      ...messages.map(message => detachedById.get(message.id) ?? message),
+      ...detachedTailMessages.filter(message => !loadedIds.has(message.id)),
+    ];
+  },
 );
 
 export const selectCurrentMessagesLength = createSelector(

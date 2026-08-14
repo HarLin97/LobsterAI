@@ -1,9 +1,12 @@
-import { ChatBubbleLeftIcon, PhotoIcon } from '@heroicons/react/24/outline';
+import { PhotoIcon } from '@heroicons/react/24/outline';
 import type { CoworkBrowserAnnotationMessageBatch } from '@shared/cowork/browserAnnotations';
 import React, { useCallback, useMemo, useState } from 'react';
 
 import { hasGoalSettingMessageMetadata } from '../../../common/goalCommandDisplay';
-import type { CoworkImageAttachmentPreview } from '../../../shared/cowork/imageAttachments';
+import {
+  type CoworkImageAttachmentPreview,
+  isBrowserAnnotationTransportImage,
+} from '../../../shared/cowork/imageAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
 import type { KitReference } from '../../../shared/kit/constants';
 import { copyTextToClipboard } from '../../services/clipboard';
@@ -20,6 +23,10 @@ import GoalIcon from '../icons/GoalIcon';
 import MessageCopyIcon from '../icons/MessageCopyIcon';
 import SidebarKitsIcon from '../icons/SidebarKitsIcon';
 import SkillIcon from '../icons/SkillIcon';
+import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge';
+import BrowserAnnotationMessageAttachments, {
+  type BrowserAnnotationAttachmentOpenPayload,
+} from './BrowserAnnotationMessageAttachments';
 import { reportConversationMessageAction } from './conversationAnalytics';
 import ImagePreviewModal, { type ImagePreviewSource } from './ImagePreviewModal';
 import {
@@ -182,9 +189,13 @@ const UserMessageItem: React.FC<{
   message: CoworkMessage;
   skills: Skill[];
   marketplaceKits?: MarketplaceKit[];
+  /** Session the message belongs to; used to resolve browser annotation screenshot assets. */
+  sessionId?: string;
   onReEdit?: (message: CoworkMessage) => void;
   onLocateSelectedText?: (sourceMessageId: string) => void;
-}> = React.memo(({ message, skills, marketplaceKits = [], onReEdit, onLocateSelectedText }) => {
+  /** Opens the annotation restore view in the artifact panel. */
+  onOpenAnnotation?: (message: CoworkMessage, payload: BrowserAnnotationAttachmentOpenPayload) => void;
+}> = React.memo(({ message, skills, marketplaceKits = [], sessionId, onReEdit, onLocateSelectedText, onOpenAnnotation }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
   const modelLabel = getMessageModelLabel(message.metadata);
@@ -234,7 +245,11 @@ const UserMessageItem: React.FC<{
   const allImageAttachments = imageAttachmentPreviews.length > 0
     ? imageAttachmentPreviews
     : legacyImageAttachments;
-  const displayImageAttachments = allImageAttachments;
+  // Annotation transport screenshots already render as numbered annotation
+  // cards; keep them out of the regular attachment row.
+  const displayImageAttachments = browserAnnotationCount > 0
+    ? allImageAttachments.filter(image => !isBrowserAnnotationTransportImage(image))
+    : allImageAttachments;
   const hasCapabilityBadges = messageKitReferences.length > 0 || messageSkills.length > 0;
   const handleImagePreviewOpen = useCallback((image: ImagePreviewSource) => {
     reportConversationMessageAction({
@@ -256,6 +271,17 @@ const UserMessageItem: React.FC<{
       message,
     });
   }, [message]);
+  const handleOpenAnnotationAttachment = useCallback((payload: BrowserAnnotationAttachmentOpenPayload) => {
+    reportConversationMessageAction({
+      actionType: 'open_message_annotation',
+      message,
+    });
+    if (onOpenAnnotation) {
+      onOpenAnnotation(message, payload);
+      return;
+    }
+    setExpandedImage({ src: payload.src, name: payload.name });
+  }, [message, onOpenAnnotation]);
 
   return (
     <div
@@ -271,15 +297,24 @@ const UserMessageItem: React.FC<{
           <div className="flex items-start gap-3 flex-row-reverse">
             <div className="w-full min-w-0 flex flex-col items-end">
               <div className="w-fit max-w-full rounded-2xl px-4 py-2.5 bg-surface text-foreground shadow-subtle">
+                {browserAnnotationCount > 0 && sessionId && (
+                  <BrowserAnnotationMessageAttachments
+                    draftKey={sessionId}
+                    batches={browserAnnotations}
+                    onOpen={handleOpenAnnotationAttachment}
+                    className="mb-2"
+                  />
+                )}
                 {browserAnnotationCount > 0 && (
                   <div className={(selectedTextSnippets.length > 0 || displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
-                    <div
-                      className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-surface-raised px-2.5 text-xs text-foreground"
-                      title={browserAnnotations.flatMap(batch => batch.annotations.map(item => item.comment)).join('\n')}
-                    >
-                      <ChatBubbleLeftIcon className="h-3.5 w-3.5" />
-                      {i18nService.t('browserAnnotationsCount').replace('{count}', String(browserAnnotationCount))}
-                    </div>
+                    <BrowserAnnotationAttachmentBadge
+                      draftKey={sessionId ?? ''}
+                      batches={browserAnnotations}
+                      align="right"
+                      onPreviewImage={setExpandedImage}
+                      onOpenAnnotation={handleOpenAnnotationAttachment}
+                      readOnly
+                    />
                   </div>
                 )}
                 {selectedTextSnippets.length > 0 && (

@@ -11,6 +11,8 @@ export interface ThemeSelection {
   themeId: string;
 }
 
+type PersistedThemeSelection = Omit<ThemeSelection, 'themeId'> & { themeId?: string };
+
 export const ThemeServiceEvent = {
   DefaultChanged: 'lobster-default-theme-changed',
 } as const;
@@ -109,6 +111,24 @@ class ThemeService {
     this.defaultThemeId = target.meta.id;
     this.activeSkinThemeId = null;
     void this.manager.setTheme(target.meta.id);
+  }
+
+  /** Apply a config loaded by startup repair without persisting it again. */
+  applyPersistedSelection(selection: PersistedThemeSelection): void {
+    const target = this.resolveThemeForAppearance(
+      this.resolveModeAppearance(selection.mode),
+      selection.themeId,
+    );
+    if (!target) return;
+    this.currentTheme = selection.mode;
+    this.defaultThemeId = target.meta.id;
+    // Startup repair may complete after SkinProvider has already restored an
+    // active AI skin. Refresh the repaired default for future fallback without
+    // replacing the skin that is currently visible.
+    if (!this.activeSkinThemeId) {
+      void this.manager.setTheme(target.meta.id);
+    }
+    this.dispatchDefaultChanged();
   }
 
   getTheme(): ThemeMode {

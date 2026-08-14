@@ -335,6 +335,22 @@ export class OpenClawEngineManager extends EventEmitter {
     return this.configPath;
   }
 
+  /** Return the resolved bundled runtime root for pre-gateway CLI migrations. */
+  getRuntimeRoot(): string | null {
+    return this.resolveRuntimeMetadata().root;
+  }
+
+  /**
+   * Restore an interrupted packaged Windows install before a startup config
+   * sync invokes runtime CLI migrations. The installer can leave an empty
+   * resources/cfmind directory behind, which still resolves as a runtime root
+   * even though its CLI entry is missing. Recovery is a no-op outside packaged
+   * Windows builds and when the runtime entry is already present.
+   */
+  async prepareRuntimeForStartupConfigSync(reason = 'startup-config-sync'): Promise<void> {
+    await this.maybeRecoverInstallerResources(reason);
+  }
+
   getGatewayLogPath(): string {
     return getGatewayLogPath(this.logsDir);
   }

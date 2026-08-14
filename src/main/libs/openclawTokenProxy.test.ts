@@ -22,6 +22,7 @@ beforeEach(() => {
 
 test('refreshes LobsterAI credentials for 401 but not 403', () => {
   expect(testUtils.shouldRefreshLobsterAIToken(401)).toBe(true);
+  expect(testUtils.shouldRefreshLobsterAIToken(200)).toBe(false);
   expect(testUtils.shouldRefreshLobsterAIToken(403)).toBe(false);
 });
 
@@ -98,6 +99,15 @@ test('extracts LobsterAI monthly quota error from proxy SSE packet', () => {
   });
 });
 
+test('extracts enterprise quota error from unified non-stream response', () => {
+  expect(testUtils.extractQuotaErrorFromProxyErrorPayload(
+    JSON.stringify({ code: 41607, message: '团队积分池已用完', data: null }),
+  )).toEqual({
+    message: '团队积分池已用完',
+    code: 41607,
+  });
+});
+
 test('ignores generic HTTP 402 without LobsterAI quota code or message', () => {
   const packet = [
     'event: error',
@@ -125,6 +135,82 @@ test('scans split SSE chunks and stores a recent quota error', () => {
     code: 40202,
     capturedAt: now + 1,
   });
+});
+
+test('recognizes a structured enterprise membership revocation with numeric or string code', () => {
+  expect(testUtils.extractStructuredProxyError(
+    '{"type":"error","error":{"message":"removed","code":41602}}',
+    'error',
+  )).toEqual({ message: 'removed', code: 41602 });
+  expect(testUtils.isEnterpriseMembershipRevocationError({
+    message: 'removed',
+    code: '41602',
+  })).toBe(true);
+});
+
+test('notifies membership revocation once for an SSE error split across CRLF chunks', () => {
+  const onEnterpriseMembershipRevoked = vi.fn();
+  const requestEnterpriseSession = {
+    enterpriseId: 1001,
+    ownerAccountKey: 'enterprise:user@example.com:1001',
+    accountGeneration: 7,
+  };
+  const scanState = testUtils.createProxySSEStreamScanState(1_000, {
+    requestEnterpriseSession,
+    onEnterpriseMembershipRevoked,
+  });
+
+  let buffer = testUtils.scanProxySSEBufferForQuotaError(
+    'event: error\r\ndata: {"type":"error","error":{"message":"removed","code":"41',
+    1_001,
+    scanState,
+  );
+  buffer = testUtils.scanProxySSEBufferForQuotaError(
+    `${buffer}602"}}\r\n\r\n`,
+    1_002,
+    scanState,
+  );
+  testUtils.scanProxySSEBufferForQuotaError(
+    'event: error\ndata: {"error":{"message":"removed again","code":41602}}\n\n',
+    1_003,
+    scanState,
+  );
+
+  expect(buffer).toBe('');
+  expect(onEnterpriseMembershipRevoked).toHaveBeenCalledOnce();
+  expect(onEnterpriseMembershipRevoked).toHaveBeenCalledWith({
+    code: 41602,
+    requestSession: requestEnterpriseSession,
+  });
+  expect(scanState.terminalKind).toBe(testUtils.ProxySSETerminalKind.Error);
+});
+
+test('does not revoke enterprise membership for non-error events, malformed JSON, or quota errors', () => {
+  const onEnterpriseMembershipRevoked = vi.fn();
+  const scanState = testUtils.createProxySSEStreamScanState(1_000, {
+    requestEnterpriseSession: {
+      enterpriseId: 1001,
+      ownerAccountKey: 'enterprise:user@example.com:1001',
+      accountGeneration: 7,
+    },
+    onEnterpriseMembershipRevoked,
+  });
+
+  const packets = [
+    'event: message\ndata: {"code":41602,"message":"not an error event"}\n\n',
+    'event: error\ndata: {not-json}\n\n',
+    'event: error\ndata: {"error":{"message":"quota exhausted","code":41606}}\n\n',
+    'event: error\ndata: {"error":{"message":"pool exhausted","code":41607}}\n\n',
+    'event: error\ndata: {"error":{"message":"credits expired","code":41608}}\n\n',
+    'data: [DONE]\n\n',
+  ];
+  let buffer = '';
+  for (const packet of packets) {
+    buffer = testUtils.scanProxySSEBufferForQuotaError(buffer + packet, 1_001, scanState);
+  }
+
+  expect(buffer).toBe('');
+  expect(onEnterpriseMembershipRevoked).not.toHaveBeenCalled();
 });
 
 test('expires stale remembered quota errors', () => {
@@ -290,7 +376,7 @@ test('keeps Kimi K3 package payloads byte-for-byte transparent', () => {
   expect(testUtils.hydrateGeminiChatCompletionsBody(requestBody)).toBe(requestBody);
 });
 
-test('adds fixed capability and client version headers without trusting incoming values', () => {
+test('adds fixed capability, client version, and enterprise context headers without trusting incoming values', () => {
   expect(testUtils.buildUpstreamRequestHeaders(
     'access-token',
     {
@@ -300,12 +386,18 @@ test('adds fixed capability and client version headers without trusting incoming
       'x-lobsterai-client-version': '0.0.0',
     },
     '2026.7.23',
+    {
+      'X-LobsterAI-Account-Mode': 'enterprise',
+      'X-LobsterAI-Enterprise-Id': '1001',
+    },
   )).toEqual({
     Authorization: 'Bearer access-token',
     Accept: 'text/event-stream',
     'Content-Type': 'application/json',
     'X-LobsterAI-Client-Capabilities': 'kimi-k3-agentic-v1,thinking-level-control-v1',
     'X-LobsterAI-Client-Version': '2026.7.23',
+    'X-LobsterAI-Account-Mode': 'enterprise',
+    'X-LobsterAI-Enterprise-Id': '1001',
   });
 });
 
@@ -396,6 +488,25 @@ test('node stream: complete SSE response ends the proxied response cleanly', asy
   expect(res.destroy).not.toHaveBeenCalled();
 });
 
+test('bounds an unterminated SSE packet to avoid unbounded scan memory', () => {
+  const oversizedPacket = `data: ${'x'.repeat(1_048_576 + 128)}`;
+
+  const remaining = testUtils.scanProxySSEBufferForQuotaError(oversizedPacket);
+
+  expect(remaining).toHaveLength(1_048_576);
+  expect(remaining.endsWith('x'.repeat(128))).toBe(true);
+});
+
+test('accepts token retries only while the authenticated session key is unchanged', () => {
+  expect(testUtils.isProxySessionKeyCurrent('enterprise:6:1001:4', () => (
+    'enterprise:6:1001:4'
+  ))).toBe(true);
+  expect(testUtils.isProxySessionKeyCurrent('enterprise:6:1001:4', () => (
+    'personal:6:5'
+  ))).toBe(false);
+  expect(testUtils.isProxySessionKeyCurrent(null, null)).toBe(true);
+});
+
 test('node stream: SSE response truncated by a clean upstream end is aborted', async () => {
   const upstream = new PassThrough();
   const res = createMockProxyResponse();
@@ -440,28 +551,53 @@ test('node stream: upstream SSE error payload still passes through and ends clea
   });
 });
 
-test('node stream: classifies completion that arrives after the downstream closes', async () => {
+test('node stream: membership revocation notifies once and still terminates downstream cleanly', async () => {
   const upstream = new PassThrough();
   const res = createMockProxyResponse();
-  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const onEnterpriseMembershipRevoked = vi.fn();
+  const requestEnterpriseSession = {
+    enterpriseId: 1001,
+    ownerAccountKey: 'enterprise:user@example.com:1001',
+    accountGeneration: 7,
+  };
+
+  testUtils.pipeStreamingResponseWithQuotaScan(upstream, asServerResponse(res), {
+    requestEnterpriseSession,
+    onEnterpriseMembershipRevoked,
+  });
+  upstream.write('event: error\ndata: {"type":"error","error":{"message":"removed","code":41602}}\n\n');
+  upstream.end();
+  await flushStreamEvents();
+
+  expect(onEnterpriseMembershipRevoked).toHaveBeenCalledOnce();
+  expect(onEnterpriseMembershipRevoked).toHaveBeenCalledWith({
+    code: 41602,
+    requestSession: requestEnterpriseSession,
+  });
+  expect(res.write).toHaveBeenCalled();
+  expect(res.end).toHaveBeenCalledOnce();
+  expect(res.destroy).not.toHaveBeenCalled();
+});
+
+test('node stream: cancels the upstream when the downstream closes', async () => {
+  const upstream = new PassThrough();
+  const res = createMockProxyResponse();
+  const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
 
   try {
     testUtils.pipeStreamingResponseWithQuotaScan(upstream, asServerResponse(res));
     upstream.write('data: {"choices":[{"delta":{"content":"working"},"finish_reason":null}]}\n\n');
     res.emitClose();
-    upstream.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
-    upstream.write('data: [DONE]\n\n');
-    upstream.end();
     await flushStreamEvents();
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('outcome=late_completion_after_downstream_close'),
+    expect(upstream.destroyed).toBe(true);
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining('outcome=downstream_closed_upstream_cancelled'),
     );
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('terminal=done'));
     expect(res.end).not.toHaveBeenCalled();
     expect(res.destroy).not.toHaveBeenCalled();
   } finally {
-    warnSpy.mockRestore();
+    debugSpy.mockRestore();
   }
 });
 
@@ -505,6 +641,48 @@ test('web stream: read failure aborts the proxied response', async () => {
     expect(res.destroy).toHaveBeenCalledTimes(1);
   });
   expect(res.end).not.toHaveBeenCalled();
+});
+
+test('web stream: cancels the reader when the downstream closes', async () => {
+  const res = createMockProxyResponse();
+  const cancel = vi.fn();
+  const webStream = new ReadableStream<Uint8Array>({
+    pull() {
+      // Keep the read pending until the downstream response closes.
+    },
+    cancel,
+  });
+
+  testUtils.pipeWebReadableResponseWithQuotaScan(
+    webStream,
+    asServerResponse(res),
+    testUtils.createProxySSEStreamScanState(),
+  );
+  res.emitClose();
+
+  await vi.waitFor(() => {
+    expect(cancel).toHaveBeenCalledWith('Downstream response closed');
+  });
+  expect(res.end).not.toHaveBeenCalled();
+  expect(res.destroy).not.toHaveBeenCalled();
+});
+
+test('web stream: cancels after downstream close even when completion scanning is disabled', async () => {
+  const res = createMockProxyResponse();
+  const cancel = vi.fn();
+  const webStream = new ReadableStream<Uint8Array>({
+    pull() {
+      // Keep the read pending until the downstream response closes.
+    },
+    cancel,
+  });
+
+  testUtils.pipeWebReadableResponseWithQuotaScan(webStream, asServerResponse(res));
+  res.emitClose();
+
+  await vi.waitFor(() => {
+    expect(cancel).toHaveBeenCalledWith('Downstream response closed');
+  });
 });
 
 test('web stream: completion check is skipped when no scan state is provided', async () => {

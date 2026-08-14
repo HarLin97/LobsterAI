@@ -1,3 +1,4 @@
+import { supportsLobsterAIRequestOptionsV1 } from '@shared/providers/lobsterAIRequestOptions';
 import {
   getModelThinkingLevels,
   type ModelThinkingLevel,
@@ -72,10 +73,13 @@ export function rememberModelThinkingLevel(
  * resolve to `''`, the "not applicable" value agent records store.
  */
 export function resolveThinkingLevelForModel(
-  model: Pick<Model, 'id' | 'providerKey' | 'isServerModel' | 'thinkingConfig'> | null | undefined,
+  model: Pick<
+    Model,
+    'id' | 'providerKey' | 'isServerModel' | 'requestCapabilities' | 'thinkingConfig'
+  > | null | undefined,
 ): ModelThinkingLevel | '' {
   const config = model?.thinkingConfig;
-  if (!config) return '';
+  if (!config || !supportsLobsterAIRequestOptionsV1(model.requestCapabilities)) return '';
 
   const remembered = readRememberedModelThinkingLevel(getModelIdentityKey(model));
   return remembered && getModelThinkingLevels(config).includes(remembered)

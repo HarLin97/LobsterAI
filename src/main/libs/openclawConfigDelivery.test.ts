@@ -77,7 +77,7 @@ describe('deliverOpenClawConfigToGateway', () => {
       },
       set: (_params, callIndex) => {
         if (callIndex === 1) {
-          throw new Error('config changed since last load; re-run config.get and retry');
+          throw new Error('INVALID_REQUEST: config changed since last load; re-run config.get and retry');
         }
         return { ok: true };
       },

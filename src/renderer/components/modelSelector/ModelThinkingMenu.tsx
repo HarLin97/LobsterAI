@@ -4,7 +4,7 @@ import {
   type ModelThinkingConfig,
   ModelThinkingLevel,
 } from '@shared/providers/modelThinking';
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 
 import { i18nService } from '../../services/i18n';
 
@@ -35,6 +35,7 @@ const ModelThinkingMenu: React.FC<ModelThinkingMenuProps> = ({
   onSelect,
   onEscape,
 }) => {
+  const menuRef = useRef<HTMLDivElement>(null);
   const levels = getModelThinkingLevels(config);
   const supportsOff = levels.includes(ModelThinkingLevel.Off);
   const enabledLevels = levels.filter(level => level !== ModelThinkingLevel.Off);
@@ -43,15 +44,41 @@ const ModelThinkingMenu: React.FC<ModelThinkingMenuProps> = ({
     ? config.defaultLevel
     : enabledLevels[0];
 
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const selected = menuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]');
+      const first = menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)');
+      (selected ?? first)?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
   return (
     <div
+      ref={menuRef}
       role="menu"
       aria-label={i18nService.t('modelThinkingStrength')}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.stopPropagation();
           onEscape();
+          return;
         }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+        const items = Array.from(
+          menuRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [],
+        );
+        if (items.length === 0) return;
+        event.preventDefault();
+        const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+        const nextIndex = event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? items.length - 1
+            : event.key === 'ArrowDown'
+              ? (currentIndex + 1 + items.length) % items.length
+              : (currentIndex - 1 + items.length) % items.length;
+        items[nextIndex]?.focus();
       }}
       className="overflow-hidden rounded-xl border border-border bg-surface shadow-popover"
     >

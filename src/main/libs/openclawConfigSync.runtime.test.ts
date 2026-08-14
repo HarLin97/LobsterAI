@@ -202,6 +202,31 @@ describe('OpenClawConfigSync runtime config output', () => {
     } as never);
   };
 
+  test('keys OpenClaw skill entries by frontmatter name, not directory id', async () => {
+    const sync = await createSync({
+      // Mirrors bundled skills whose SKILL.md frontmatter name differs from
+      // the directory-derived id (see issue #2441): OpenClaw resolves
+      // skills.entries overrides by frontmatter name only.
+      getSkillsList: () => [
+        { id: 'technology-news-search', name: 'technology-search', enabled: false },
+        { id: 'remotion', name: 'remotion-best-practices', enabled: false },
+        { id: 'weather', name: 'weather', enabled: true },
+      ],
+    });
+
+    const result = sync.sync('skill-entry-keys');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.skills.entries).toMatchObject({
+      'technology-search': { enabled: false },
+      'remotion-best-practices': { enabled: false },
+      weather: { enabled: true },
+    });
+    expect(config.skills.entries).not.toHaveProperty('technology-news-search');
+    expect(config.skills.entries).not.toHaveProperty('remotion');
+  });
+
   test('writes OpenClaw config fields required by LobsterAI patches', async () => {
     const legacyWorkingDirectory = path.join(tmpDir, 'legacy-working-directory');
     const mainAgentWorkingDirectory = path.join(tmpDir, 'main-agent-working-directory');

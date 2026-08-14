@@ -21,12 +21,40 @@ const pendingAppFetches = new Map<string, Promise<AppInfo[]>>();
 const browserAppsCache = new Map<string, AppInfo[]>();
 const pendingBrowserAppFetches = new Map<string, Promise<AppInfo[]>>();
 const iconDataUrlCache = new Map<string, string>();
+const MAX_FILE_APP_CACHE_ENTRIES = 64;
+const MAX_BROWSER_APP_CACHE_ENTRIES = 32;
+const MAX_ICON_DATA_URL_CACHE_ENTRIES = 128;
+
+const getBoundedCacheEntry = <K, V>(cache: Map<K, V>, key: K): V | undefined => {
+  const value = cache.get(key);
+  if (value === undefined) return undefined;
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+};
+
+const setBoundedCacheEntry = <K, V>(
+  cache: Map<K, V>,
+  key: K,
+  value: V,
+  maxEntries: number,
+): void => {
+  // Refresh insertion order so frequently reused entries survive FIFO
+  // eviction without retaining every project or extension for process life.
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value as K | undefined;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
+};
 
 export async function getAppsForFile(filePath: string): Promise<AppInfo[]> {
   const ext = path.extname(filePath).toLowerCase();
   if (!ext) return [];
 
-  const cached = appCache.get(ext);
+  const cached = getBoundedCacheEntry(appCache, ext);
   if (cached) return cached;
 
   const pending = pendingAppFetches.get(ext);
@@ -64,15 +92,15 @@ async function fetchAppsForFile(filePath: string, ext: string): Promise<AppInfo[
     delete a.iconPath;
   }
 
-  if (apps.length > 0) {
-    appCache.set(ext, apps);
-  }
+  // Empty results are valid too. Caching them avoids repeatedly probing the
+  // OS for an unsupported extension every time an artifact card mounts.
+  setBoundedCacheEntry(appCache, ext, apps, MAX_FILE_APP_CACHE_ENTRIES);
   return apps;
 }
 
 export async function getBrowserApps(input: ShellGetBrowserAppsInput = {}): Promise<AppInfo[]> {
   const cacheKey = input.projectDirectory?.trim() || '';
-  const cached = browserAppsCache.get(cacheKey);
+  const cached = getBoundedCacheEntry(browserAppsCache, cacheKey);
   if (cached) return cached;
 
   const pending = pendingBrowserAppFetches.get(cacheKey);
@@ -102,9 +130,12 @@ async function fetchBrowserApps(input: ShellGetBrowserAppsInput, cacheKey: strin
   for (const appInfo of result) {
     delete appInfo.iconPath;
   }
-  if (result.length > 0) {
-    browserAppsCache.set(cacheKey, result);
-  }
+  setBoundedCacheEntry(
+    browserAppsCache,
+    cacheKey,
+    result,
+    MAX_BROWSER_APP_CACHE_ENTRIES,
+  );
   return result;
 }
 
@@ -761,12 +792,17 @@ async function extractIcon(appInfo: AppInfo): Promise<string | null> {
     ? appInfo.iconPath || findMacOSAppIconPath(appInfo.path)
     : undefined;
   const cacheKey = macOSIconPath || appInfo.path;
-  const cached = iconDataUrlCache.get(cacheKey);
+  const cached = getBoundedCacheEntry(iconDataUrlCache, cacheKey);
   if (cached) return cached;
   if (macOSIconPath && fs.existsSync(macOSIconPath)) {
     const png = await icnsToPng(macOSIconPath);
     if (png) {
-      iconDataUrlCache.set(cacheKey, png);
+      setBoundedCacheEntry(
+        iconDataUrlCache,
+        cacheKey,
+        png,
+        MAX_ICON_DATA_URL_CACHE_ENTRIES,
+      );
       return png;
     }
   }
@@ -778,7 +814,12 @@ async function extractIcon(appInfo: AppInfo): Promise<string | null> {
     });
     if (!img.isEmpty()) {
       const dataUrl = img.toDataURL();
-      iconDataUrlCache.set(cacheKey, dataUrl);
+      setBoundedCacheEntry(
+        iconDataUrlCache,
+        cacheKey,
+        dataUrl,
+        MAX_ICON_DATA_URL_CACHE_ENTRIES,
+      );
       return dataUrl;
     }
   } catch {

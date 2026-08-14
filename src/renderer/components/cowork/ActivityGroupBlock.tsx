@@ -69,7 +69,8 @@ const isItemLive = (item: ConsolidatedItem): boolean => {
  * Claude Code app pattern: while streaming the header mirrors the latest
  * step; once done it becomes a natural-language summary ("Ran 3 commands,
  * read 2 files"). Expanding reveals a card with one row per step, and each
- * row can be expanded again for full detail.
+ * row can be expanded again for full detail. Tool errors stay on their own
+ * step row (Codex app behavior); they do not color or expand this header.
  */
 const ActivityGroupBlock: React.FC<{
   entries: ActivityChunkEntry[];

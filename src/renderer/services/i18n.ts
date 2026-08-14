@@ -171,6 +171,18 @@ const translations: Record<LanguageType, Record<string, string>> = {
     inputFileLabel: '输入文件',
     inputFolderLabel: '输入文件夹',
     folderAttachmentType: '文件夹',
+    fileAttachmentTypeWord: 'Word 文档',
+    fileAttachmentTypeSpreadsheet: '电子表格',
+    fileAttachmentTypePresentation: '演示文稿',
+    fileAttachmentTypePdf: 'PDF 文档',
+    fileAttachmentTypeArchive: '压缩文件',
+    fileAttachmentTypeCode: '代码文件',
+    fileAttachmentTypeText: '文本文件',
+    fileAttachmentTypeSubtitle: '字幕文件',
+    fileAttachmentTypeAudio: '音频文件',
+    fileAttachmentTypeVideo: '视频文件',
+    fileAttachmentTypeImage: '图片文件',
+    fileAttachmentTypeFile: '文件',
     coworkFileAttachmentRevealHint: '点击在文件夹中显示',
     coworkFileAttachmentMissing: '文件不存在，可能已被移动或删除',
     coworkFileAttachmentRevealFailed: '无法在文件夹中显示该文件',
@@ -316,7 +328,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutOpenScheduledTasks: '打开定时任务',
     shortcutOpenKits: '打开专家套件',
     shortcutOpenSkills: '打开技能',
-    shortcutOpenMcp: '打开 MCP 服务',
+    shortcutOpenMcp: '打开连接器',
     shortcutToggleSidebar: '显示/隐藏侧边栏',
     shortcutShowShortcuts: '打开快捷键设置',
     shortcutPreviousAgent: '上一个 Agent',
@@ -335,7 +347,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutDescOpenScheduledTasks: '切换到定时任务视图',
     shortcutDescOpenKits: '切换到专家套件视图',
     shortcutDescOpenSkills: '切换到技能视图',
-    shortcutDescOpenMcp: '切换到 MCP 服务视图',
+    shortcutDescOpenMcp: '切换到连接器视图',
     shortcutDescToggleSidebar: '收起或展开左侧导航栏',
     shortcutDescSettings: '打开应用设置',
     shortcutDescShowShortcuts: '直接打开设置里的快捷键页',
@@ -347,6 +359,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutDescOpenSettingsTab: '切换到设置里的「{tab}」页',
     shortcutAgentTaskSlotUnavailable: '当前 Agent 没有第 {slot} 个任务记录',
     close: '关闭',
+    sidebarFilter: '筛选任务',
+    sidebarActivity: '任务动态',
+    sidebarActivityPriority: '优先级',
+    sidebarActivityNoPriority: '没有需要关注的任务',
+    sidebarActivityRecent: '最近',
+    sidebarActivityNoRecent: '暂无最近任务',
+    sidebarTaskOpenFailed: '打开任务失败，请重试',
+    sidebarCarouselPrevious: '上一项',
+    sidebarCarouselNext: '下一项',
     dailyCheckInRewardPerDay: '每日可领 {credits} 积分',
     dailyCheckInProgress: '本期已领 {claimed}/{total} · 累计 {credits} 积分',
     dailyCheckInClaimNow: '立即领取',
@@ -358,7 +379,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     dailyCheckInLoginHint: '登录只在 LobsterAI 客户端中完成，活动不会获取账号令牌',
     dailyCheckInLoginFailed: '暂时无法发起登录',
     dailyCheckInClaimSuccess: '已领取 {credits} 积分',
-    dailyCheckInClaimFailed: '积分领取失败，请稍后重试',
+    dailyCheckInClaimFailed: '领取失败，请重试',
+    dailyCheckInEntry: '每日积分礼',
+    dailyCheckInRewardReceived: '奖励到账啦',
+    dailyCheckInRewardCredits: '+{credits}积分',
+    dailyCheckInValidityDays: '有效期{days}天',
     startupCreditMenuEntry: '用户回馈活动',
     startupCreditClaiming: '正在领取…',
     startupCreditStartingLogin: '正在打开浏览器登录…',
@@ -395,7 +420,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authSettingsLink: '设置',
     authLoginToChat: '登录后即可开始聊天',
     authFreeLabel: 'Free',
-    authCreditsRemaining: '剩余额度',
+    authCreditsRemaining: '积分额度',
+    authPlanExpiresAt: '{date}到期',
     authCreditsUnit: '积分',
     authExpiresAt: '有效期至',
     authLearnMore: '了解更多',
@@ -420,6 +446,43 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authFinalRewardClaimSuccess: '{credits}积分领取成功，有效期至 {date}',
     authFinalRewardClaimFailed: '活动积分领取失败',
     authZeroCredits: '0积分',
+    enterpriseAccountBelongsTo: '所属团队：{name}',
+    enterpriseAccountRoleSuperAdmin: '超级管理员',
+    enterpriseAccountRoleMember: '团队身份',
+    enterpriseAccountManagement: '团队管理后台',
+    enterpriseAccountQuota: '我的额度',
+    enterpriseAccountChooseEnterprise: '选择团队',
+    enterpriseAccountEnter: '进入',
+    enterpriseAccountAdjustQuota: '调整额度',
+    enterpriseQuotaMemberTitle: '你的额度已用完',
+    enterpriseQuotaMemberMemberDesc: '向团队管理员申请提高成员额度后继续使用 LobsterAI。',
+    enterpriseQuotaMemberAdminDesc: '调整额度后继续使用 LobsterAI。',
+    enterpriseQuotaMemberInterrupt: '你已达到使用上限，请联系团队管理员。',
+    enterpriseQuotaMemberAdminInterrupt: '你已达到个人额度上限，可调整额度。',
+    enterpriseQuotaPoolTitle: '团队积分已用完',
+    enterpriseQuotaPoolMemberDesc: '通知团队管理员购买团队积分包后继续使用 LobsterAI。',
+    enterpriseQuotaPoolAdminDesc: '购买团队积分包后，团队成员可继续使用 LobsterAI。',
+    enterpriseQuotaPoolInterrupt: '团队积分已达到使用上限，请补充积分后继续。',
+    enterpriseQuotaExpiredTitle: '团队积分已过期',
+    enterpriseQuotaExpiredMemberDesc: '团队积分批次已全部过期，请联系团队管理员。',
+    enterpriseQuotaExpiredAdminDesc: '团队积分批次已全部过期，请购买团队积分包后继续使用。',
+    enterpriseQuotaPurchaseCredits: '购买团队积分包',
+    enterpriseQuotaRequestIncrease: '申请提高额度',
+    enterpriseQuotaNotifyAdmin: '通知管理员购买',
+    enterpriseQuotaRequestSubmitting: '提交中…',
+    enterpriseQuotaRequestSubmitted: '申请已提交，团队管理员会在管理后台收到通知。',
+    enterpriseQuotaRequestAlreadyPending: '申请已提交，请等待团队管理员处理。',
+    enterpriseQuotaRequestSubmittedButton: '已提交申请',
+    enterpriseQuotaRequestFailed: '额度申请提交失败，请稍后重试。',
+    enterpriseQuotaCheckAction: '检测额度',
+    enterpriseQuotaChecking: '检测中…',
+    enterpriseQuotaCheckFailed: '额度检测失败，请稍后重试。',
+    enterpriseQuotaCheckRestored: '额度已恢复，可以继续对话。',
+    enterpriseQuotaCheckUnavailable: '额度尚未恢复，请确认额度调整完成后重试。',
+    enterpriseQuotaHomeSubmitBlocked: '当前额度不足，请先处理额度问题后再创建任务。',
+    enterpriseMediaUnavailableTitle: '团队媒体服务暂不可用',
+    enterpriseMediaUnavailableDesc: '暂时无法确认当前团队的媒体权益，请重新检查或联系团队管理员。',
+    enterpriseMediaRetry: '重新检查',
     planFree: '免费',
     planStandard: '标准',
     planAdvanced: '进阶',
@@ -540,6 +603,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactNoContent: '无内容',
     artifactSourceLoading: '正在加载源码...',
     artifactSourceLoadFailed: '源码加载失败',
+    artifactSourceTooLarge: '文件过大，无法完整刷新预览',
     artifactSourceTruncated: '文件较大，仅显示前 {size}',
     markdownLargePreviewNotice: '内容较大，已显示轻量预览',
     artifactPanelToggle: '预览面板',
@@ -629,6 +693,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     htmlShareSubscriptionRequiredTitle: '开通订阅后即可分享内容',
     htmlShareSubscriptionRequiredMessage:
       '分享功能需要有效订阅。开通后即可生成分享链接，并可选择分享码或公开访问。',
+    htmlShareEnterpriseUnavailableTitle: '当前团队账号暂不可分享内容',
+    htmlShareEnterpriseUnavailableMessage:
+      '未获取到当前团队的分享权益。请重新登录后重试，或联系团队管理员。',
     htmlShareOpenSubscription: '去订阅',
     subscriptionGateOpenAction: '去订阅',
     htmlShareUnavailableInProduction: '分享功能暂不可用。',
@@ -682,6 +749,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentSubscriptionRequiredTitle: '开通订阅后即可部署网站',
     nodeDeploymentSubscriptionRequiredMessage:
       '网站部署需要有效订阅。开通后即可将本地网站部署到云端，并生成可访问链接。',
+    nodeDeploymentEnterpriseUnavailableTitle: '当前团队账号暂不可部署网站',
+    nodeDeploymentEnterpriseUnavailableMessage:
+      '未获取到当前团队的网站部署权益。请重新登录后重试，或联系团队管理员。',
     nodeDeploymentLookupFailed: '获取部署信息失败。',
     nodeDeploymentAccessStatusApplyFailed: '服务已部署，但访问状态更新失败：{message}',
     nodeDeploymentStoppedNotice: '该服务已停止',
@@ -860,9 +930,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserAnnotationsCount: '{count} 条注释',
     browserAnnotationsTitle: '浏览器注释',
     browserAnnotationsClear: '清空浏览器注释',
+    browserAnnotationsSend: '发送',
     browserAnnotationTarget_element: '元素',
     browserAnnotationTarget_region: '区域',
     browserAnnotationTarget_text: '文本',
+    browserAnnotationViewAttachment: '查看标注',
+    artifactUserAttachmentTab: '用户附件',
     artifactBrowserOpenExternal: '浏览器打开',
     artifactBrowserUrlPlaceholder: '输入 URL',
     artifactBrowserEmpty: '输入 URL 后开始浏览',
@@ -1599,6 +1672,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkConversationSearchClose: '关闭搜索',
     coworkConversationSearchLoading: '正在搜索…',
     coworkConversationSearchFailed: '无法搜索当前对话',
+    coworkConversationSearchTooLarge: '对话过大，无法完整搜索',
     coworkConversationSearchTargetUnavailable: '无法定位到该搜索结果',
     coworkConversationSearchResults: '{current} / {total} 个结果',
     coworkRemoteManagedPlaceholder: '该会话由 IM 通道创建，请在对应的 IM 平台操作',
@@ -1647,7 +1721,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkGoalPause: '暂停目标',
     coworkGoalResume: '继续目标',
     coworkGoalClear: '清除目标',
-    coworkGoalInputPlaceholder: 'LobsterAI 应继续朝哪个目标努力？',
+    coworkGoalInputPlaceholder: '描述你的目标，定义可衡量的成功，以获得最佳效果。',
     coworkGoalClearInputMode: '退出目标输入',
     coworkGoalSetAsGoal: '设为目标',
     coworkGoalCompletedIn: '已在 {duration} 内达成目标',
@@ -1667,27 +1741,24 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkPlanConfirmExecute: '确认执行',
     coworkPlanAdjust: '调整方案',
     coworkPlanConfirmExecutionPrompt: '请按刚才确认的计划开始实现。',
-    coworkSteer: '引导',
+    coworkSteer: '调整方向',
     coworkSteerExit: '退出引导输入',
     coworkSteerPlaceholder: '引导当前正在执行的任务...',
-    coworkSteerQueued: '进行中',
+    coworkSteerQueued: '排队中',
     coworkSteerInterruptTooltip: '结束当前任务并继续处理这条消息',
     coworkSteerQueueFull: '后续消息队列已满，请等待当前任务继续处理后再发送。',
     coworkSteerPending: '待引导',
     coworkSteerRejected: '引导未送达',
     coworkSteerNoActiveTurn: '当前没有可引导的运行中任务。',
     coworkSteerUnavailable: '当前版本暂不可用引导功能，请重启或更新运行时后重试。',
-    coworkBtwPending: '正在回答…',
     coworkBtwStopped: '已停止',
     coworkBtwWindowTitle: '侧边聊天',
-    coworkBtwWindowSubtitle: '临时对话，不会加入主对话记录',
     coworkBtwCloseWindow: '关闭侧边聊天',
-    coworkBtwEmptyThread: '在下方输入问题，开始临时对话。',
-    coworkBtwEmptyThreadWithSelection: '已添加所选文本，可继续输入问题或直接发送。',
+    coworkBtwClearContext: '清空上下文',
+    coworkBtwEmptyThread: '围绕当前会话随口提问：AI 能看到完整上下文，这里的问答是临时的，不会加入主对话记录。',
     coworkBtwInputPlaceholder: '输入你的问题…',
     coworkBtwSend: '发送侧边问题',
     coworkBtwStop: '停止回答',
-    coworkBtwFollowUpHint: 'Enter 发送，Shift+Enter 换行',
     coworkBtwEmptyQuestion: '请输入问题，例如：/btw 这个错误是什么意思？',
     coworkBtwMultilineUnsupported: '顺便问问暂时只支持单行问题。',
     coworkBtwRequiresSession: '请先开始一个对话，再使用 /btw 提问。',
@@ -1728,8 +1799,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkAttachmentRemove: '移除',
     coworkShareSession: '分享',
     coworkExportImageInProgress: '正在导出图片...',
+    coworkExportImagePreparing: '正在加载完整会话...',
     coworkExportImageSuccess: '图片导出成功',
     coworkExportImageFailed: '导出图片失败',
+    coworkExportImageTooLong: '会话内容过长，暂不支持导出为单张图片',
+    coworkExportImageSessionBusy: '任务正在进行中，请等待完成后再导出图片',
     coworkExportDiagnostics: '诊断包',
     coworkExportDiagnosticsDesc: '包含原始会话数据，用于问题排查',
     coworkExportDiagnosticsSuccess: '诊断包导出成功',
@@ -1801,6 +1875,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork 错误消息
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请在设置中检查并更新您的 API 密钥。',
+    coworkErrorEnterpriseMembershipRevoked: '你已被移出当前团队，已退出登录。请重新登录并选择可用身份。',
     coworkErrorLobsterAILoginExpired: '登录状态已过期，请重新登录后继续使用 LobsterAI 套餐模型。',
     coworkErrorOAuthInvalid: 'OAuth 授权已失效或权限不足，请重新授权后重试。',
     coworkErrorModelAccessDenied: '当前账号无权访问该模型，请切换模型或检查服务商账号权限。',
@@ -1869,6 +1944,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skills
     skills: '技能',
+    skillsAndConnectors: '技能与连接器',
+    connectors: '连接器',
     useSkill: '使用技能',
     searchSkills: '搜索技能',
     manageSkills: '管理技能',
@@ -1905,13 +1982,27 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noSkillsAvailable: '暂无可用技能',
     skillsDescription: '为您的智能体提供预封装且可重复的最佳实践与工具',
     skillInstalled: '已安装',
-    skillMarketplace: '技能市场',
+    skillMarketplace: '市场',
     skillMarketplaceEmpty: '暂无可用技能',
     skillCategoryAll: '全部',
     skillInstall: '安装',
     skillInstalling: '安装中',
     skillInstallFailed: '安装失败',
     skillAlreadyInstalled: '已安装',
+    skillDetailId: '标识',
+    skillDetailCategory: '类别',
+    skillDetailUpdated: '更新',
+    skillDetailAbout: '简介',
+    skillDetailInfo: '信息',
+    skillDetailProject: '项目地址',
+    skillUse: '使用',
+    moreActions: '更多操作',
+    skillGroupMine: '我的',
+    skillGroupBuiltIn: '内置',
+    skillOriginMine: '我的',
+    skillOriginBuiltIn: '内置',
+    skillGroupMineEmptyHint: '还没有自己的技能，可以从这里开始',
+    skillGroupMineEmptyMarket: '从市场安装',
 
     // Security scan
     lobsterGuardEnabled: '安全防护中',
@@ -2204,7 +2295,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     refresh: '刷新',
     mcpDescription: '配置和管理 MCP（Model Context Protocol）服务器，为您的智能体扩展工具能力',
     searchMcpServers: '搜索 MCP 服务',
-    addMcpServer: '自定义',
+    addMcpServer: '添加 MCP 服务',
+    mcpAddServer: '添加',
     editMcpServer: '编辑 MCP 服务',
     deleteMcpServer: '删除 MCP 服务',
     mcpServerName: '服务名称',
@@ -2263,12 +2355,28 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpAuthorized: '已授权',
     mcpMarketplace: '市场',
     mcpCustom: '自定义',
-    mcpCustomDescription: '手动配置 MCP 服务器',
     mcpResetForm: '重置',
     mcpInstall: '安装',
     mcpUninstall: '卸载',
     mcpRegistryDeleteConfirm: '确定卸载"{name}"并删除其所有 MCP 服务吗？',
     mcpServersCount: '{count} 个服务',
+    mcpDetailAbout: '简介',
+    mcpDetailInfo: '信息',
+    mcpDetailStatus: '状态',
+    mcpDetailTransport: '传输',
+    mcpDetailSource: '来源',
+    mcpDetailCategory: '分类',
+    mcpDetailCommand: '命令',
+    mcpDetailUrl: '地址',
+    mcpDetailEnvKeys: '环境变量',
+    mcpDetailHeaders: '请求头',
+    mcpDetailRequiredKeys: '必填密钥',
+    mcpDetailOptionalKeys: '可选密钥',
+    mcpDetailLaunch: '启动',
+    mcpDetailId: '标识',
+    mcpDetailServers: '服务数',
+    mcpDetailIncluded: '包含服务',
+    mcpSourceMarketplace: '市场',
     mcpInstallFromUrl: '通过 URL 安装',
     mcpInstallFromUrlTitle: '通过 URL 安装 MCP',
     mcpInstallFromUrlPlaceholder: '输入 npm 包名或 URL',
@@ -2283,6 +2391,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpOptionalConfig: '可选配置',
     mcpViewOnGithub: '在 GitHub 上查看',
     mcpNoInstalledServers: '尚未安装任何 MCP 服务',
+    mcpInstalledEmptyHint: '还没有 MCP 服务，可以从这里开始',
+    mcpInstalledEmptyMarket: '从市场安装',
     mcpCategoryAll: '全部',
     mcpCategorySearch: '搜索',
     mcpCategoryBrowser: '浏览器',
@@ -2290,20 +2400,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpCategoryProductivity: '效率工具',
     mcpCategoryDesign: '设计',
     mcpCategoryDataApi: '数据 & API',
-    mcpDesc_tavily: '实时网页搜索、智能数据提取和网站爬取',
-    mcpDesc_github: 'GitHub 平台集成：仓库、Issues、PR、Actions 管理',
-    mcpDesc_gitlab: 'GitLab API 集成：项目管理、合并请求、流水线',
-    mcpDesc_context7: '为 AI 编程提供最新的库文档和代码示例',
-    mcpDesc_google_drive: 'Google Drive 文件访问和搜索，自动导出 Workspace 文件',
-    mcpDesc_gmail: 'Gmail 邮件管理：读取、发送、搜索邮件，支持自动认证',
-    mcpDesc_google_calendar: 'Google Calendar 日程管理：创建、查询、更新日历事件',
-    mcpDesc_notion: 'Notion API：搜索、创建/更新页面、管理数据库',
-    mcpDesc_slack: 'Slack 工作区：频道管理、消息发送、用户查询',
-    mcpDesc_todoist: '任务管理：创建、更新、完成和组织待办事项',
-    mcpDesc_playwright: '高级浏览器自动化，支持 Chromium/Firefox/WebKit',
-    mcpDesc_canva: 'Canva 设计平台：创建和管理设计、模板操作',
-    mcpDesc_firecrawl: '网页抓取与数据提取：支持批处理、结构化提取和内容分析',
-    mcpDesc_fetch: '网页内容抓取和 HTML 转 Markdown，适合 LLM 消费',
     mcpDesc_qichacha:
       '通过企查查账号授权，自动配置企业工商、风险、知识产权、经营、人员和历史存档 MCP 服务',
 
@@ -2348,6 +2444,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     fileMenuSaveAs: '另存为…',
     fileMenuCopyPath: '复制路径',
     fileMenuCopyContents: '复制文件内容',
+    fileMenuCopyContentsTooLarge: '文件过大，未复制，以避免只复制部分内容',
     fileMenuCopyImage: '复制图片',
     fileMenuRevealFinder: '在 Finder 中显示',
     fileMenuRevealExplorer: '在文件资源管理器中显示',
@@ -3460,6 +3557,18 @@ const translations: Record<LanguageType, Record<string, string>> = {
     inputFileLabel: 'Input Files',
     inputFolderLabel: 'Input Folder',
     folderAttachmentType: 'Folder',
+    fileAttachmentTypeWord: 'Word document',
+    fileAttachmentTypeSpreadsheet: 'Spreadsheet',
+    fileAttachmentTypePresentation: 'Presentation',
+    fileAttachmentTypePdf: 'PDF document',
+    fileAttachmentTypeArchive: 'Archive',
+    fileAttachmentTypeCode: 'Code file',
+    fileAttachmentTypeText: 'Text file',
+    fileAttachmentTypeSubtitle: 'Subtitle file',
+    fileAttachmentTypeAudio: 'Audio file',
+    fileAttachmentTypeVideo: 'Video file',
+    fileAttachmentTypeImage: 'Image file',
+    fileAttachmentTypeFile: 'File',
     coworkFileAttachmentRevealHint: 'Click to reveal in folder',
     coworkFileAttachmentMissing: 'File not found. It may have been moved or deleted.',
     coworkFileAttachmentRevealFailed: 'Could not reveal this file in its folder.',
@@ -3635,7 +3744,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutOpenScheduledTasks: 'Open Scheduled Tasks',
     shortcutOpenKits: 'Open Kits',
     shortcutOpenSkills: 'Open Skills',
-    shortcutOpenMcp: 'Open MCP Servers',
+    shortcutOpenMcp: 'Open Connectors',
     shortcutToggleSidebar: 'Show or Hide Sidebar',
     shortcutShowShortcuts: 'Open Shortcut Settings',
     shortcutPreviousAgent: 'Previous Agent',
@@ -3654,7 +3763,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutDescOpenScheduledTasks: 'Switch to the scheduled tasks view',
     shortcutDescOpenKits: 'Switch to the kits view',
     shortcutDescOpenSkills: 'Switch to the skills view',
-    shortcutDescOpenMcp: 'Switch to the MCP servers view',
+    shortcutDescOpenMcp: 'Switch to the Connectors view',
     shortcutDescToggleSidebar: 'Collapse or expand the left navigation sidebar',
     shortcutDescSettings: 'Open app settings',
     shortcutDescShowShortcuts: 'Open the shortcuts tab in settings directly',
@@ -3666,6 +3775,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     shortcutDescOpenSettingsTab: 'Switch to the {tab} tab in settings',
     shortcutAgentTaskSlotUnavailable: 'The current agent does not have task {slot}',
     close: 'Close',
+    sidebarFilter: 'Filter tasks',
+    sidebarActivity: 'Task activity',
+    sidebarActivityPriority: 'Priority',
+    sidebarActivityNoPriority: 'No tasks need your attention',
+    sidebarActivityRecent: 'Recent',
+    sidebarActivityNoRecent: 'No recent tasks',
+    sidebarTaskOpenFailed: 'Failed to open the task. Please try again.',
+    sidebarCarouselPrevious: 'Previous item',
+    sidebarCarouselNext: 'Next item',
     dailyCheckInRewardPerDay: 'Claim {credits} credits daily',
     dailyCheckInProgress: '{claimed}/{total} claimed · {credits} credits in total',
     dailyCheckInClaimNow: 'Claim now',
@@ -3677,7 +3795,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     dailyCheckInLoginHint: 'Login is handled by LobsterAI; the activity never receives account tokens',
     dailyCheckInLoginFailed: 'Unable to start login',
     dailyCheckInClaimSuccess: '{credits} credits claimed',
-    dailyCheckInClaimFailed: 'Unable to claim credits. Please try again later.',
+    dailyCheckInClaimFailed: 'Unable to claim credits. Please try again.',
+    dailyCheckInEntry: 'Daily credit gift',
+    dailyCheckInRewardReceived: 'Reward received',
+    dailyCheckInRewardCredits: '+{credits} credits',
+    dailyCheckInValidityDays: 'Valid for {days} days',
     startupCreditMenuEntry: 'User reward campaign',
     startupCreditClaiming: 'Claiming…',
     startupCreditStartingLogin: 'Opening browser login…',
@@ -3714,7 +3836,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authSettingsLink: 'Settings',
     authLoginToChat: 'Log in to start chatting',
     authFreeLabel: 'Free',
-    authCreditsRemaining: 'Credits Remaining',
+    authCreditsRemaining: 'Credit balance',
+    authPlanExpiresAt: 'Expires {date}',
     authCreditsUnit: 'credits',
     authExpiresAt: 'Expires',
     authLearnMore: 'Learn More',
@@ -3739,6 +3862,43 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authFinalRewardClaimSuccess: '{credits} credits claimed. Valid until {date}',
     authFinalRewardClaimFailed: 'Failed to claim campaign credits',
     authZeroCredits: '0 credits',
+    enterpriseAccountBelongsTo: 'Team: {name}',
+    enterpriseAccountRoleSuperAdmin: 'Super administrator',
+    enterpriseAccountRoleMember: 'Team identity',
+    enterpriseAccountManagement: 'Team admin',
+    enterpriseAccountQuota: 'My quota',
+    enterpriseAccountChooseEnterprise: 'Choose a team',
+    enterpriseAccountEnter: 'Open',
+    enterpriseAccountAdjustQuota: 'Adjust quota',
+    enterpriseQuotaMemberTitle: 'Your quota has been used up',
+    enterpriseQuotaMemberMemberDesc: 'Request a higher member quota from your team administrator to continue using LobsterAI.',
+    enterpriseQuotaMemberAdminDesc: 'Adjust your quota to continue using LobsterAI.',
+    enterpriseQuotaMemberInterrupt: 'You have reached your usage limit. Contact your team administrator.',
+    enterpriseQuotaMemberAdminInterrupt: 'You have reached your personal quota. You can adjust it.',
+    enterpriseQuotaPoolTitle: 'Team credits have been used up',
+    enterpriseQuotaPoolMemberDesc: 'Notify your team administrator to purchase a Team credit pack and continue using LobsterAI.',
+    enterpriseQuotaPoolAdminDesc: 'Purchase a Team credit pack so members can continue using LobsterAI.',
+    enterpriseQuotaPoolInterrupt: 'Team credits have reached the limit. Add credits to continue.',
+    enterpriseQuotaExpiredTitle: 'Team credits have expired',
+    enterpriseQuotaExpiredMemberDesc: 'All Team credit batches have expired. Contact your team administrator.',
+    enterpriseQuotaExpiredAdminDesc: 'All Team credit batches have expired. Purchase a Team credit pack to continue.',
+    enterpriseQuotaPurchaseCredits: 'Purchase a Team credit pack',
+    enterpriseQuotaRequestIncrease: 'Request a higher quota',
+    enterpriseQuotaNotifyAdmin: 'Notify administrator',
+    enterpriseQuotaRequestSubmitting: 'Submitting…',
+    enterpriseQuotaRequestSubmitted: 'Request submitted. Your team administrator will be notified.',
+    enterpriseQuotaRequestAlreadyPending: 'A request is already pending. Please wait for your administrator.',
+    enterpriseQuotaRequestSubmittedButton: 'Request submitted',
+    enterpriseQuotaRequestFailed: 'Failed to submit the quota request. Please try again later.',
+    enterpriseQuotaCheckAction: 'Check quota',
+    enterpriseQuotaChecking: 'Checking…',
+    enterpriseQuotaCheckFailed: 'Failed to check quota. Please try again later.',
+    enterpriseQuotaCheckRestored: 'Quota restored. You can continue the conversation.',
+    enterpriseQuotaCheckUnavailable: 'Quota is still unavailable. Confirm the adjustment is complete and try again.',
+    enterpriseQuotaHomeSubmitBlocked: 'Your current quota is unavailable. Resolve it before creating a task.',
+    enterpriseMediaUnavailableTitle: 'Team media is unavailable',
+    enterpriseMediaUnavailableDesc: 'Unable to verify media access for this team. Try again or contact your administrator.',
+    enterpriseMediaRetry: 'Check again',
     planFree: 'Free',
     planStandard: 'Standard',
     planAdvanced: 'Advanced',
@@ -3863,6 +4023,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactNoContent: 'No content',
     artifactSourceLoading: 'Loading source...',
     artifactSourceLoadFailed: 'Failed to load source',
+    artifactSourceTooLarge: 'The file is too large to refresh the preview completely',
     artifactSourceTruncated: 'Large file, showing the first {size}',
     markdownLargePreviewNotice: 'Large content, showing a lightweight preview',
     artifactPanelToggle: 'Artifacts',
@@ -3960,6 +4121,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     htmlShareSubscriptionRequiredTitle: 'Subscribe to share content',
     htmlShareSubscriptionRequiredMessage:
       'Sharing requires an active subscription. After subscribing, you can create links with share-code or public access.',
+    htmlShareEnterpriseUnavailableTitle: 'Sharing is unavailable for this team account',
+    htmlShareEnterpriseUnavailableMessage:
+      'Sharing entitlement was not available for the current team. Sign in again or contact your team administrator.',
     htmlShareOpenSubscription: 'View subscription',
     subscriptionGateOpenAction: 'View subscription',
     htmlShareUnavailableInProduction: 'Sharing is currently unavailable.',
@@ -4019,6 +4183,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nodeDeploymentSubscriptionRequiredTitle: 'Subscribe to deploy a website',
     nodeDeploymentSubscriptionRequiredMessage:
       'Website deployment requires an active subscription. After subscribing, you can deploy a local website to the cloud and get an access link.',
+    nodeDeploymentEnterpriseUnavailableTitle: 'Deployment is unavailable for this team account',
+    nodeDeploymentEnterpriseUnavailableMessage:
+      'Deployment entitlement was not available for the current team. Sign in again or contact your team administrator.',
     nodeDeploymentLookupFailed: 'Failed to load deployment information.',
     nodeDeploymentAccessStatusApplyFailed:
       'The service was deployed, but its access status could not be updated: {message}',
@@ -4210,9 +4377,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserAnnotationsCount: '{count} annotations',
     browserAnnotationsTitle: 'Browser annotations',
     browserAnnotationsClear: 'Clear browser annotations',
+    browserAnnotationsSend: 'Send',
     browserAnnotationTarget_element: 'Element',
     browserAnnotationTarget_region: 'Region',
     browserAnnotationTarget_text: 'Text',
+    browserAnnotationViewAttachment: 'View annotation',
+    artifactUserAttachmentTab: 'User attachments',
     artifactBrowserOpenExternal: 'Open in browser',
     artifactBrowserUrlPlaceholder: 'Enter URL',
     artifactBrowserEmpty: 'Enter a URL to start browsing',
@@ -4989,6 +5159,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkConversationSearchClose: 'Close search',
     coworkConversationSearchLoading: 'Searching…',
     coworkConversationSearchFailed: 'Unable to search this conversation',
+    coworkConversationSearchTooLarge: 'This conversation is too large to search completely',
     coworkConversationSearchTargetUnavailable: 'Unable to navigate to this search result',
     coworkConversationSearchResults: '{current} / {total} results',
     coworkRemoteManagedPlaceholder:
@@ -5039,7 +5210,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkGoalPause: 'Pause goal',
     coworkGoalResume: 'Resume goal',
     coworkGoalClear: 'Clear goal',
-    coworkGoalInputPlaceholder: 'What goal should LobsterAI keep working toward?',
+    coworkGoalInputPlaceholder: 'Describe your goal and define measurable success for best results.',
     coworkGoalClearInputMode: 'Exit goal input',
     coworkGoalSetAsGoal: 'Set as goal',
     coworkGoalCompletedIn: 'Goal achieved in {duration}',
@@ -5071,18 +5242,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkSteerNoActiveTurn: 'There is no active task to steer.',
     coworkSteerUnavailable:
       'Steer is unavailable in this runtime. Restart or update the runtime and try again.',
-    coworkBtwPending: 'Answering…',
     coworkBtwStopped: 'Stopped',
     coworkBtwWindowTitle: 'Side chat',
-    coworkBtwWindowSubtitle: 'Temporary and not added to the main conversation',
     coworkBtwCloseWindow: 'Close side chat',
-    coworkBtwEmptyThread: 'Enter a question below to start a temporary conversation.',
-    coworkBtwEmptyThreadWithSelection:
-      'Selected text added. Ask a question or send it directly.',
+    coworkBtwClearContext: 'Clear context',
+    coworkBtwEmptyThread:
+      'Chat about this session on the side. The AI sees the full context, and nothing here is added to the main conversation.',
     coworkBtwInputPlaceholder: 'Ask a question…',
     coworkBtwSend: 'Send side question',
     coworkBtwStop: 'Stop answer',
-    coworkBtwFollowUpHint: 'Enter to send, Shift+Enter for a new line',
     coworkBtwEmptyQuestion: 'Enter a question, for example: /btw What does this error mean?',
     coworkBtwMultilineUnsupported: 'BTW side questions currently support one line only.',
     coworkBtwRequiresSession: 'Start a conversation before asking a /btw side question.',
@@ -5125,8 +5293,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkAttachmentRemove: 'Remove',
     coworkShareSession: 'Share',
     coworkExportImageInProgress: 'Exporting image...',
+    coworkExportImagePreparing: 'Loading the full conversation...',
     coworkExportImageSuccess: 'Image exported successfully',
     coworkExportImageFailed: 'Failed to export image',
+    coworkExportImageTooLong: 'This conversation is too long to export as a single image',
+    coworkExportImageSessionBusy: 'The task is still running. Export the image after it finishes.',
     coworkExportDiagnostics: 'Diagnostics package',
     coworkExportDiagnosticsDesc: 'Raw session data for troubleshooting',
     coworkExportDiagnosticsSuccess: 'Diagnostics package exported',
@@ -5206,6 +5377,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Cowork error messages
     coworkErrorAuthInvalid:
       'Invalid or expired API key. Please check and update your API key in settings.',
+    coworkErrorEnterpriseMembershipRevoked:
+      'You have been removed from the current team and signed out. Sign in again to choose an available identity.',
     coworkErrorLobsterAILoginExpired:
       'Your login session has expired. Sign in again to continue using LobsterAI plan models.',
     coworkErrorOAuthInvalid:
@@ -5289,6 +5462,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skills
     skills: 'Skills',
+    skillsAndConnectors: 'Skills & Connectors',
+    connectors: 'Connectors',
     useSkill: 'Use Skill',
     searchSkills: 'Search skills',
     manageSkills: 'Manage Skills',
@@ -5327,13 +5502,27 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noSkillsAvailable: 'No skills available',
     skillsDescription: 'Pre-packaged best practices and tools for your AI agent',
     skillInstalled: 'Installed',
-    skillMarketplace: 'Marketplace',
+    skillMarketplace: 'Market',
     skillMarketplaceEmpty: 'No skills available yet',
     skillCategoryAll: 'All',
     skillInstall: 'Install',
     skillInstalling: 'Installing',
     skillInstallFailed: 'Install failed',
     skillAlreadyInstalled: 'Installed',
+    skillDetailId: 'ID',
+    skillDetailCategory: 'Category',
+    skillDetailUpdated: 'Updated',
+    skillDetailAbout: 'About',
+    skillDetailInfo: 'Information',
+    skillDetailProject: 'Project',
+    skillUse: 'Use',
+    moreActions: 'More actions',
+    skillGroupMine: 'Mine',
+    skillGroupBuiltIn: 'Built-in',
+    skillOriginMine: 'Mine',
+    skillOriginBuiltIn: 'Built-in',
+    skillGroupMineEmptyHint: 'No skills of your own yet — start here',
+    skillGroupMineEmptyMarket: 'Install from Marketplace',
 
     // Security scan
     lobsterGuardEnabled: 'Security Active',
@@ -5645,7 +5834,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpDescription:
       "Configure and manage MCP (Model Context Protocol) servers to extend your agent's tool capabilities",
     searchMcpServers: 'Search MCP servers',
-    addMcpServer: 'Custom',
+    addMcpServer: 'Add MCP Server',
+    mcpAddServer: 'Add',
     editMcpServer: 'Edit MCP Server',
     deleteMcpServer: 'Delete MCP Server',
     mcpServerName: 'Server Name',
@@ -5704,12 +5894,28 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpAuthorized: 'Authorized',
     mcpMarketplace: 'Marketplace',
     mcpCustom: 'Custom',
-    mcpCustomDescription: 'Manually configure an MCP server',
     mcpResetForm: 'Reset',
     mcpInstall: 'Install',
     mcpUninstall: 'Uninstall',
     mcpRegistryDeleteConfirm: 'Uninstall "{name}" and delete all of its MCP servers?',
     mcpServersCount: '{count} servers',
+    mcpDetailAbout: 'About',
+    mcpDetailInfo: 'Information',
+    mcpDetailStatus: 'Status',
+    mcpDetailTransport: 'Transport',
+    mcpDetailSource: 'Source',
+    mcpDetailCategory: 'Category',
+    mcpDetailCommand: 'Command',
+    mcpDetailUrl: 'URL',
+    mcpDetailEnvKeys: 'Env vars',
+    mcpDetailHeaders: 'Headers',
+    mcpDetailRequiredKeys: 'Required keys',
+    mcpDetailOptionalKeys: 'Optional keys',
+    mcpDetailLaunch: 'Launch',
+    mcpDetailId: 'ID',
+    mcpDetailServers: 'Servers',
+    mcpDetailIncluded: 'Included',
+    mcpSourceMarketplace: 'Marketplace',
     mcpInstallFromUrl: 'Install from URL',
     mcpInstallFromUrlTitle: 'Install MCP from URL',
     mcpInstallFromUrlPlaceholder: 'Enter npm package name or URL',
@@ -5724,6 +5930,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpOptionalConfig: 'Optional Configuration',
     mcpViewOnGithub: 'View on GitHub',
     mcpNoInstalledServers: 'No MCP servers installed yet',
+    mcpInstalledEmptyHint: 'No MCP servers yet — start here',
+    mcpInstalledEmptyMarket: 'Install from Marketplace',
     mcpCategoryAll: 'All',
     mcpCategorySearch: 'Search',
     mcpCategoryBrowser: 'Browser',
@@ -5731,22 +5939,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpCategoryProductivity: 'Productivity',
     mcpCategoryDesign: 'Design',
     mcpCategoryDataApi: 'Data & API',
-    mcpDesc_tavily: 'Real-time web search, intelligent data extraction and web crawling',
-    mcpDesc_github: 'GitHub platform integration: repos, issues, PRs, Actions management',
-    mcpDesc_gitlab: 'GitLab API integration: project management, merge requests, pipelines',
-    mcpDesc_context7: 'Up-to-date library documentation and code examples for AI coding',
-    mcpDesc_google_drive:
-      'Google Drive file access and search with auto-export for Workspace files',
-    mcpDesc_gmail: 'Gmail management: read, send, search emails with auto authentication',
-    mcpDesc_google_calendar: 'Google Calendar management: create, query, update calendar events',
-    mcpDesc_notion: 'Notion API: search, create/update pages, manage databases',
-    mcpDesc_slack: 'Slack workspace: channel management, messaging, user queries',
-    mcpDesc_todoist: 'Task management: create, update, complete and organize to-do items',
-    mcpDesc_playwright: 'Advanced browser automation supporting Chromium/Firefox/WebKit',
-    mcpDesc_canva: 'Canva design platform: create and manage designs, template operations',
-    mcpDesc_firecrawl:
-      'Web scraping and data extraction: batch processing, structured extraction and content analysis',
-    mcpDesc_fetch: 'Web content fetching and HTML-to-markdown conversion for LLM consumption',
     mcpDesc_qichacha:
       'Authorize with a Qichacha account to configure company, risk, IP, operation, executive and history MCP servers automatically',
 
@@ -5794,6 +5986,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     fileMenuSaveAs: 'Save As…',
     fileMenuCopyPath: 'Copy Path',
     fileMenuCopyContents: 'Copy File Contents',
+    fileMenuCopyContentsTooLarge: 'File is too large and was not copied, to avoid copying partial content',
     fileMenuCopyImage: 'Copy Image',
     fileMenuRevealFinder: 'Reveal in Finder',
     fileMenuRevealExplorer: 'Reveal in File Explorer',
@@ -6820,6 +7013,7 @@ const readLanguageHint = (): LanguageType => {
 class I18nService {
   private currentLanguage: LanguageType = 'zh';
   private listeners = new Set<() => void>();
+  private initializeGeneration = 0;
 
   constructor() {
     this.currentLanguage = readLanguageHint();
@@ -6827,6 +7021,10 @@ class I18nService {
 
   // 初始化语言设置
   async initialize(): Promise<void> {
+    const initializeGeneration = ++this.initializeGeneration;
+    let nextLanguage: LanguageType = 'en';
+    let configUpdate: { language?: LanguageType; language_initialized?: boolean } | undefined;
+
     try {
       const config = configService.getConfig();
 
@@ -6841,10 +7039,10 @@ class I18nService {
         if (hasCustomLanguage) {
           // 旧用户已手动设置过语言(非默认值),保留他们的设置
           console.log(`[i18n] Legacy user detected with custom language: ${config.language}`);
-          this.currentLanguage = config.language;
-          configService.updateConfig({
+          nextLanguage = config.language;
+          configUpdate = {
             language_initialized: true,
-          });
+          };
         } else {
           // 新用户或使用默认中文的旧用户:检测系统语言
           try {
@@ -6855,41 +7053,64 @@ class I18nService {
               `[i18n] First run detected. System locale: ${systemLocale}, default language: ${defaultLanguage}`,
             );
 
-            this.currentLanguage = defaultLanguage;
+            nextLanguage = defaultLanguage;
 
             // 保存语言配置和初始化标记
-            configService.updateConfig({
+            configUpdate = {
               language: defaultLanguage,
               language_initialized: true,
-            });
+            };
           } catch (error) {
-            console.error('Failed to get system locale:', error);
+            console.error('[i18n] Failed to get system locale:', error);
             // 如果获取系统语言失败,默认使用英文
-            this.currentLanguage = 'en';
-            configService.updateConfig({
+            nextLanguage = 'en';
+            configUpdate = {
               language: 'en',
               language_initialized: true,
-            });
+            };
           }
         }
       } else {
         // 非首次启动:使用已保存的语言配置
         if (config.language && (config.language === 'zh' || config.language === 'en')) {
-          this.currentLanguage = config.language;
+          nextLanguage = config.language;
         } else {
           // 如果配置无效,fallback 到英文
-          this.currentLanguage = 'en';
-          configService.updateConfig({
+          nextLanguage = 'en';
+          configUpdate = {
             language: 'en',
-          });
+          };
         }
       }
     } catch (error) {
-      console.error('Failed to initialize language:', error);
+      console.error('[i18n] Failed to initialize language:', error);
       // 默认使用英文
-      this.currentLanguage = 'en';
+      nextLanguage = 'en';
     }
-    this.persistLanguageHint(this.currentLanguage);
+
+    // App may start a fresh attempt after timing out an IPC call. Only the
+    // newest invocation may change language, persistence, or the splash hint.
+    if (initializeGeneration !== this.initializeGeneration) {
+      return;
+    }
+
+    this.applyLanguage(nextLanguage);
+    this.persistLanguageHint(nextLanguage);
+    if (configUpdate) {
+      try {
+        await configService.updateConfig(configUpdate);
+      } catch (error) {
+        console.error('[i18n] Failed to persist initialized language:', error);
+      }
+    }
+  }
+
+  private applyLanguage(language: LanguageType): void {
+    const hasChanged = this.currentLanguage !== language;
+    this.currentLanguage = language;
+    if (hasChanged) {
+      this.listeners.forEach(listener => listener());
+    }
   }
 
   // 持久化语言提示，供 index.html 的启动屏在下次启动时读取
@@ -6912,30 +7133,24 @@ class I18nService {
 
   // 设置语言
   setLanguage(language: LanguageType, options: { persist?: boolean } = {}): void {
+    // Explicit repair/user choices supersede any locale lookup that is still
+    // in flight from degraded startup.
+    this.initializeGeneration += 1;
     const { persist = true } = options;
-    const hasChanged = this.currentLanguage !== language;
-    this.currentLanguage = language;
+    this.applyLanguage(language);
 
-    if (hasChanged) {
-      this.listeners.forEach(listener => listener());
-    }
+    // The lightweight splash hint is safe to refresh even when callers are
+    // applying already-persisted config and must avoid another config write.
+    this.persistLanguageHint(language);
 
     if (!persist) {
       return;
     }
 
-    this.persistLanguageHint(language);
-
-    // 更新配置
-    try {
-      const config = configService.getConfig();
-      configService.updateConfig({
-        ...config,
-        language,
-      });
-    } catch (error) {
-      console.error('Failed to save language setting:', error);
-    }
+    // 更新配置；只提交语言字段，避免用旧快照覆盖并发设置修改。
+    void configService.updateConfig({ language }).catch((error) => {
+      console.error('[i18n] Failed to save language setting:', error);
+    });
   }
 
   // 获取当前语言

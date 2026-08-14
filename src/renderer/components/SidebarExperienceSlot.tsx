@@ -1,160 +1,144 @@
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+} from '@heroicons/react/24/outline';
 import React, {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useRef,
+  useMemo,
   useState,
 } from 'react';
-import { useSelector } from 'react-redux';
 
 import { i18nService } from '../services/i18n';
-import type { RootState } from '../store';
-import {
-  DailyCheckInLoginModal,
-  DailyCheckInSidebarCard,
-} from './DailyCheckInActivity';
-import { shouldShowDailyCheckInSidebar } from './dailyCheckInActivityState';
+import { startDailyCheckInAutoRefresh } from './dailyCheckInAutoRefresh';
 import SidebarAdBanner from './SidebarAdBanner';
-import { useDailyCheckInActivity } from './useDailyCheckInActivity';
+import {
+  type ClientBanner,
+  getSidebarBannerVersion,
+} from './sidebarAdBannerState';
+import {
+  getAdjacentSidebarCarouselKey,
+  resolveSidebarCarouselIndex,
+  shouldShowSidebarCarouselControls,
+} from './sidebarExperienceCarouselState';
+import { useSidebarAdBanners } from './useSidebarAdBanners';
 
 interface SidebarExperienceSlotProps {
   hidden?: boolean;
   onVisibleChange?: (visible: boolean) => void;
 }
 
-const SIDEBAR_DISMISS_KEY_PREFIX = 'daily_check_in_sidebar_session_dismissed';
-const CLAIM_SUCCESS_DURATION_MS = 1200;
+interface BannerExperienceItem {
+  key: string;
+  banner: ClientBanner;
+}
 
-const getSidebarDismissKey = (
-  activityCode: string,
-  configRevision: number,
-): string => (
-  `${SIDEBAR_DISMISS_KEY_PREFIX}.${activityCode}.${configRevision}`
-);
+const SIDEBAR_BANNER_ROTATION_MS = 5000;
 
 const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
   hidden = false,
   onVisibleChange,
 }) => {
-  const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
   const {
-    snapshot,
+    visibleBanners,
     loading,
-    claiming,
-    claim,
-  } = useDailyCheckInActivity();
-  const [dismissed, setDismissed] = useState(false);
-  const [loginModalOpen, setLoginModalOpen] = useState(false);
-  const [successCredits, setSuccessCredits] = useState<number | null>(null);
-  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dismissKey = snapshot
-    ? getSidebarDismissKey(
-      snapshot.descriptor.activityCode,
-      snapshot.descriptor.configRevision,
-    )
-    : null;
-
-  useEffect(() => () => {
-    if (successTimerRef.current) clearTimeout(successTimerRef.current);
-  }, []);
+    refresh,
+    dismissGroup,
+  } = useSidebarAdBanners();
+  const [activeItemKey, setActiveItemKey] = useState<string | null>(null);
+  const items = useMemo<BannerExperienceItem[]>(
+    () => visibleBanners.map(banner => ({
+      key: `banner:${getSidebarBannerVersion(banner)}`,
+      banner,
+    })),
+    [visibleBanners],
+  );
+  const itemKeys = useMemo(
+    () => items.map(item => item.key),
+    [items],
+  );
+  const activeIndex = resolveSidebarCarouselIndex(itemKeys, activeItemKey);
+  const activeItem = activeIndex >= 0 ? items[activeIndex] : null;
+  const resolvedActiveItemKey = activeItem?.key ?? null;
+  const showCarouselControls = shouldShowSidebarCarouselControls(items.length);
+  const displayed = Boolean(!hidden && !loading && activeItem);
 
   useEffect(() => {
-    if (hidden || isLoggedIn) setLoginModalOpen(false);
-  }, [hidden, isLoggedIn]);
+    setActiveItemKey(currentKey => (
+      currentKey === resolvedActiveItemKey
+        ? currentKey
+        : resolvedActiveItemKey
+    ));
+  }, [resolvedActiveItemKey]);
 
   useLayoutEffect(() => {
-    setDismissed(dismissKey
-      ? sessionStorage.getItem(dismissKey) === '1'
-      : false);
-    setSuccessCredits(null);
-  }, [dismissKey]);
-
-  const stateAllowsSidebar = snapshot
-    ? shouldShowDailyCheckInSidebar(snapshot.context)
-    : false;
-  const displayed = Boolean(
-    snapshot
-      && !hidden
-      && !dismissed
-      && (stateAllowsSidebar || successCredits !== null),
-  );
-
-  useLayoutEffect(() => {
-    if (!snapshot) return undefined;
     onVisibleChange?.(displayed);
     return () => onVisibleChange?.(false);
-  }, [displayed, onVisibleChange, snapshot]);
+  }, [displayed, onVisibleChange]);
 
-  const dismissEntry = useCallback(() => {
-    if (!dismissKey) return;
-    sessionStorage.setItem(dismissKey, '1');
-    setLoginModalOpen(false);
-    setDismissed(true);
-  }, [dismissKey]);
+  useEffect(
+    () => startDailyCheckInAutoRefresh(refresh),
+    [refresh],
+  );
 
-  const handleClaim = useCallback(async () => {
-    if (!snapshot) return;
-    if (!isLoggedIn || !snapshot.context.authenticated) {
-      setLoginModalOpen(true);
-      return;
-    }
-    try {
-      const response = await claim();
-      setSuccessCredits(response.result.creditsGranted);
-      if (successTimerRef.current) clearTimeout(successTimerRef.current);
-      successTimerRef.current = setTimeout(() => {
-        setSuccessCredits(null);
-        successTimerRef.current = null;
-      }, CLAIM_SUCCESS_DURATION_MS);
-    } catch (error) {
-      window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: error instanceof Error
-          ? error.message
-          : i18nService.t('dailyCheckInClaimFailed'),
-      }));
-    }
-  }, [claim, isLoggedIn, snapshot]);
+  const changeActiveItem = useCallback((offset: number) => {
+    setActiveItemKey(currentKey => getAdjacentSidebarCarouselKey(
+      itemKeys,
+      currentKey,
+      offset,
+    ));
+  }, [itemKeys]);
 
-  if (!snapshot) {
-    if (loading) return null;
-    return (
-      <SidebarAdBanner
-        hidden={hidden}
-        onVisibleChange={onVisibleChange}
-      />
-    );
-  }
+  useEffect(() => {
+    if (hidden || items.length <= 1) return undefined;
+    const timer = window.setInterval(() => {
+      changeActiveItem(1);
+    }, SIDEBAR_BANNER_ROTATION_MS);
+    return () => window.clearInterval(timer);
+  }, [changeActiveItem, hidden, items.length]);
 
-  if (dismissed || (!stateAllowsSidebar && successCredits === null)) {
-    return null;
-  }
+  if (loading || !activeItem) return null;
 
   return (
-    <>
-      <div
-        aria-hidden={hidden || undefined}
-        className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 pl-[18px] pr-3.5 transition-[opacity,transform] motion-reduce:transition-none ${
-          hidden
-            ? 'translate-y-2 opacity-0 duration-0'
-            : 'translate-y-0 opacity-100 duration-200 ease-out'
-        }`}
-      >
-        <DailyCheckInSidebarCard
-          snapshot={snapshot}
-          claiming={claiming}
-          successCredits={successCredits}
+    <div
+      aria-hidden={hidden || undefined}
+      className={`pointer-events-none absolute inset-x-0 bottom-0 z-40 pl-[18px] pr-3.5 transition-[opacity,transform] motion-reduce:transition-none ${
+        hidden
+          ? 'translate-y-2 opacity-0 duration-0'
+          : 'translate-y-0 opacity-100 duration-200 ease-out'
+      }`}
+    >
+      <div className="relative">
+        <SidebarAdBanner
+          banner={activeItem.banner}
           hidden={hidden}
-          onClaim={() => void handleClaim()}
-          onDismiss={dismissEntry}
+          onDismiss={() => void dismissGroup()}
         />
+        {showCarouselControls && (
+          <>
+            <button
+              type="button"
+              tabIndex={hidden ? -1 : 0}
+              aria-label={i18nService.t('sidebarCarouselPrevious')}
+              onClick={() => changeActiveItem(-1)}
+              className={`${hidden ? 'pointer-events-none' : 'pointer-events-auto'} absolute -left-2.5 top-1/2 z-30 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white shadow-sm transition-colors hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80`}
+            >
+              <ChevronLeftIcon className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              tabIndex={hidden ? -1 : 0}
+              aria-label={i18nService.t('sidebarCarouselNext')}
+              onClick={() => changeActiveItem(1)}
+              className={`${hidden ? 'pointer-events-none' : 'pointer-events-auto'} absolute -right-2.5 top-1/2 z-30 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white shadow-sm transition-colors hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80`}
+            >
+              <ChevronRightIcon className="h-3.5 w-3.5" />
+            </button>
+          </>
+        )}
       </div>
-      {loginModalOpen && (
-        <DailyCheckInLoginModal
-          descriptor={snapshot.descriptor}
-          onClose={() => setLoginModalOpen(false)}
-        />
-      )}
-    </>
+    </div>
   );
 };
 

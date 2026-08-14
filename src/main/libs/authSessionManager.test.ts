@@ -16,6 +16,7 @@ type TestManagerOptions = {
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
   tokens?: AuthTokens | null;
   timeoutMs?: number;
+  getSessionKey?: () => string | null;
 };
 
 function createTestManager(options: TestManagerOptions) {
@@ -31,6 +32,7 @@ function createTestManager(options: TestManagerOptions) {
   const onLifecycleEvent = vi.fn();
   const manager = new AuthSessionManager({
     getTokens: () => tokens,
+    getSessionKey: options.getSessionKey,
     saveTokens,
     fetch: options.fetch,
     getRefreshUrl: () => 'https://server.example/api/auth/refresh',
@@ -130,6 +132,29 @@ describe('AuthSessionManager refresh', () => {
     expect(testManager.onTerminalFailure).toHaveBeenCalledOnce();
   });
 
+  test('treats enterprise membership revocation during refresh as terminal', async () => {
+    const testManager = createTestManager({
+      fetch: vi.fn(async () => new Response(JSON.stringify({
+        code: 41602,
+        message: 'Not an enterprise member',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })),
+    });
+
+    const result = await testManager.manager.refresh('proactive');
+
+    expect(result).toMatchObject({
+      outcome: AuthRefreshOutcome.TerminalFailure,
+      failureKind: AuthRefreshFailureKind.Rejected,
+      errorCode: 41602,
+    });
+    expect(testManager.onTerminalFailure).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: 41602,
+    }));
+  });
+
   test('keeps credentials for refresh 5xx responses', async () => {
     const testManager = createTestManager({
       fetch: vi.fn(async () => new Response(JSON.stringify({
@@ -215,11 +240,49 @@ describe('AuthSessionManager refresh', () => {
       accessToken: 'access-new-login',
       refreshToken: 'refresh-new-login',
     });
-    resolveFetch?.(new Response(null, { status: 401 }));
+    resolveFetch?.(new Response(JSON.stringify({
+      code: 41602,
+      message: 'Not an enterprise member',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
 
     await expect(refresh).resolves.toMatchObject({
       outcome: AuthRefreshOutcome.Success,
       accessToken: 'access-new-login',
+    });
+    expect(testManager.onTerminalFailure).not.toHaveBeenCalled();
+    expect(testManager.saveTokens).not.toHaveBeenCalled();
+  });
+
+  test('does not let a rejection from an older account generation expire the current account', async () => {
+    let resolveFetch: ((response: Response) => void) | null = null;
+    let sessionKey = 'enterprise:6:1001:1';
+    const testManager = createTestManager({
+      getSessionKey: () => sessionKey,
+      fetch: vi.fn(() => new Promise<Response>(resolve => {
+        resolveFetch = resolve;
+      })),
+    });
+
+    const refresh = testManager.manager.refresh('passive');
+    sessionKey = 'enterprise:6:1002:2';
+    testManager.setTokens({
+      accessToken: 'access-enterprise-b',
+      refreshToken: 'refresh-enterprise-b',
+    });
+    resolveFetch?.(new Response(JSON.stringify({
+      code: 41602,
+      message: 'Not an enterprise member',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(refresh).resolves.toMatchObject({
+      outcome: AuthRefreshOutcome.Success,
+      accessToken: 'access-enterprise-b',
     });
     expect(testManager.onTerminalFailure).not.toHaveBeenCalled();
     expect(testManager.saveTokens).not.toHaveBeenCalled();

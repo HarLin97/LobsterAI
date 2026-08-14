@@ -23,6 +23,8 @@ interface AgentTaskRowProps {
   task: AgentSidebarTaskNode;
   isBatchMode: boolean;
   isSelected: boolean;
+  contextLabel?: string;
+  contextIcon?: React.ReactNode;
   isSelectionDisabled?: boolean;
   showBatchOption?: boolean;
   hasActiveSubagent?: boolean;
@@ -60,6 +62,8 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   task,
   isBatchMode,
   isSelected,
+  contextLabel,
+  contextIcon,
   isSelectionDisabled = false,
   showBatchOption = false,
   hasActiveSubagent = false,
@@ -132,6 +136,9 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
 
   useEffect(() => {
     if (!isMenuOpen) return;
+    const focusTimer = window.requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    });
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
       if (!menuRef.current?.contains(target) && !actionButtonRef.current?.contains(target)) {
@@ -141,11 +148,13 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         closeMenu();
+        actionButtonRef.current?.focus();
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleEscape);
     return () => {
+      window.cancelAnimationFrame(focusTimer);
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEscape);
     };
@@ -186,6 +195,34 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
     onSelect();
   };
 
+  const handleRowKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handleRowClick();
+    }
+  };
+
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') {
+      return;
+    }
+    const menuItems = Array.from(
+      menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+    );
+    if (menuItems.length === 0) return;
+    event.preventDefault();
+    const currentIndex = menuItems.indexOf(document.activeElement as HTMLButtonElement);
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? menuItems.length - 1
+        : event.key === 'ArrowDown'
+          ? (currentIndex + 1 + menuItems.length) % menuItems.length
+          : (currentIndex - 1 + menuItems.length) % menuItems.length;
+    menuItems[nextIndex]?.focus();
+  };
+
   const handleRenameSave = async () => {
     const nextTitle = renameValue.trim();
     setIsRenaming(false);
@@ -209,14 +246,17 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
     'flex w-full items-center gap-2 whitespace-nowrap px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
   const menuIconClassName = 'h-3.5 w-3.5';
   const relativeTime = formatAgentTaskRelativeTime(task.updatedAt || task.createdAt);
-  const showRelativeTime = task.indicator === AgentSidebarIndicator.None;
+  const showRelativeTime = !contextLabel && task.indicator === AgentSidebarIndicator.None;
   const pinLabel = task.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession');
+  const isActivityRow = !!contextLabel;
   const scheduledTaskLabel = i18nService.t('myAgentSidebarScheduledTask');
 
   return (
     <div
-      className={`group relative -ml-[6px] flex h-[30px] w-[calc(100%+12px)] items-center gap-2 rounded-md ${
-        isBatchMode ? 'pl-4' : 'pl-[38px]'
+      className={`group relative -ml-[6px] flex w-[calc(100%+12px)] items-center gap-2 rounded-md ${
+        isActivityRow ? 'min-h-[48px] py-1.5' : 'h-[30px]'
+      } ${
+        isBatchMode ? 'pl-4' : isActivityRow ? 'pl-3.5' : 'pl-[38px]'
       } pr-2.5 text-sm font-normal transition-colors ${
         isSelectionDisabled
           ? 'cursor-default text-foreground/30'
@@ -225,14 +265,16 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           : 'cursor-pointer text-foreground hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
       }`}
       onClick={handleRowClick}
+      onKeyDown={handleRowKeyDown}
       onMouseMove={() => setSuppressPinHover(false)}
       onMouseLeave={() => setSuppressPinHover(false)}
       role="treeitem"
-      aria-level={2}
+      tabIndex={isSelectionDisabled ? -1 : 0}
+      aria-level={isActivityRow ? 1 : 2}
       aria-selected={task.isSelected}
       aria-disabled={isSelectionDisabled || undefined}
     >
-      {!isBatchMode && !isRenaming && !isSelectionDisabled && (
+      {!isActivityRow && !isBatchMode && !isRenaming && !isSelectionDisabled && (
         <button
           type="button"
           onClick={(event) => {
@@ -247,7 +289,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
               ? 'pointer-events-none opacity-0'
               : task.pinned
                 ? 'opacity-[0.46]'
-                : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-[0.3]'
+                : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-[0.3] focus-visible:pointer-events-auto focus-visible:opacity-[0.46]'
           }`}
           aria-label={pinLabel}
           title={pinLabel}
@@ -300,8 +342,18 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
               <ClockIcon className="h-3.5 w-3.5" aria-hidden="true" />
             </span>
           )}
-          <span className="min-w-0 flex-1 truncate">
-            {displayTitle}
+          <span className={`min-w-0 flex-1 ${isActivityRow ? 'flex flex-col gap-0.5' : 'truncate'}`}>
+            <span className="truncate">{displayTitle}</span>
+            {contextLabel && (
+              <span className="flex min-w-0 items-center gap-1 text-[11px] font-normal leading-4 text-secondary">
+                {contextIcon && (
+                  <span className="flex h-3 w-3 shrink-0 items-center justify-center" aria-hidden="true">
+                    {contextIcon}
+                  </span>
+                )}
+                <span className="truncate">{contextLabel}</span>
+              </span>
+            )}
           </span>
           {task.indicator === AgentSidebarIndicator.PendingPermission && (
             <span
@@ -346,7 +398,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           type="button"
           onClick={toggleMenu}
           className={`absolute right-1 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-foreground transition-opacity hover:opacity-[0.46] ${
-            isMenuOpen ? 'opacity-[0.46]' : 'opacity-0 group-hover:opacity-[0.3]'
+            isMenuOpen ? 'opacity-[0.46]' : 'opacity-0 group-hover:opacity-[0.3] focus-visible:opacity-[0.46]'
           }`}
           aria-label={i18nService.t('coworkSessionActions')}
         >
@@ -360,6 +412,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           className="fixed z-[60] w-max min-w-[124px] max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border border-border bg-surface shadow-lg"
           style={{ top: menuPosition.top, right: menuPosition.right }}
           role="menu"
+          onKeyDown={handleMenuKeyDown}
         >
           {showBatchOption && (
             <button

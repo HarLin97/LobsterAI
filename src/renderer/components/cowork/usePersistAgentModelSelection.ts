@@ -14,7 +14,11 @@ const logAgentModelPersistence = (level: 'debug' | 'warn', message: string): voi
   } else {
     console.debug(`[AgentModelSelection] ${message}`);
   }
-  window.electron?.log?.fromRenderer?.(level, 'AgentModelSelection', message);
+  try {
+    window.electron?.log?.fromRenderer?.(level, 'AgentModelSelection', message);
+  } catch {
+    // Persistence must not fail because diagnostic IPC is unavailable.
+  }
 };
 
 export function usePersistAgentModelSelection({

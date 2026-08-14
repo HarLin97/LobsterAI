@@ -379,6 +379,10 @@ describe('Windows installer hardening contracts', () => {
     // root directory verified, keeping it strictly stronger than exit 0.
     expect(unpackScript).toContain("'.unpack-cfmind-ok'");
     expect(unpackScript).toContain('missingDirs === 0');
+    expect(unpackScript).toContain('required resources missing after extraction');
+    expect(unpackScript).toContain("name: 'cfmind-entry'");
+    expect(unpackScript).toContain("name: 'skills-content'");
+    expect(unpackScript).toContain("name: 'python-entry'");
     expect(unpackScript).toContain('phase=sentinel-written');
     expect(unpackScript).toContain('phase=sentinel-write-failed');
     expect(unpackScript.indexOf('phase=verify-missing')).toBeLessThan(
@@ -409,6 +413,24 @@ describe('Windows installer hardening contracts', () => {
     expect(branch).toContain('Goto TarExtractVerify');
     expect(branch).toContain('reason=watchdog-output-validation-failed');
     expect(branch).toContain('will not commit a partial application');
+  });
+
+  test('requires OpenClaw, Skills, and Python before committing an installation', () => {
+    const extractVerifyStart = installerInclude.indexOf('TarExtractVerify:');
+    const extractVerifyEnd = installerInclude.indexOf('TarExtractProcessFailed:', extractVerifyStart);
+    const extractVerify = installerInclude.slice(extractVerifyStart, extractVerifyEnd);
+    expect(extractVerify).toContain('TarExtractVerifySkills:');
+    expect(extractVerify).toContain(String.raw`resources\SKILLs\*.*`);
+    expect(extractVerify).toContain(String.raw`resources\python-win\python.exe`);
+    expect(extractVerify).toContain(String.raw`resources\python-win\python3.exe`);
+    expect(extractVerify).toContain('TarExtractRequiredResourceMissing:');
+
+    const prevalidateStart = installerInclude.indexOf('NewInstallPrevalidateSkills:');
+    const prevalidateEnd = installerInclude.indexOf('NewInstallPrevalidateSucceeded:', prevalidateStart);
+    const prevalidate = installerInclude.slice(prevalidateStart, prevalidateEnd);
+    expect(prevalidate).toContain(String.raw`resources\SKILLs\*.*`);
+    expect(prevalidate).toContain(String.raw`resources\python-win\python.exe`);
+    expect(prevalidate).toContain(String.raw`resources\python-win\python3.exe`);
   });
 
   test('binds Skills backup and restore to the current attempt manifest', () => {

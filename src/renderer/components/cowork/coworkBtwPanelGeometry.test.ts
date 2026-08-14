@@ -14,10 +14,10 @@ describe('coworkBtwPanelGeometry', () => {
       width: 1440,
       height: 900,
     })).toEqual({
-      x: 994,
-      y: 434,
-      width: 430,
-      height: 450,
+      x: 1084,
+      y: 504,
+      width: 340,
+      height: 380,
     });
   });
 
@@ -31,10 +31,10 @@ describe('coworkBtwPanelGeometry', () => {
       width: 800,
       height: 120,
     })).toEqual({
-      x: 770,
-      y: 334,
-      width: 430,
-      height: 450,
+      x: 860,
+      y: 404,
+      width: 340,
+      height: 380,
     });
   });
 
@@ -48,10 +48,10 @@ describe('coworkBtwPanelGeometry', () => {
       width: 0,
       height: 0,
     })).toEqual({
-      x: 994,
-      y: 434,
-      width: 430,
-      height: 450,
+      x: 1084,
+      y: 504,
+      width: 340,
+      height: 380,
     });
   });
 

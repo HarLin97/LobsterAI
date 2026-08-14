@@ -1,20 +1,31 @@
+import { createAccountOwnerKey } from '@shared/auth/accountOwner';
 import {
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
   type AuthLoginResult,
   type AuthSessionChangedEvent,
+  AuthSessionChangeReason,
   AuthSessionStatus,
+  AuthSubscriptionStatus,
 } from '@shared/auth/constants';
+import { EnterpriseAccountMode } from '@shared/enterpriseAccount/constants';
 import {
   type ModelThinkingConfig,
+  parseLobsterAIRequestCapabilities,
   parseModelThinkingConfig,
   ProviderName,
 } from '@shared/providers';
-import type { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
 import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles';
 
+import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/types';
+import {
+  applyEnterpriseAccountContext,
+  refreshEnterpriseAccountContext,
+} from '../features/enterpriseAccount/context';
 import { store } from '../store';
 import {
+  clearProfileSummary,
+  invalidateAuthAccountContext,
   setAuthExpired,
   setAuthLoading,
   setAuthTemporarilyUnavailable,
@@ -25,6 +36,7 @@ import {
   type UserProfile,
   type UserQuota,
 } from '../store/slices/authSlice';
+import { clearMediaAccountState } from '../store/slices/coworkSlice';
 import type { Model } from '../store/slices/modelSlice';
 import {
   clearServerModels,
@@ -37,6 +49,12 @@ interface AuthStateRefreshResult {
   isLoggedIn: boolean;
   user: UserProfile | null;
   quota: UserQuota | null;
+  enterpriseContext: EnterpriseAccountContext | null;
+}
+
+interface AuthQuotaCheckResult {
+  success: boolean;
+  enterpriseQuotaAvailable: boolean;
 }
 
 export interface PricingCatalogTextModel {
@@ -68,7 +86,7 @@ export interface AvailableServerModelEntry {
   supportsVideo?: boolean;
   supportsThinking?: boolean;
   thinkingConfig?: ModelThinkingConfig;
-  requestCapabilities?: LobsterAIRequestCapability[];
+  requestCapabilities?: unknown;
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
@@ -92,25 +110,44 @@ const readPositiveNumber = (value: unknown): number | undefined => (
 
 type AuthRendererLogLevel = 'debug' | 'info' | 'warn';
 
+export interface AuthAccountRequestSnapshot {
+  isLoggedIn: boolean;
+  ownerAccountKey: string | null;
+  accountGeneration: number;
+}
+
+export const isAuthAccountRequestCurrent = (
+  expected: AuthAccountRequestSnapshot,
+  current: AuthAccountRequestSnapshot,
+): boolean => (
+  current.isLoggedIn === expected.isLoggedIn
+  && current.ownerAccountKey === expected.ownerAccountKey
+  && current.accountGeneration === expected.accountGeneration
+);
+
 const writeAuthRendererLog = (
   level: AuthRendererLogLevel,
   message: string,
   error?: unknown,
 ): void => {
+  const errorMessage = error === undefined
+    ? ''
+    : `: ${error instanceof Error ? error.message : String(error)}`;
+  const resolvedMessage = `${message}${errorMessage}`.replace(/\s+/g, ' ').trim().slice(0, 500);
   if (level === 'warn') {
     if (error === undefined) {
-      console.warn(`[Auth] ${message}`);
+      console.warn(`[Auth] ${resolvedMessage}`);
     } else {
       console.warn(`[Auth] ${message}:`, error);
     }
   } else if (level === 'debug') {
-    console.debug(`[Auth] ${message}`);
+    console.debug(`[Auth] ${resolvedMessage}`);
   } else {
-    console.log(`[Auth] ${message}`);
+    console.log(`[Auth] ${resolvedMessage}`);
   }
 
   try {
-    window.electron?.log?.fromRenderer?.(level, 'AuthService', message);
+    window.electron?.log?.fromRenderer?.(level, 'AuthService', resolvedMessage);
   } catch {
     // Logging is best-effort and must never interrupt authentication.
   }
@@ -179,6 +216,7 @@ export function mapAvailableServerModelsToModels(
     const thinkingConfig = model.supportsThinking === true
       ? parseModelThinkingConfig(model.thinkingConfig)
       : undefined;
+    const requestCapabilities = parseLobsterAIRequestCapabilities(model.requestCapabilities);
     return {
       id: model.modelId,
       name: model.modelName,
@@ -191,6 +229,7 @@ export function mapAvailableServerModelsToModels(
       supportsVideo: model.supportsVideo ?? false,
       supportsThinking: model.supportsThinking ?? false,
       thinkingConfig,
+      requestCapabilities,
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
       contextWindow: model.contextWindow,
@@ -209,9 +248,68 @@ class AuthService {
   private unsubLifecycleEvent: (() => void) | null = null;
   private unsubQuotaChanged: (() => void) | null = null;
   private unsubSessionChanged: (() => void) | null = null;
+  private unsubEnterpriseContextInvalidated: (() => void) | null = null;
   private unsubWindowState: (() => void) | null = null;
+  private pendingQuotaCheck: {
+    requestSnapshot: AuthAccountRequestSnapshot;
+    promise: Promise<AuthQuotaCheckResult>;
+  } | null = null;
   private lastRefreshTime = 0;
   private loginAttemptSequence = 0;
+  private enterpriseQuotaBoundaryTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastTriggeredEnterpriseQuotaBoundary = '';
+
+  private applyAuthenticatedState(
+    user: UserProfile,
+    quota: UserQuota | null | undefined,
+    enterpriseContext: EnterpriseAccountContext | null | undefined,
+  ): void {
+    const isEnterpriseAccount = (
+      user.accountMode === EnterpriseAccountMode.Enterprise
+      || quota?.accountMode === EnterpriseAccountMode.Enterprise
+      || quota?.subscriptionStatus === AuthSubscriptionStatus.Enterprise
+    );
+    const hasMismatchedEnterpriseId = (
+      enterpriseContext !== null
+      && enterpriseContext !== undefined
+      && typeof quota?.enterpriseId === 'number'
+      && quota.enterpriseId !== enterpriseContext.enterpriseId
+    );
+    const ownerAccountKey = createAccountOwnerKey({
+      user,
+      enterpriseId: enterpriseContext?.enterpriseId,
+    });
+    if (
+      !ownerAccountKey
+      || (isEnterpriseAccount && !enterpriseContext)
+      || hasMismatchedEnterpriseId
+    ) {
+      this.clearAuthenticatedAccountState();
+      throw new Error('Authenticated account context is missing or inconsistent');
+    }
+    if (store.getState().auth.ownerAccountKey !== ownerAccountKey) {
+      store.dispatch(clearMediaAccountState());
+    }
+    store.dispatch(clearServerModels());
+    store.dispatch(setLoggedIn({
+      user,
+      quota: quota ?? null,
+      ownerAccountKey,
+    }));
+    const context = applyEnterpriseAccountContext(enterpriseContext);
+    this.scheduleEnterpriseQuotaBoundary(context);
+    if (context) {
+      store.dispatch(clearProfileSummary());
+    }
+  }
+
+  private clearAuthenticatedAccountState(): void {
+    this.clearEnterpriseQuotaBoundaryTimer();
+    store.dispatch(setLoggedOut());
+    applyEnterpriseAccountContext(null);
+    store.dispatch(clearServerModels());
+    store.dispatch(clearMediaAccountState());
+  }
 
   /**
    * Initialize: try to restore login state from persisted token.
@@ -230,6 +328,13 @@ class AuthService {
       void this.handleSessionChanged(event);
     });
     this.unsubLifecycleEvent = window.electron.auth.onLifecycleEvent(reportAuthLifecycleEvent);
+    this.unsubEnterpriseContextInvalidated = window.electron.enterpriseAccount.onContextInvalidated(() => {
+      this.clearAuthenticatedAccountState();
+      writeAuthRendererLog(
+        'warn',
+        'Enterprise account context was invalidated by the server; account-scoped media state was cleared',
+      );
+    });
 
     try {
       const pendingCode = await window.electron.auth.getPendingCallback();
@@ -253,20 +358,21 @@ class AuthService {
 
     // Listen for quota changes (e.g. after cowork session using server model)
     this.unsubQuotaChanged = window.electron.auth.onQuotaChanged(() => {
-      this.refreshQuota();
-      void this.fetchProfileSummary();
-      this.loadServerModels();
+      void this.checkQuota();
     });
 
     // Refresh quota and models when Electron window gains focus — user may have purchased on portal
     this.unsubWindowState = window.electron.window.onStateChanged((state) => {
       if (state.isFocused && store.getState().auth.isLoggedIn) {
         const now = Date.now();
-        if (now - this.lastRefreshTime > 30_000) {
+        const enterpriseContext = store.getState().enterpriseAccount.context;
+        const periodEnd = enterpriseContext?.memberQuota.periodEndExclusive
+          ? Date.parse(enterpriseContext.memberQuota.periodEndExclusive)
+          : Number.NaN;
+        const quotaBoundaryReached = Number.isFinite(periodEnd) && now >= periodEnd;
+        if (quotaBoundaryReached || now - this.lastRefreshTime > 30_000) {
           this.lastRefreshTime = now;
-          this.refreshQuota();
-          void this.fetchProfileSummary();
-          this.loadServerModels();
+          void this.checkQuota();
         }
       }
     });
@@ -329,9 +435,15 @@ class AuthService {
     writeAuthRendererLog('info', 'received login callback; starting token exchange');
     try {
       const result = await window.electron.auth.exchange(code);
-      if (result.success) {
+      if (result.success && result.user) {
         writeAuthRendererLog('info', 'login callback exchange succeeded');
-        store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
+        store.dispatch(invalidateAuthAccountContext());
+        store.dispatch(clearMediaAccountState());
+        this.applyAuthenticatedState(
+          result.user,
+          result.quota,
+          result.enterpriseContext,
+        );
         await this.loadServerModels();
         void this.fetchProfileSummary();
         this.refreshQuota();
@@ -353,10 +465,44 @@ class AuthService {
       reportLifecycle?: boolean;
     } = {},
   ): Promise<AuthStateRefreshResult> {
+    const authStateAtStart = store.getState().auth;
     try {
       const result = await window.electron.auth.getUser();
+      if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
+        writeAuthRendererLog(
+          'debug',
+          'discarded stale auth restoration response after auth state changed',
+        );
+        const current = store.getState().auth;
+        return {
+          isLoggedIn: current.isLoggedIn,
+          user: current.user,
+          quota: current.quota,
+          enterpriseContext: store.getState().enterpriseAccount.context,
+        };
+      }
       if (result.success && result.user) {
-        store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
+        const enterpriseContext = result.enterpriseContext === undefined
+          ? await refreshEnterpriseAccountContext({
+            shouldApply: () => (
+              isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)
+            ),
+          })
+          : result.enterpriseContext;
+        if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
+          writeAuthRendererLog(
+            'debug',
+            'discarded stale auth restoration response after enterprise context refresh',
+          );
+          const current = store.getState().auth;
+          return {
+            isLoggedIn: current.isLoggedIn,
+            user: current.user,
+            quota: current.quota,
+            enterpriseContext: store.getState().enterpriseAccount.context,
+          };
+        }
+        this.applyAuthenticatedState(result.user, result.quota, enterpriseContext);
         await this.loadServerModels();
         void this.fetchProfileSummary();
         if (options.reportLifecycle) {
@@ -365,7 +511,12 @@ class AuthService {
             outcome: AuthSessionStatus.Authenticated,
           });
         }
-        return { isLoggedIn: true, user: result.user, quota: result.quota ?? null };
+        return {
+          isLoggedIn: true,
+          user: result.user,
+          quota: result.quota ?? null,
+          enterpriseContext: enterpriseContext ?? null,
+        };
       }
 
       const status = result.status ?? (
@@ -407,6 +558,7 @@ class AuthService {
       isLoggedIn: current.isLoggedIn,
       user: current.user,
       quota: current.quota,
+      enterpriseContext: store.getState().enterpriseAccount.context,
     };
   }
 
@@ -421,14 +573,110 @@ class AuthService {
   /**
    * Refresh quota information.
    */
-  async refreshQuota() {
+  async refreshQuota(): Promise<boolean> {
+    const authStateAtStart = store.getState().auth;
+    if (
+      !authStateAtStart.isLoggedIn
+      || !authStateAtStart.user
+      || !authStateAtStart.ownerAccountKey
+    ) {
+      return false;
+    }
     try {
       const result = await window.electron.auth.getQuota();
-      if (result.success) {
-        store.dispatch(updateQuota(result.quota));
+      const currentAuthState = store.getState().auth;
+      if (
+        !currentAuthState.isLoggedIn
+        || currentAuthState.ownerAccountKey !== authStateAtStart.ownerAccountKey
+        || currentAuthState.accountGeneration !== authStateAtStart.accountGeneration
+      ) {
+        writeAuthRendererLog('debug', 'discarded stale quota response after auth state changed');
+        return false;
       }
-    } catch {
-      // ignore
+      if (result.success) {
+        if (result.quota) {
+          store.dispatch(updateQuota(result.quota));
+        }
+        if (result.enterpriseContext !== undefined) {
+          const context = applyEnterpriseAccountContext(result.enterpriseContext);
+          this.scheduleEnterpriseQuotaBoundary(context);
+        }
+        return true;
+      }
+      return false;
+    } catch (error) {
+      writeAuthRendererLog('warn', 'quota refresh failed', error);
+      return false;
+    }
+  }
+
+  async checkQuota(): Promise<AuthQuotaCheckResult> {
+    const requestSnapshot = store.getState().auth;
+    if (
+      this.pendingQuotaCheck
+      && isAuthAccountRequestCurrent(
+        this.pendingQuotaCheck.requestSnapshot,
+        requestSnapshot,
+      )
+    ) {
+      writeAuthRendererLog('debug', 'joining the in-flight quota check');
+      return this.pendingQuotaCheck.promise;
+    }
+
+    const check = this.performQuotaCheck(requestSnapshot);
+    this.pendingQuotaCheck = { requestSnapshot, promise: check };
+    try {
+      return await check;
+    } finally {
+      if (this.pendingQuotaCheck?.promise === check) {
+        this.pendingQuotaCheck = null;
+      }
+    }
+  }
+
+  private async performQuotaCheck(
+    requestSnapshot: AuthAccountRequestSnapshot,
+  ): Promise<AuthQuotaCheckResult> {
+    writeAuthRendererLog('debug', 'quota check started');
+    try {
+      const refreshed = await this.refreshQuota();
+      if (!refreshed) {
+        writeAuthRendererLog('warn', 'quota check could not refresh quota state');
+        return {
+          success: false,
+          enterpriseQuotaAvailable: false,
+        };
+      }
+      await Promise.all([
+        this.fetchProfileSummary(),
+        this.loadServerModels(),
+      ]);
+      if (!isAuthAccountRequestCurrent(requestSnapshot, store.getState().auth)) {
+        writeAuthRendererLog('debug', 'discarded quota check result after auth state changed');
+        return {
+          success: false,
+          enterpriseQuotaAvailable: false,
+        };
+      }
+      const enterpriseContext = store.getState().enterpriseAccount.context;
+      const enterpriseQuotaAvailable = (
+        !enterpriseContext
+        || enterpriseContext.quotaStatus.available !== false
+      );
+      writeAuthRendererLog(
+        'debug',
+        `quota check completed (enterprise quota available: ${enterpriseQuotaAvailable})`,
+      );
+      return {
+        success: true,
+        enterpriseQuotaAvailable,
+      };
+    } catch (error) {
+      writeAuthRendererLog('warn', 'quota check failed unexpectedly', error);
+      return {
+        success: false,
+        enterpriseQuotaAvailable: false,
+      };
     }
   }
 
@@ -436,8 +684,27 @@ class AuthService {
    * Fetch profile summary (credits breakdown).
    */
   async fetchProfileSummary() {
+    if (store.getState().enterpriseAccount.context) {
+      store.dispatch(clearProfileSummary());
+      return;
+    }
+    const authStateAtStart = store.getState().auth;
+    if (
+      !authStateAtStart.isLoggedIn
+      || !authStateAtStart.ownerAccountKey
+    ) {
+      return;
+    }
     try {
       const result = await window.electron.auth.getProfileSummary();
+      const currentAuthState = store.getState().auth;
+      if (
+        !isAuthAccountRequestCurrent(authStateAtStart, currentAuthState)
+        || store.getState().enterpriseAccount.context
+      ) {
+        writeAuthRendererLog('debug', 'discarded stale profile summary response after auth state changed');
+        return;
+      }
       if (result.success && result.data) {
         store.dispatch(setProfileSummary(result.data));
       }
@@ -467,6 +734,8 @@ class AuthService {
   }
 
   destroy() {
+    this.pendingQuotaCheck = null;
+    this.clearEnterpriseQuotaBoundaryTimer();
     this.unsubCallback?.();
     this.unsubCallback = null;
     this.unsubLifecycleEvent?.();
@@ -475,6 +744,8 @@ class AuthService {
     this.unsubQuotaChanged = null;
     this.unsubSessionChanged?.();
     this.unsubSessionChanged = null;
+    this.unsubEnterpriseContextInvalidated?.();
+    this.unsubEnterpriseContextInvalidated = null;
     this.unsubWindowState?.();
     this.unsubWindowState = null;
   }
@@ -483,8 +754,11 @@ class AuthService {
     if (event.status !== AuthSessionStatus.Expired) return;
     writeAuthRendererLog('warn', `login session expired (${event.reason})`);
     const cleanup = this.applyLoggedOutState(true);
+    const toastKey = event.reason === AuthSessionChangeReason.EnterpriseMembershipRevoked
+      ? 'coworkErrorEnterpriseMembershipRevoked'
+      : 'coworkErrorLobsterAILoginExpired';
     window.dispatchEvent(new CustomEvent('app:showToast', {
-      detail: i18nService.t('coworkErrorLobsterAILoginExpired'),
+      detail: i18nService.t(toastKey),
     }));
     await cleanup;
   }
@@ -498,21 +772,87 @@ class AuthService {
       !current.isLoggedIn
       && !current.isLoading
       && current.sessionStatus === targetStatus
+      && !store.getState().enterpriseAccount.context
     ) {
       return;
     }
 
+    this.clearEnterpriseQuotaBoundaryTimer();
     store.dispatch(expired ? setAuthExpired() : setLoggedOut());
+    applyEnterpriseAccountContext(null);
     store.dispatch(clearServerModels());
+    store.dispatch(clearMediaAccountState());
     await this.loadPublicPricingCatalogModels();
+  }
+
+  private clearEnterpriseQuotaBoundaryTimer(): void {
+    if (this.enterpriseQuotaBoundaryTimer !== null) {
+      clearTimeout(this.enterpriseQuotaBoundaryTimer);
+      this.enterpriseQuotaBoundaryTimer = null;
+    }
+  }
+
+  private scheduleEnterpriseQuotaBoundary(
+    context: EnterpriseAccountContext | null | undefined,
+  ): void {
+    this.clearEnterpriseQuotaBoundaryTimer();
+    const endExclusive = context?.memberQuota.periodEndExclusive;
+    const ownerAccountKey = store.getState().auth.ownerAccountKey;
+    if (!context || !endExclusive || !ownerAccountKey) return;
+
+    const boundary = Date.parse(endExclusive);
+    if (!Number.isFinite(boundary)) return;
+    const boundaryKey = `${ownerAccountKey}:${context.enterpriseId}:${endExclusive}`;
+    const maxTimerDelay = 2_147_000_000;
+
+    const fire = () => {
+      this.enterpriseQuotaBoundaryTimer = null;
+      const currentAuth = store.getState().auth;
+      const currentContext = store.getState().enterpriseAccount.context;
+      if (currentAuth.ownerAccountKey !== ownerAccountKey
+        || currentContext?.enterpriseId !== context.enterpriseId) {
+        return;
+      }
+      if (this.lastTriggeredEnterpriseQuotaBoundary === boundaryKey) return;
+      this.lastTriggeredEnterpriseQuotaBoundary = boundaryKey;
+      this.lastRefreshTime = Date.now();
+      void this.checkQuota();
+    };
+
+    const arm = () => {
+      const remaining = boundary - Date.now() + 1_000;
+      if (remaining <= 0) {
+        if (this.lastTriggeredEnterpriseQuotaBoundary !== boundaryKey) {
+          this.enterpriseQuotaBoundaryTimer = setTimeout(fire, 0);
+        }
+        return;
+      }
+      if (remaining > maxTimerDelay) {
+        this.enterpriseQuotaBoundaryTimer = setTimeout(arm, maxTimerDelay);
+        return;
+      }
+      this.enterpriseQuotaBoundaryTimer = setTimeout(fire, remaining);
+    };
+    arm();
   }
 
   /**
    * Load available models from server and dispatch to store.
    */
   private async loadServerModels() {
+    const authStateAtStart = store.getState().auth;
+    if (
+      !authStateAtStart.isLoggedIn
+      || !authStateAtStart.ownerAccountKey
+    ) {
+      return;
+    }
     try {
       const modelsResult = await window.electron.auth.getModels();
+      if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
+        writeAuthRendererLog('debug', 'discarded stale server model response after auth state changed');
+        return;
+      }
       if (modelsResult.success && modelsResult.models) {
         const serverModels = mapAvailableServerModelsToModels(modelsResult.models);
         store.dispatch(setServerModels(serverModels));
@@ -529,8 +869,16 @@ class AuthService {
    * Load public pricing catalog models for unauthenticated read-only display.
    */
   private async loadPublicPricingCatalogModels() {
+    const authStateAtStart = store.getState().auth;
+    if (authStateAtStart.isLoggedIn || authStateAtStart.ownerAccountKey) {
+      return;
+    }
     try {
       const catalogResult = await window.electron.auth.getPricingCatalog();
+      if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
+        writeAuthRendererLog('debug', 'discarded stale public pricing catalog after auth state changed');
+        return;
+      }
       if (!catalogResult.success || !catalogResult.textModels) {
         return;
       }

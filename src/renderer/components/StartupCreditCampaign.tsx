@@ -30,6 +30,7 @@ import {
   type StartupCreditCampaignSource as StartupCreditCampaignSourceType,
 } from './startupCreditCampaignAnalytics';
 import {
+  resetStartupCreditCampaignEntry,
   setStartupCreditCampaignEntry,
   STARTUP_CREDIT_OPEN_EVENT,
 } from './startupCreditCampaignBridge';
@@ -521,7 +522,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     return () => {
       mountedRef.current = false;
       loadRequestRef.current += 1;
-      setStartupCreditCampaignEntry(null);
+      resetStartupCreditCampaignEntry();
     };
   }, []);
 
@@ -573,13 +574,15 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   }, [posterUrl]);
 
   useEffect(() => {
-    if (authLoading) return;
     if (!enabled) {
+      loadRequestRef.current += 1;
       applySnapshot(null, false);
       modalOpenRef.current = false;
       setModalOpen(false);
       return;
     }
+    if (authLoading) return;
+    resetStartupCreditCampaignEntry();
     if (isLoggedIn && readPendingStartupCreditClaim(localStorage)) {
       void resumePendingClaim();
       return;
@@ -596,6 +599,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   ]);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     const handleOpen = async (event: Event) => {
       const current = snapshotRef.current ?? await load(false);
       if (!current) {
@@ -626,7 +630,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     };
     window.addEventListener(STARTUP_CREDIT_OPEN_EVENT, handleOpen);
     return () => window.removeEventListener(STARTUP_CREDIT_OPEN_EVENT, handleOpen);
-  }, [load, openOffer, showTerminalView]);
+  }, [enabled, load, openOffer, showTerminalView]);
 
   useEffect(() => {
     if (!snapshot) return undefined;
@@ -824,7 +828,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     snapshot?.context.authenticated,
   ]);
 
-  if (!modalOpen || !gatewayReady || !posterReady) return null;
+  if (!enabled || !modalOpen || !gatewayReady || !posterReady) return null;
   if (!descriptor && (isOffer || isBusy || isSuccess || isAlreadyClaimed)) {
     return null;
   }

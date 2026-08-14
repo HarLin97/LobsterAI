@@ -24,5 +24,15 @@ export const resolveOpenClawThinkingLevelForModel = (
   const thinkingConfig = getServerModelMetadata(modelId)?.thinkingConfig;
   if (!thinkingConfig) return productLevel;
 
-  return resolveOpenClawThinkingLevel(thinkingConfig, normalizedProductLevel) ?? productLevel;
+  // Server capability metadata can change between app launches. A persisted
+  // product level that the model no longer advertises must follow the latest
+  // server default; forwarding the stale value can make sessions.patch fail
+  // while the renderer already displays the new default.
+  const supportedProductLevel = thinkingConfig.options.some(
+    option => option.level === normalizedProductLevel,
+  )
+    ? normalizedProductLevel
+    : thinkingConfig.defaultLevel;
+  return resolveOpenClawThinkingLevel(thinkingConfig, supportedProductLevel)
+    ?? productLevel;
 };

@@ -1849,7 +1849,7 @@ type OpenClawConfigSyncDeps = {
   getAskUserCallbackUrl?: () => string | null;
   getMediaCallbackUrl?: () => string | null;
   getMcpBridgeSecret?: () => string;
-  getSkillsList?: () => Array<{ id: string; enabled: boolean }>;
+  getSkillsList?: () => Array<{ id: string; name: string; enabled: boolean }>;
   getAgents?: () => Agent[];
   getUserPlugins?: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
   canUseMediaGeneration?: () => boolean;
@@ -1877,7 +1877,7 @@ export class OpenClawConfigSync {
   private readonly getAskUserCallbackUrl?: () => string | null;
   private readonly getMediaCallbackUrl?: () => string | null;
   private readonly getMcpBridgeSecret?: () => string;
-  private readonly getSkillsList?: () => Array<{ id: string; enabled: boolean }>;
+  private readonly getSkillsList?: () => Array<{ id: string; name: string; enabled: boolean }>;
   private readonly getAgents?: () => Agent[];
   private readonly getUserPlugins: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
   private readonly canUseMediaGeneration: () => boolean;
@@ -3692,12 +3692,24 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
   /**
    * Build per-skill `enabled` overrides from the LobsterAI SkillManager state,
    * so that skills disabled in the LobsterAI UI are also hidden from OpenClaw.
+   *
+   * Entries must be keyed by the skill's frontmatter `name`, not the
+   * directory-derived `id`: OpenClaw resolves these overrides through
+   * `resolveSkillKey()`, which uses the frontmatter name (falling back to the
+   * directory name only when the frontmatter has none — the same fallback
+   * SkillManager applies to `SkillRecord.name`).
    */
   private buildSkillEntries(): Record<string, { enabled: boolean }> {
     const skills = this.getSkillsList?.() ?? [];
     const entries: Record<string, { enabled: boolean }> = {};
     for (const skill of skills) {
-      entries[skill.id] = { enabled: skill.enabled };
+      const existing = entries[skill.name];
+      if (existing && existing.enabled !== skill.enabled) {
+        console.warn(
+          `[OpenClawConfigSync] Skills with duplicate name "${skill.name}" disagree on enabled state; last one wins`,
+        );
+      }
+      entries[skill.name] = { enabled: skill.enabled };
     }
     return entries;
   }

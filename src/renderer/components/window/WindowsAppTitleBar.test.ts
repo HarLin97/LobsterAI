@@ -25,6 +25,7 @@ const renderTitleBar = (
 
   return renderToStaticMarkup(React.createElement(WindowsAppTitleBar, {
     onToggleSidebar: () => undefined,
+    searchLabel: 'Search tasks',
     ...props,
   }));
 };
@@ -50,11 +51,40 @@ describe('WindowsAppTitleBar', () => {
     const html = renderTitleBar('win32', { sidebarWidth });
 
     expect(html).toContain(`style="width:${titleBarWidth}px"`);
-    expect(html).toContain('class="truncate text-sm font-medium text-foreground"');
+    expect(html).toContain('class="min-w-0 truncate text-sm font-medium text-foreground"');
+    expect(html).toContain('class="flex min-w-0 items-center gap-2 overflow-hidden"');
   });
 
   test.each(['darwin', 'linux'])('does not render on %s', (platform) => {
     expect(renderTitleBar(platform)).toBe('');
+  });
+
+  test('renders icon-only task search between the sidebar and filter actions', () => {
+    const html = renderTitleBar('win32', {
+      sidebarToggleLabel: 'Toggle sidebar',
+      onSearch: () => undefined,
+      searchLabel: 'Search tasks',
+      showFilterIcon: true,
+      filterLabel: 'Filter tasks',
+      onToggleFilter: () => undefined,
+    });
+
+    const sidebarActionIndex = html.indexOf('aria-label="Toggle sidebar"');
+    const searchActionIndex = html.indexOf('aria-label="Search tasks"');
+    const filterActionIndex = html.indexOf('aria-label="Filter tasks"');
+
+    expect(sidebarActionIndex).toBeGreaterThanOrEqual(0);
+    expect(searchActionIndex).toBeGreaterThan(sidebarActionIndex);
+    expect(filterActionIndex).toBeGreaterThan(searchActionIndex);
+    expect(html).toContain('class="h-[18px] w-[18px]"');
+    expect(html).toContain('title="Search tasks"');
+    expect(html).not.toContain('>Search tasks<');
+  });
+
+  test('does not render task search when no search callback is provided', () => {
+    const html = renderTitleBar('win32');
+
+    expect(html).not.toContain('aria-label="Search tasks"');
   });
 
   test('uses uniform Windows caption glyphs with full-size hit targets', () => {

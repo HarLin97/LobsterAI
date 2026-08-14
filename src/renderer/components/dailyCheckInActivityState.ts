@@ -20,6 +20,11 @@ const isNonEmptyString = (value: unknown): value is string => (
   typeof value === 'string' && value.trim().length > 0
 );
 
+export const getDailyCheckInAuthScopeKey = (
+  ownerAccountKey: string | null,
+  accountGeneration: number,
+): string => `${ownerAccountKey ?? 'anonymous'}:${accountGeneration}`;
+
 export function isDailyCheckInDescriptor(
   value: unknown,
 ): value is DailyCheckInDescriptor {
@@ -98,7 +103,7 @@ export function canClaimDailyCheckIn(context: ActivityContextResponse): boolean 
     && context.actions.includes(DailyCheckInAction.CheckIn);
 }
 
-export function shouldShowDailyCheckInSidebar(
+export function shouldShowDailyCheckInEntry(
   context: ActivityContextResponse,
 ): boolean {
   return isActiveDailyCheckInContext(context)

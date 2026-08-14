@@ -3262,7 +3262,12 @@ const IMSettings: React.FC = () => {
         )}
 
         {connectivityModalPlatform && (
-          <Modal onClose={() => setConnectivityModalPlatform(null)} overlayClassName="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" className="w-full max-w-2xl bg-surface rounded-2xl shadow-modal border border-border overflow-hidden">
+          <Modal
+            onClose={() => setConnectivityModalPlatform(null)}
+            onEscape={() => setConnectivityModalPlatform(null)}
+            overlayClassName="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+            className="w-full max-w-2xl bg-surface rounded-2xl shadow-modal border border-border overflow-hidden"
+          >
               <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                 <div className="text-sm font-semibold text-foreground">
                   {`${i18nService.t(connectivityModalPlatform)} ${i18nService.t('imConnectivitySectionTitle')}`}

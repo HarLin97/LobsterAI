@@ -1,6 +1,7 @@
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
+import { splitMarkdownCodeSegments } from '../../utils/markdownCodeSegments';
 import { parseUserMessageForDisplay } from '../../utils/userMessageDisplay';
-import { MEDIA_TOKEN_DISPLAY_RE } from './messageDisplayUtils';
+import { isSilentAssistantMessage, MEDIA_TOKEN_DISPLAY_RE } from './messageDisplayUtils';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 
 export const ConversationSearchStatus = {
@@ -12,6 +13,14 @@ export const ConversationSearchStatus = {
 
 export type ConversationSearchStatus =
   typeof ConversationSearchStatus[keyof typeof ConversationSearchStatus];
+
+export const ConversationSearchErrorReason = {
+  HistoryTooLarge: 'history_too_large',
+  Unavailable: 'unavailable',
+} as const;
+
+export type ConversationSearchErrorReason =
+  typeof ConversationSearchErrorReason[keyof typeof ConversationSearchErrorReason];
 
 export const ConversationSearchDirection = {
   Previous: 'previous',
@@ -35,13 +44,22 @@ const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\((?:\\.|[^)])*\)/g;
 const MARKDOWN_LINK_RE = /\[([^\]]+)\]\((?:\\.|[^)])*\)/g;
 const AUTOLINK_RE = /<((?:https?:\/\/|mailto:)[^>]+)>/gi;
 const HTML_TAG_RE = /<\/?[A-Za-z][^>]*>/g;
-const FENCE_LINE_RE = /^\s*(?:```|~~~)[^\n]*$/gm;
 const HEADING_OR_QUOTE_PREFIX_RE = /^\s{0,3}(?:#{1,6}|>)\s*/gm;
 const LIST_PREFIX_RE = /^\s*(?:[-+*]|\d+[.)])\s+/gm;
-const INLINE_CODE_RE = /`([^`]+)`/g;
 const PAIRED_STRONG_OR_STRIKE_RE = /(\*\*|__|~~)(?=\S)([^\n]*?\S)\1/g;
 const PAIRED_ASTERISK_EMPHASIS_RE = /(?<!\*)\*(?=\S)([^*\n]*?\S)\*(?!\*)/g;
 const PAIRED_UNDERSCORE_EMPHASIS_RE = /(?<!_)_(?=\S)([^_\n]*?\S)_(?!_)/g;
+
+const stripInvisibleMarkdownSyntax = (content: string): string => content
+  .replace(MARKDOWN_IMAGE_RE, '')
+  .replace(MARKDOWN_LINK_RE, '$1')
+  .replace(AUTOLINK_RE, '$1')
+  .replace(HEADING_OR_QUOTE_PREFIX_RE, '')
+  .replace(LIST_PREFIX_RE, '')
+  .replace(PAIRED_STRONG_OR_STRIKE_RE, '$2')
+  .replace(PAIRED_ASTERISK_EMPHASIS_RE, '$1')
+  .replace(PAIRED_UNDERSCORE_EMPHASIS_RE, '$1')
+  .replace(HTML_TAG_RE, '');
 
 export function normalizeConversationSearchQuery(query: string): string {
   return query.trim().replace(/\r\n?/g, '\n').toLowerCase();
@@ -53,19 +71,12 @@ export function normalizeConversationSearchQuery(query: string): string {
  * literal conversation search.
  */
 export function getVisibleMarkdownSearchText(content: string): string {
-  return content
-    .replace(/\r\n?/g, '\n')
-    .replace(MARKDOWN_IMAGE_RE, '')
-    .replace(MARKDOWN_LINK_RE, '$1')
-    .replace(AUTOLINK_RE, '$1')
-    .replace(FENCE_LINE_RE, '')
-    .replace(HEADING_OR_QUOTE_PREFIX_RE, '')
-    .replace(LIST_PREFIX_RE, '')
-    .replace(INLINE_CODE_RE, '$1')
-    .replace(PAIRED_STRONG_OR_STRIKE_RE, '$2')
-    .replace(PAIRED_ASTERISK_EMPHASIS_RE, '$1')
-    .replace(PAIRED_UNDERSCORE_EMPHASIS_RE, '$1')
-    .replace(HTML_TAG_RE, '');
+  const normalizedContent = content.replace(/\r\n?/g, '\n');
+  return splitMarkdownCodeSegments(normalizedContent)
+    .map(segment => segment.kind === 'text'
+      ? stripInvisibleMarkdownSyntax(segment.raw)
+      : segment.visibleText)
+    .join('');
 }
 
 export function getConversationSearchMessageText(message: CoworkMessage): string | null {
@@ -82,7 +93,11 @@ export function getConversationSearchMessageText(message: CoworkMessage): string
     return displayContent.replace(/\r\n?/g, '\n').replace(MARKDOWN_IMAGE_RE, '');
   }
 
-  if (message.type !== 'assistant' || message.metadata?.isThinking === true) {
+  if (
+    message.type !== 'assistant'
+    || message.metadata?.isThinking === true
+    || isSilentAssistantMessage(message)
+  ) {
     return null;
   }
 
@@ -109,10 +124,10 @@ export function findConversationSearchMatches(
 
   const matches: CoworkConversationSearchMatch[] = [];
 
-  messages.forEach((message, messageIndex) => {
+  for (const [messageIndex, message] of messages.entries()) {
     const text = getConversationSearchMessageText(message);
-    if (text === null) return;
-    if (message.type !== 'user' && message.type !== 'assistant') return;
+    if (text === null) continue;
+    if (message.type !== 'user' && message.type !== 'assistant') continue;
 
     const normalizedText = text.replace(/\r\n?/g, '\n').toLowerCase();
     let searchFrom = 0;
@@ -137,7 +152,7 @@ export function findConversationSearchMatches(
       occurrenceIndex += 1;
       searchFrom = matchIndex + normalizedQuery.length;
     }
-  });
+  }
 
   return matches;
 }

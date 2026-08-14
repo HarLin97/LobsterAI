@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 
 import {
   type CoworkSessionStatus,
@@ -10,12 +10,18 @@ import type { AgentSidebarAgentSummary } from './types';
 import {
   collapseAgentSidebarTaskList,
   deriveAgentSidebarIndicator,
+  logAgentSidebarDebug,
   removeAgentSidebarAgentTaskPreviews,
   removeAgentSidebarTaskPreviews,
   sortAgentSidebarAgents,
   sortAgentSidebarTasks,
   toAgentSidebarTaskNode,
 } from './useAgentSidebarState';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 const makeSession = (
   id: string,
@@ -50,6 +56,25 @@ const makeAgent = (
   pinned,
   pinOrder,
   sortOrder,
+});
+
+test('keeps successful task loading independent from renderer debug logging', () => {
+  const fromRenderer = vi.fn(() => {
+    throw new Error('logger unavailable');
+  });
+  vi.stubGlobal('window', {
+    electron: {
+      log: { fromRenderer },
+    },
+  });
+  vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+  expect(() => logAgentSidebarDebug('task preview loaded')).not.toThrow();
+  expect(fromRenderer).toHaveBeenCalledWith(
+    'debug',
+    'AgentSidebar',
+    'task preview loaded',
+  );
 });
 
 test('sortAgentSidebarTasks keeps unpinned tasks ordered by last update time', () => {
@@ -122,6 +147,26 @@ test('deriveAgentSidebarIndicator prioritizes pending permission state', () => {
     new Set([session.id]),
     new Set([session.id]),
   )).toBe(AgentSidebarIndicator.PendingPermission);
+});
+
+test('deriveAgentSidebarIndicator uses unread completion over a stale running preview', () => {
+  const session = makeSession('completed-in-background', 100, 200, CoworkSessionStatusValue.Running);
+
+  expect(deriveAgentSidebarIndicator(
+    session,
+    new Set([session.id]),
+    new Set(),
+  )).toBe(AgentSidebarIndicator.CompletedUnread);
+});
+
+test('deriveAgentSidebarIndicator keeps a running task active without completion unread state', () => {
+  const session = makeSession('running-in-background', 100, 200, CoworkSessionStatusValue.Running);
+
+  expect(deriveAgentSidebarIndicator(
+    session,
+    new Set(),
+    new Set(),
+  )).toBe(AgentSidebarIndicator.Running);
 });
 
 test('toAgentSidebarTaskNode marks sessions linked to scheduled tasks', () => {

@@ -1,3 +1,4 @@
+import { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
 import { ModelThinkingLevel } from '@shared/providers/modelThinking';
 import { expect, test } from 'vitest';
 
@@ -8,7 +9,9 @@ import {
   resolveCascadePlacement,
   resolveDropdownListMaxHeight,
   resolveHoverCardTop,
+  resolveNestedCascadePlacement,
   resolvePickerThinkingLevel,
+  supportsConfigurableModelThinkingProtocol,
 } from './ModelSelector';
 
 test('keeps model hover card above the viewport bottom', () => {
@@ -75,6 +78,34 @@ test('clamps a cascaded popover inside the viewport when neither side fits', () 
     viewportWidth: 280,
     preferredSide: CascadeSide.Right,
   })).toEqual({ left: 62, side: CascadeSide.Right });
+});
+
+test('overlays the hover card instead of flipping a third panel into the dropdown', () => {
+  expect(resolveNestedCascadePlacement({
+    anchorLeft: 572,
+    anchorRight: 792,
+    width: 210,
+    viewportWidth: 800,
+    preferredSide: CascadeSide.Right,
+  })).toEqual({
+    left: 572,
+    side: CascadeSide.Right,
+    overlaysAnchor: true,
+  });
+});
+
+test('keeps a third panel cascading outward when the viewport has room', () => {
+  expect(resolveNestedCascadePlacement({
+    anchorLeft: 520,
+    anchorRight: 740,
+    width: 210,
+    viewportWidth: 1200,
+    preferredSide: CascadeSide.Right,
+  })).toEqual({
+    left: 740,
+    side: CascadeSide.Right,
+    overlaysAnchor: false,
+  });
 });
 
 test('caps the model list at its default height when space allows', () => {
@@ -170,7 +201,7 @@ test('blocks only explicitly unready server models from agent selection', () => 
   })).toBe(false);
 });
 
-test('allows thinking changes only for accessible and ready models', () => {
+test('allows thinking changes only for capable, accessible, and ready models', () => {
   const thinkingConfig = {
     options: [
       { level: 'off' as const, openclawLevel: 'off' as const },
@@ -182,11 +213,18 @@ test('allows thinking changes only for accessible and ready models', () => {
   expect(canConfigureModelThinking({
     accessible: true,
     isServerModel: true,
+    requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
     thinkingConfig: { options: thinkingConfig.options.map(option => ({ ...option })), defaultLevel: thinkingConfig.defaultLevel },
   })).toBe(true);
   expect(canConfigureModelThinking({
+    accessible: true,
+    isServerModel: true,
+    thinkingConfig: { options: thinkingConfig.options.map(option => ({ ...option })), defaultLevel: thinkingConfig.defaultLevel },
+  })).toBe(false);
+  expect(canConfigureModelThinking({
     accessible: false,
     isServerModel: true,
+    requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
     thinkingConfig: { options: thinkingConfig.options.map(option => ({ ...option })), defaultLevel: thinkingConfig.defaultLevel },
   })).toBe(false);
   expect(canConfigureModelThinking({
@@ -194,10 +232,28 @@ test('allows thinking changes only for accessible and ready models', () => {
     isServerModel: true,
     runtimeProfile: 'moonshot-kimi-k3',
     agenticReady: false,
+    requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
     thinkingConfig: { options: thinkingConfig.options.map(option => ({ ...option })), defaultLevel: thinkingConfig.defaultLevel },
   })).toBe(false);
   expect(canConfigureModelThinking({
     accessible: true,
     isServerModel: true,
+    requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
   })).toBe(false);
+});
+
+test('hides the thinking protocol entry when request-options support is absent', () => {
+  const thinkingConfig = {
+    options: [
+      { level: 'off' as const, openclawLevel: 'off' as const },
+      { level: 'high' as const, openclawLevel: 'high' as const },
+    ],
+    defaultLevel: 'high' as const,
+  };
+
+  expect(supportsConfigurableModelThinkingProtocol({ thinkingConfig })).toBe(false);
+  expect(supportsConfigurableModelThinkingProtocol({
+    thinkingConfig,
+    requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
+  })).toBe(true);
 });

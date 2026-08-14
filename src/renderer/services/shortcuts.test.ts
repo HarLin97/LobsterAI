@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { isTextEditingSafeShortcut } from './shortcuts';
+import { isTextEditingSafeShortcut, matchesShortcut } from './shortcuts';
 
 describe('isTextEditingSafeShortcut', () => {
   test('returns false for empty or missing bindings', () => {
@@ -20,5 +20,20 @@ describe('isTextEditingSafeShortcut', () => {
     expect(isTextEditingSafeShortcut('Shift+H')).toBe(false);
     // Alt alone is unsafe: Option+key inserts special characters on macOS.
     expect(isTextEditingSafeShortcut('Alt+H')).toBe(false);
+  });
+});
+
+describe('matchesShortcut', () => {
+  test('does not trigger Ctrl+Alt shortcuts while Windows AltGr is composing text', () => {
+    const event = {
+      key: 'e',
+      ctrlKey: true,
+      altKey: true,
+      metaKey: false,
+      shiftKey: false,
+      getModifierState: (modifier: string) => modifier === 'AltGraph',
+    } as unknown as KeyboardEvent;
+
+    expect(matchesShortcut(event, 'Ctrl+Alt+E')).toBe(false);
   });
 });

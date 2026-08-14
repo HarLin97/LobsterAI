@@ -38,6 +38,12 @@ export type LobsterAIThinkingProfile = {
 
 export type LobsterAIThinkingProfileMap = Record<string, LobsterAIThinkingProfile>;
 
+export type LobsterAIOpenClawThinkingProfile = {
+  levels: Array<{ id: string; label: string }>;
+  defaultLevel: string;
+  preserveWhenCatalogReasoningFalse: true;
+};
+
 const LEVELS = new Set<string>(Object.values(LobsterAIThinkingLevel));
 const OPENCLAW_LEVELS = new Set<string>(Object.values(LobsterAIOpenClawThinkingLevel));
 
@@ -109,4 +115,30 @@ export const parseThinkingProfileMap = (value: unknown): LobsterAIThinkingProfil
     }
   }
   return result;
+};
+
+export const resolveOpenClawThinkingProfile = (
+  profile: LobsterAIThinkingProfile | undefined,
+  hasKimiK3RuntimeProfile: boolean,
+): LobsterAIOpenClawThinkingProfile | undefined => {
+  if (profile) {
+    const defaultOpenClawLevel = profile.options.find(
+      option => option.level === profile.defaultLevel,
+    )?.openclawLevel;
+    if (!defaultOpenClawLevel) return undefined;
+    return {
+      levels: profile.options.map(option => ({
+        id: option.openclawLevel,
+        label: option.level,
+      })),
+      defaultLevel: defaultOpenClawLevel,
+      preserveWhenCatalogReasoningFalse: true,
+    };
+  }
+  if (!hasKimiK3RuntimeProfile) return undefined;
+  return {
+    levels: [{ id: 'max', label: 'max' }],
+    defaultLevel: 'max',
+    preserveWhenCatalogReasoningFalse: true,
+  };
 };

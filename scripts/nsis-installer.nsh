@@ -1703,14 +1703,28 @@ FunctionEnd
   IntCmp $R2 0 TarExtractVerify TarExtractNonZero TarExtractNonZero
 
   TarExtractVerify:
-  ; Success requires the OpenClaw runtime entry to actually exist -- an exit
-  ; code alone must never trigger deletion of the only recovery source.
-  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" TarExtractSucceeded
-  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" TarExtractSucceeded
+  ; Success requires every large bundled resource to be usable -- an exit code
+  ; alone must never trigger deletion of the only recovery source.
+  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" TarExtractVerifySkills
+  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" TarExtractVerifySkills
+  StrCpy $R5 "runtime-entry-missing"
+  Goto TarExtractRequiredResourceMissing
+
+  TarExtractVerifySkills:
+  IfFileExists "$INSTDIR\resources\SKILLs\*.*" TarExtractVerifyPython
+  StrCpy $R5 "skills-content-missing"
+  Goto TarExtractRequiredResourceMissing
+
+  TarExtractVerifyPython:
+  IfFileExists "$INSTDIR\resources\python-win\python.exe" TarExtractSucceeded
+  IfFileExists "$INSTDIR\resources\python-win\python3.exe" TarExtractSucceeded
+  StrCpy $R5 "python-entry-missing"
+
+  TarExtractRequiredResourceMissing:
   FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
   FileSeek $2 0 END
   !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=tar-extract-error attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 reason=entry-missing-after-extract$\r$\n"
+  FileWrite $2 "$8 phase=tar-extract-error attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 reason=$R5-after-extract$\r$\n"
   FileClose $2
   ; A bogus system-tar success still gets a shot at the bundled extractor.
   ;
@@ -1718,7 +1732,7 @@ FunctionEnd
   ; in /S installs unless a silent default is declared, and the in-app update
   ; must never block on an orphan dialog.
   StrCmp $R3 "system-tar" TarExtractElectron
-  MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI installation stopped because resource extraction completed without the required AI runtime entry. The installer will not commit a partial application. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
+  MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI installation stopped because resource extraction completed without all required runtime resources ($R5). The installer will not commit a partial application. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
   Goto TarExtractFailed
 
   TarExtractProcessFailed:
@@ -2084,10 +2098,18 @@ FunctionEnd
   StrCpy $lobsterNewInstallValidationReason "app-asar-missing"
   IfFileExists "$INSTDIR\resources\app.asar" 0 NewInstallPrevalidateFailed
 
-  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" NewInstallPrevalidateSucceeded
-  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" NewInstallPrevalidateSucceeded
+  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" NewInstallPrevalidateSkills
+  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" NewInstallPrevalidateSkills
   StrCpy $lobsterNewInstallValidationReason "runtime-entry-missing"
   Goto NewInstallPrevalidateFailed
+
+  NewInstallPrevalidateSkills:
+    StrCpy $lobsterNewInstallValidationReason "skills-content-missing"
+    IfFileExists "$INSTDIR\resources\SKILLs\*.*" 0 NewInstallPrevalidateFailed
+    StrCpy $lobsterNewInstallValidationReason "python-entry-missing"
+    IfFileExists "$INSTDIR\resources\python-win\python.exe" NewInstallPrevalidateSucceeded
+    IfFileExists "$INSTDIR\resources\python-win\python3.exe" NewInstallPrevalidateSucceeded
+    Goto NewInstallPrevalidateFailed
 
   NewInstallPrevalidateSucceeded:
     StrCpy $lobsterNewInstallValidationStatus "success"

@@ -31,6 +31,7 @@ import {
 import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
 import { t } from '../../i18n';
+import { OpenClawChannelSessionSync } from '../openclawChannelSessionSync';
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
@@ -39,6 +40,7 @@ import { ContinuityCapsuleSource } from './coworkContinuityCapsule';
 import {
   buildOpenClawChatSendPayloadTooLargeError,
   buildOpenClawRuntimeErrorDetail,
+  buildRuntimeErrorMetadata,
   ensurePlanModeProposedPlanBlock,
   estimateOpenClawChatSendFrameBytes,
   isIncompleteStopReason,
@@ -50,6 +52,7 @@ import {
   OPENCLAW_CHAT_SEND_PAYLOAD_SAFE_LIMIT_BYTES,
   OpenClawRuntimeAdapter,
   pickPersistedAssistantSegment,
+  resolveOpenClawRuntimeError,
   resolveOpenClawRuntimeErrorMessage,
   resolveOpenClawToolLoopErrorOverride,
   resolveToolEventIsError,
@@ -628,6 +631,41 @@ test('resolveOpenClawRuntimeErrorMessage restores recent quota error hidden by O
 
 test('resolveOpenClawRuntimeErrorMessage classifies raw LobsterAI quota errors', () => {
   expect(resolveOpenClawRuntimeErrorMessage('本月积分已用完')).toContain('积分额度已用完');
+});
+
+test('resolveOpenClawRuntimeError keeps structured enterprise quota reason', () => {
+  expect(resolveOpenClawRuntimeError('LLM request failed.', {
+    errorCode: '41606',
+    rawErrorPreview: '41606 member monthly quota exhausted',
+  })).toEqual({
+    message: expect.stringContaining('成员周期额度'),
+    enterpriseQuotaError: {
+      code: 41606,
+      reason: 'member_monthly_quota_exhausted',
+    },
+  });
+});
+
+test('buildRuntimeErrorMetadata preserves technical details with enterprise quota fields', () => {
+  const errorDetail = {
+    rawErrorMessage: 'LLM request failed.',
+    provider: 'lobsterai-server',
+    httpCode: '402',
+  };
+
+  expect(buildRuntimeErrorMetadata({
+    message: 'Team credits have been used up.',
+    enterpriseQuotaError: {
+      code: 41607,
+      reason: 'enterprise_pool_exhausted',
+    },
+    errorDetail,
+  })).toEqual({
+    error: 'Team credits have been used up.',
+    errorDetail,
+    enterpriseErrorCode: 41607,
+    enterpriseQuotaReason: 'enterprise_pool_exhausted',
+  });
 });
 
 test('resolveOpenClawRuntimeErrorMessage classifies generic error from safe OAuth metadata', () => {
@@ -1779,11 +1817,13 @@ test('resolveToolEventIsError reads nested tool result errors', () => {
 function createPatchAdapter(options?: {
   isChannelSession?: boolean;
   persistedSessionKey?: string | null;
+  scheduledTaskId?: string | null;
 }) {
   const session = {
     id: 'session-1',
     title: 'Test Session',
     claudeSessionId: null,
+    scheduledTaskId: options?.scheduledTaskId ?? null,
     status: 'completed',
     pinned: false,
     cwd: '',
@@ -1830,7 +1870,7 @@ function createPatchAdapter(options?: {
       }),
     };
   }
-  return { adapter, requests };
+  return { adapter, requests, session };
 }
 
 test('disconnectGatewayClient rejects pending gateway readiness immediately', async () => {
@@ -2031,6 +2071,95 @@ test('patchSession keeps managed-key fallback for normal Cowork sessions', async
       model: 'moonshot/kimi-k2.6',
     },
   });
+});
+
+test('interactive RPCs use the managed key for an idle scheduled session and its raw key while active', async () => {
+  const { adapter, requests } = createPatchAdapter({
+    scheduledTaskId: 'daily-monitor',
+  });
+  const cronRunKey = 'agent:main:cron:daily-monitor:run:run-42';
+  const managedKey = 'agent:main:lobsterai:session-1';
+  adapter.rememberSessionKey('session-1', cronRunKey);
+
+  await adapter.patchSession('session-1', { model: 'moonshot/kimi-k2.6' });
+  await adapter.compactContext('session-1');
+
+  expect(requests[0]?.params.key).toBe(managedKey);
+  expect(requests[1]).toEqual({
+    method: 'sessions.compact',
+    params: { key: managedKey },
+  });
+  expect(requests[2]?.params.search).toBe(managedKey);
+
+  adapter.activeTurns.set(
+    'session-1',
+    createActiveTurn('session-1', cronRunKey, 'run-42'),
+  );
+  await adapter.patchSession('session-1', { model: 'moonshot/kimi-k2.6' });
+
+  expect(requests.at(-1)?.params.key).toBe(cronRunKey);
+});
+
+test('pollChannelSessions recovers a missed cron event without retaining run-scoped keys', async () => {
+  const sessionKey = 'agent:ops:cron:daily-monitor:run:run-42';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'cron-session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const requests: Array<{ method: string; params?: unknown }> = [];
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string, params?: unknown) => {
+      requests.push({ method, params });
+      if (method === 'sessions.list') {
+        return { sessions: [{ key: sessionKey, hasActiveRun: false }] };
+      }
+      return { messages: [] };
+    },
+  };
+  const channelSync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      ...store,
+      getSessionIdByScheduledTaskId: () => session.id,
+      createSession: () => {
+        throw new Error('poll should reuse the persisted cron session');
+      },
+    } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo/ops',
+  });
+  adapter.channelSessionSync = channelSync;
+  adapter.knownChannelSessionIds.add(session.id);
+  adapter.fullySyncedSessions.add(session.id);
+
+  await adapter.pollChannelSessions();
+
+  const channelSyncState = channelSync as unknown as { rejectedKeys: Set<string> };
+  expect(channelSyncState.rejectedKeys.size).toBe(0);
+  expect(adapter.sessionIdBySessionKey.get(sessionKey)).toBe(session.id);
+  expect(adapter.latestCronSessionKeyByCacheKey.get('agent:ops:cron:daily-monitor')).toBe(sessionKey);
+  expect(requests.map(request => request.method)).toEqual(['sessions.list', 'chat.history']);
+});
+
+test('cron session routing retains only the latest real gateway run key per job', () => {
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'cron-session-1',
+  });
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const firstRunKey = 'agent:ops:cron:daily-monitor:run:run-1';
+  const latestRunKey = 'agent:ops:cron:daily-monitor:run:run-2';
+
+  adapter.rememberSessionKey(session.id, firstRunKey);
+  adapter.rememberSessionKey(session.id, latestRunKey);
+
+  expect(adapter.sessionIdBySessionKey.has(firstRunKey)).toBe(false);
+  expect(adapter.resolveSessionIdBySessionKey(firstRunKey)).toBe(session.id);
+  expect(adapter.getSessionKeysForSession(session.id)).toContain(latestRunKey);
+  expect(adapter.getSessionKeysForSession(session.id)).not.toContain(firstRunKey);
+  expect(adapter.getSessionKeysForSession(session.id)).not.toContain(
+    'agent:ops:cron:daily-monitor',
+  );
 });
 
 test('pollChannelSessions syncs channel row model into the local session override', async () => {
@@ -2339,6 +2468,41 @@ test('sessions.changed start reports an IM prompt once across lifecycle and Acti
 
   expect(adapter.activeTurns.has(session.id)).toBe(true);
   expect(onChannelPromptSubmit).toHaveBeenCalledOnce();
+});
+
+test('IM prompt analytics remains once when the ActiveTurn starts before its real run id arrives', () => {
+  const sessionKey = 'agent:main:openclaw-weixin:bot-1:direct:user-1';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'session-1',
+  });
+  const onChannelPromptSubmit = vi.fn();
+  const adapter = new OpenClawRuntimeAdapter(store, {}, { onChannelPromptSubmit });
+  adapter.channelSessionSync = {
+    isChannelSessionKey: (key: string) => key === sessionKey,
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+  adapter.prefetchChannelUserMessages = vi.fn();
+  adapter.startTurnTimeoutWatchdog = vi.fn();
+
+  adapter.ensureActiveTurn(session.id, sessionKey, '');
+  expect(onChannelPromptSubmit).toHaveBeenCalledOnce();
+
+  adapter.handleGatewayEvent({
+    event: 'sessions.changed',
+    payload: {
+      sessionKey,
+      runId: 'im-run-real',
+      phase: 'start',
+      status: 'running',
+    },
+  });
+
+  expect(onChannelPromptSubmit).toHaveBeenCalledOnce();
+  expect(adapter.reportedChannelPromptRunIds.has('im-run-real')).toBe(true);
+  expect(adapter.activeTurns.get(session.id)?.promptAnalyticsReported).toBe(true);
+  expect(adapter.activeTurns.get(session.id)?.knownRunIds.has('im-run-real')).toBe(true);
+  expect(adapter.sessionIdByRunId.get('im-run-real')).toBe(session.id);
 });
 
 test('sessions.changed IM status handling excludes desktop, cron, main, subagent, and stale bindings', () => {
@@ -5307,6 +5471,134 @@ test('chat final terminal error persists visible system message when no assistan
   expect(session.status).toBe('error');
   expect(errorSpy).toHaveBeenCalledWith(session.id, expect.stringContaining('模型响应超时'));
   expect(persistedError?.content).toContain('模型响应超时');
+});
+
+test('chat final terminal error persists enterprise quota signal and technical details', async () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+
+  session.status = 'running';
+  adapter.on('error', vi.fn());
+  adapter.activeTurns.set(session.id, createActiveTurn(
+    session.id,
+    sessionKey,
+    'run-enterprise-quota',
+  ));
+
+  adapter.handleChatEvent({
+    state: 'final',
+    runId: 'run-enterprise-quota',
+    sessionKey,
+    stopReason: 'error',
+    errorMessage: 'LLM request failed.',
+    errorCode: 41607,
+    provider: 'lobsterai-server',
+    rawErrorPreview: '41607 enterprise pool exhausted',
+  }, 1);
+  await Promise.resolve();
+
+  const persistedError = session.messages.find((message) => message.type === 'system');
+  expect(session.status).toBe('error');
+  expect(persistedError?.metadata).toEqual(expect.objectContaining({
+    enterpriseErrorCode: 41607,
+    enterpriseQuotaReason: 'enterprise_pool_exhausted',
+    errorDetail: expect.objectContaining({
+      provider: 'lobsterai-server',
+      rawErrorMessage: 'LLM request failed.',
+    }),
+  }));
+});
+
+test('chat final stopReason error applies a captured tool-loop veto override', async () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'watch the build', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const turn = createActiveTurn(session.id, sessionKey, 'run-loop-error');
+  session.status = 'running';
+  adapter.on('error', vi.fn());
+  adapter.activeTurns.set(session.id, turn);
+  adapter.sessionIdByRunId.set(turn.runId, session.id);
+
+  adapter.handleAgentEvent({
+    runId: turn.runId,
+    sessionKey,
+    stream: 'tool',
+    data: {
+      toolCallId: 'call-1',
+      phase: 'result',
+      name: 'process',
+      result: TOOL_LOOP_POLL_BLOCK_TEXT,
+    },
+  }, 1);
+
+  await adapter.handleChatFinal(session.id, turn, {
+    state: 'final',
+    runId: turn.runId,
+    sessionKey,
+    stopReason: 'error',
+    errorMessage: OPENCLAW_INCOMPLETE_TURN_ERROR_TEXT,
+    message: { role: 'assistant', content: 'partial output' },
+  });
+
+  const persistedError = session.messages.find(message => message.type === 'system');
+  expect(session.status).toBe('error');
+  expect(persistedError?.content).toBe(t('coworkErrorToolLoopBlocked'));
+  expect(persistedError?.metadata?.errorDetail?.rawErrorMessage).toContain(
+    OPENCLAW_INCOMPLETE_TURN_ERROR_TEXT,
+  );
+  expect(persistedError?.metadata?.errorDetail?.rawErrorMessage).toContain(
+    TOOL_LOOP_POLL_BLOCK_TEXT,
+  );
+});
+
+test('empty chat final stopReason error cannot defer into completed status', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'watch the build', timestamp: 1, metadata: {} },
+    ]);
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const turn = createActiveTurn(session.id, sessionKey, 'run-empty-loop-error');
+    session.status = 'running';
+    adapter.on('error', vi.fn());
+    adapter.activeTurns.set(session.id, turn);
+    adapter.sessionIdByRunId.set(turn.runId, session.id);
+
+    adapter.handleAgentEvent({
+      runId: turn.runId,
+      sessionKey,
+      stream: 'tool',
+      data: {
+        toolCallId: 'call-1',
+        phase: 'result',
+        name: 'process',
+        result: TOOL_LOOP_POLL_BLOCK_TEXT,
+      },
+    }, 1);
+
+    await adapter.handleChatFinal(session.id, turn, {
+      state: 'final',
+      runId: turn.runId,
+      sessionKey,
+      stopReason: 'error',
+      errorMessage: OPENCLAW_INCOMPLETE_TURN_ERROR_TEXT,
+      message: { role: 'assistant', content: '' },
+    });
+
+    expect(session.status).toBe('error');
+    expect(adapter.activeTurns.has(session.id)).toBe(false);
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(session.status).toBe('error');
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
 });
 
 test('chat error ignores non-managed OpenClaw session key when local session id is unknown', () => {
@@ -8480,6 +8772,38 @@ test('syncFullChannelHistory: cron run history backfills initial run without los
     { type: 'user', content: '提醒我喝水' },
     { type: 'assistant', content: '喝水时间到' },
   ]);
+});
+
+test('cron run system history tracks equal-length runs by raw session key', async () => {
+  const firstRunKey = 'agent:main:cron:drink-water:run:run-1';
+  const secondRunKey = 'agent:main:cron:drink-water:run:run-2';
+  const historyBySessionKey = new Map<string, unknown[]>([
+    [firstRunKey, [{ role: 'system', content: 'First run reminder' }]],
+    [secondRunKey, [{ role: 'system', content: 'Second run reminder' }]],
+  ]);
+  const { session, store } = createHistoryStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (_method: string, params?: unknown) => ({
+      messages: historyBySessionKey.get((params as { sessionKey: string }).sessionKey) ?? [],
+    }),
+  };
+
+  adapter.rememberSessionKey(session.id, firstRunKey);
+  await adapter.syncSessionHistoryFromGateway(session.id, firstRunKey);
+  adapter.rememberSessionKey(session.id, secondRunKey);
+  await adapter.syncSessionHistoryFromGateway(session.id, secondRunKey);
+  await adapter.syncSessionHistoryFromGateway(session.id, secondRunKey);
+
+  expect(getSystemMessages(session).map(message => message.content)).toEqual([
+    'First run reminder',
+    'Second run reminder',
+  ]);
+  expect(adapter.gatewayHistoryCountBySession.has(session.id)).toBe(false);
+  expect(adapter.gatewayHistoryCountByCronSessionKey.has(firstRunKey)).toBe(false);
+  expect(adapter.gatewayHistoryCountByCronSessionKey.get(secondRunKey)).toBe(1);
 });
 
 test('syncFullChannelHistory: cron run history does not replace follow-up messages', async () => {

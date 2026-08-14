@@ -6,9 +6,21 @@ import MarkdownContent, {
   convertLatexMathDelimiters,
   getLargeMarkdownPreview,
   isInternalHref,
+  normalizeMarkdownLocalFilePath,
   safeUrlTransform,
   shouldUseLargeMarkdownPreview,
 } from './MarkdownContent';
+
+test('normalizes macOS, Windows drive, and UNC file links for local actions', () => {
+  expect(normalizeMarkdownLocalFilePath('file:///Users/test/My%20File.md'))
+    .toBe('/Users/test/My File.md');
+  expect(normalizeMarkdownLocalFilePath('file:///C:/Users/test/My%20File.md'))
+    .toBe('C:/Users/test/My File.md');
+  expect(normalizeMarkdownLocalFilePath('file://server/share/My%20File.md'))
+    .toBe('//server/share/My File.md');
+  expect(normalizeMarkdownLocalFilePath('/Users/test/name with spaces.md'))
+    .toBe('/Users/test/name with spaces.md');
+});
 
 test('large markdown preview threshold only applies to oversized content', () => {
   expect(shouldUseLargeMarkdownPreview('x'.repeat(8 * 1024))).toBe(false);
@@ -79,6 +91,55 @@ test('latex delimiters inside code are preserved', () => {
 
   const inlineCode = '用 `\\(x\\)` 表示行内公式，普通的 \\(y\\) 仍会转换。';
   expect(convertLatexMathDelimiters(inlineCode)).toBe('用 `\\(x\\)` 表示行内公式，普通的 $y$ 仍会转换。');
+});
+
+test('latex delimiters inside multi-backtick inline code are preserved', () => {
+  const content = '用 ``literal ` tick \\(x\\)`` 表示代码，普通的 \\(y\\) 仍会转换。';
+
+  expect(convertLatexMathDelimiters(content))
+    .toBe('用 ``literal ` tick \\(x\\)`` 表示代码，普通的 $y$ 仍会转换。');
+});
+
+test('latex delimiters inside longer fenced code are preserved', () => {
+  const content = [
+    '````markdown',
+    '```tex',
+    '\\(x\\)',
+    '```',
+    '\\[y=1\\]',
+    '````',
+    '普通的 \\(z\\) 仍会转换。',
+  ].join('\n');
+
+  expect(convertLatexMathDelimiters(content)).toBe([
+    '````markdown',
+    '```tex',
+    '\\(x\\)',
+    '```',
+    '\\[y=1\\]',
+    '````',
+    '普通的 $z$ 仍会转换。',
+  ].join('\n'));
+});
+
+test('latex delimiters inside longer tilde fences are preserved', () => {
+  const content = [
+    '~~~~text',
+    '~~~',
+    '\\(x\\)',
+    '~~~',
+    '~~~~',
+    '\\(y\\)',
+  ].join('\n');
+
+  expect(convertLatexMathDelimiters(content)).toBe([
+    '~~~~text',
+    '~~~',
+    '\\(x\\)',
+    '~~~',
+    '~~~~',
+    '$y$',
+  ].join('\n'));
 });
 
 test('latex line breaks with spacing are not treated as display math', () => {

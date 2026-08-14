@@ -101,27 +101,31 @@ describe('file attachment extraction', () => {
     ]);
   });
 
-  test('duplicate paths are deduped keeping first occurrence', () => {
+  test('Windows paths are deduped case-insensitively while POSIX paths preserve case', () => {
     const result = extractUserMessageFileAttachments(
-      '输入文件: /tmp/a.txt\n输入文件: /tmp/a.txt\nInput Files: /TMP/A.TXT',
+      String.raw`输入文件: C:\tmp\a.txt` + '\n'
+        + String.raw`Input Files: c:\TMP\A.TXT` + '\n'
+        + '输入文件: /tmp/a.txt\nInput Files: /TMP/A.TXT',
     );
-    expect(result.attachments).toHaveLength(1);
-    expect(result.attachments[0].path).toBe('/tmp/a.txt');
+    expect(result.attachments.map(attachment => attachment.path)).toEqual([
+      String.raw`C:\tmp\a.txt`,
+      '/tmp/a.txt',
+      '/TMP/A.TXT',
+    ]);
   });
 
-  test('blank runs collapse after stripping lines between paragraphs', () => {
+  test('only strips the trailing generated block', () => {
     const result = extractUserMessageFileAttachments(
-      '第一段\n\n输入文件: /tmp/a.txt\n\n第二段',
+      '第一段\n\n第二段\n\n输入文件: /tmp/a.txt',
     );
     expect(result.text).toBe('第一段\n\n第二段');
     expect(result.attachments).toHaveLength(1);
   });
 
-  test('text after attachments is preserved', () => {
-    const result = extractUserMessageFileAttachments(
-      '输入文件: /tmp/a.txt\n\n用中文回答',
-    );
-    expect(result.text).toBe('用中文回答');
-    expect(result.attachments).toHaveLength(1);
+  test('attachment-looking lines in the body or a quote are preserved', () => {
+    const content = '输入文件: /tmp/a.txt\n\n> 输入文件: /tmp/quoted.txt\n\n用中文回答';
+    const result = extractUserMessageFileAttachments(content);
+    expect(result.text).toBe(content);
+    expect(result.attachments).toEqual([]);
   });
 });

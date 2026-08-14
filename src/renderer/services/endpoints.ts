@@ -56,8 +56,33 @@ export const getPortalPricingUrl = (keyfrom?: PortalPricingKeyfrom) => (
   `${getPortalBase()}/pricing${keyfrom ? `?keyfrom=${encodeURIComponent(keyfrom)}` : ''}`
 );
 export const getPortalProfileUrl = () => `${getPortalBase()}/profile`;
+export const getPortalCreditsDetailUrl = () => `${getPortalBase()}/profile/detail`;
 export const getPortalRechargeUrl = () => `${getPortalBase()}/`;
 export const getPortalInvitationUrl = () => `${getPortalBase()}/invitation`;
 export const getPortalCreditsResetActivityUrl = (campaignCode?: string) => (
   `${getPortalBase()}/profile?activity=credits_reset${campaignCode ? `&campaignCode=${encodeURIComponent(campaignCode)}` : ''}`
+);
+
+export const getEnterpriseMemberProfileUrl = (enterpriseId: number) => (
+  `${getPortalBase()}/enterprise/profile/${encodeURIComponent(String(enterpriseId))}`
+);
+
+const getEnterpriseConsoleBaseUrl = (enterpriseId: number) => (
+  `${getPortalBase()}/enterprise/console/${encodeURIComponent(String(enterpriseId))}`
+);
+
+export const getEnterpriseOverviewUrl = (enterpriseId: number) => (
+  `${getEnterpriseConsoleBaseUrl(enterpriseId)}/overview`
+);
+
+export const getEnterpriseUsageUrl = (enterpriseId: number) => (
+  `${getEnterpriseConsoleBaseUrl(enterpriseId)}/usage`
+);
+
+export const getEnterpriseBillingUrl = (enterpriseId: number) => (
+  `${getEnterpriseConsoleBaseUrl(enterpriseId)}/billing`
+);
+
+export const getEnterpriseRechargeUrl = (enterpriseId: number) => (
+  `${getEnterpriseConsoleBaseUrl(enterpriseId)}/recharge`
 );

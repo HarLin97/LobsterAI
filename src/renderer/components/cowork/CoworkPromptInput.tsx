@@ -31,6 +31,7 @@ import {
   formatCoworkGoalUsage,
 } from '../../../shared/cowork/goal';
 import {
+  CoworkImageAttachmentRole,
   formatCoworkImageAttachmentLimit,
 } from '../../../shared/cowork/imageAttachments';
 import { isPlanImplementationApproval } from '../../../shared/cowork/planMode';
@@ -177,7 +178,11 @@ const logPromptModelSelection = (
   } else {
     console.debug(`[CoworkPromptInput] ${message}`);
   }
-  window.electron?.log?.fromRenderer?.(level, 'CoworkPromptInput', message);
+  try {
+    window.electron?.log?.fromRenderer?.(level, 'CoworkPromptInput', message.slice(0, 500));
+  } catch {
+    // Diagnostics must never interrupt model selection.
+  }
 };
 
 const logCoworkSteer = (
@@ -197,7 +202,15 @@ const logCoworkSteer = (
   const persistedMessage = error === undefined
     ? message
     : `${message} error=${error instanceof Error ? error.message : String(error)}`;
-  window.electron?.log?.fromRenderer?.(level, 'CoworkSteer', persistedMessage);
+  try {
+    window.electron?.log?.fromRenderer?.(
+      level,
+      'CoworkSteer',
+      persistedMessage.replace(/\s+/g, ' ').trim().slice(0, 500),
+    );
+  } catch {
+    // Diagnostics must never interrupt queued follow-up handling.
+  }
 };
 
 const summarizePromptShape = (prompt: string): string => {
@@ -401,6 +414,8 @@ export interface CoworkPromptInputRef {
   setSelectedTextSnippets: (snippets: CoworkSelectedTextSnippet[]) => void;
   /** 聚焦输入框 */
   focus: () => void;
+  /** 以当前草稿（文本/附件/浏览器注释）触发一次提交，等价于点击发送按钮 */
+  submit: () => void;
 }
 
 interface CoworkPromptInputProps {
@@ -417,6 +432,7 @@ interface CoworkPromptInputProps {
   isStreaming?: boolean;
   placeholder?: string;
   disabled?: boolean;
+  submitDisabled?: boolean;
   size?: 'normal' | 'large' | 'compact';
   workingDirectory?: string;
   onWorkingDirectoryChange?: (dir: string) => void;
@@ -453,6 +469,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       isStreaming = false,
       placeholder = 'Enter your task...',
       disabled = false,
+      submitDisabled = false,
       size = 'normal',
       workingDirectory = '',
       onWorkingDirectoryChange,
@@ -502,6 +519,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
     const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
     const authQuota = useSelector((state: RootState) => state.auth.quota);
+    const authOwnerAccountKey = useSelector((state: RootState) => state.auth.ownerAccountKey);
+    const authAccountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
     const asrQuota = useSelector((state: RootState) => state.asrQuota);
     const [value, setValue] = useState(draftPrompt);
     const [steerValue, setSteerValue] = useState(steerDraft);
@@ -554,6 +573,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const goalInputReturnDraftRef = useRef<string | null>(null);
     const draftStartedAnalyticsRef = useRef(false);
     const inputSourceOverrideRef = useRef<'template' | null>(null);
+    // handleSubmit is declared later in this component; the ref lets the
+    // imperative handle trigger it without depending on declaration order.
+    const handleSubmitRef = useRef<((submitMethod?: 'button' | 'keyboard' | 'voice') => Promise<void>) | null>(null);
 
   // 暴露方法给父组件
   React.useImperativeHandle(ref, () => ({
@@ -591,6 +613,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     },
     focus: () => {
       textareaRef.current?.focus();
+    },
+    submit: () => {
+      void handleSubmitRef.current?.('button');
     },
   }));
 
@@ -1274,6 +1299,15 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const handleSubmit = useCallback(async (submitMethod: 'button' | 'keyboard' | 'voice' = 'button') => {
     let effectiveSubmitMethod = submitMethod;
+    if (submitDisabled) {
+      reportPromptControl('submit_blocked', {
+        blockedReason: 'quota_exhausted',
+        submitMethod: effectiveSubmitMethod,
+        ...getPromptTextAnalyticsParams(value),
+        ...getPromptCapabilityAnalyticsParams(),
+      });
+      return;
+    }
     const btwCommand = !goalInputActive && !steerInputActive && !isVoiceRecording
       ? parseCoworkBtwCommand(value)
       : { matched: false } as const;
@@ -1473,6 +1507,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       dispatch(addPendingSteer({
         id: queuedSteerId,
         sessionId,
+        ownerAccountKey: authOwnerAccountKey,
+        accountGeneration: authAccountGeneration,
         text: followUpText,
         attachments: queuedAttachments.length > 0 ? queuedAttachments : undefined,
         selectedTextSnippets: queuedPayload.selectedTextSnippets,
@@ -1736,6 +1772,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           mimeType: annotation.screenshot.asset.mimeType,
           base64Data: asset.dataUrl.slice(separator + 1),
           sizeBytes: asset.byteSize,
+          role: CoworkImageAttachmentRole.BrowserAnnotation,
         });
         preparedAnnotations.push({
           ...annotation,
@@ -1816,7 +1853,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     resetGoalInput(false);
     draftStartedAnalyticsRef.current = false;
     inputSourceOverrideRef.current = null;
-  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, isPatchingModel, onSubmit, onGoalCommand, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection]);
+  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration]);
+  handleSubmitRef.current = handleSubmit;
 
   const handleSelectSkill = useCallback((skill: Skill) => {
     const willSelect = !activeSkillIds.includes(skill.id);
@@ -2680,6 +2718,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [disabled, handleIncomingFiles, voiceInputLocksEditing]);
 
   const canSubmit = !disabled
+    && !submitDisabled
     && !isVoiceRecognizing
     && !isPatchingModel
     && !agentModelIsInvalid
@@ -2757,9 +2796,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             )) ?? nextModel
             : nextModel;
           const modelRef = toOpenClawModelRef(selectedModel);
-          const nextThinkingLevel = selectedModel.thinkingConfig
-            ? meta.thinkingLevel ?? selectedModel.thinkingConfig.defaultLevel
-            : '';
+          const nextThinkingLevel = resolveModelThinkingLevel(
+            selectedModel,
+            meta.thinkingLevel,
+          ) ?? '';
           if (sessionId) {
             const requestId = modelPatchRequestIdRef.current + 1;
             modelPatchRequestIdRef.current = requestId;
@@ -2834,8 +2874,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             'debug',
             `persisting agent ${currentAgentId} model ${modelRef}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
           );
-          await persistAgentModelSelection(selectedModel, nextThinkingLevel);
-          reportModelSelected(selectedModel, meta.group, 'agent', currentAgentId);
+          const persisted = await persistAgentModelSelection(selectedModel, nextThinkingLevel);
+          if (persisted) {
+            reportModelSelected(selectedModel, meta.group, 'agent', currentAgentId);
+          }
         }}
       />
       {agentModelIsInvalid && (

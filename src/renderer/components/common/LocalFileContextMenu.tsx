@@ -15,19 +15,30 @@ import {
   showShellFailureToast,
   showToast,
 } from '@/utils/localFileActions';
+import { canCopyLocalFileAsText } from '@/utils/localFileContentPolicy';
 
 import { getFileTypeInfo } from '../icons/fileTypes/index';
 
 const t = (key: string) => i18nService.t(key);
 
-const MENU_CONTAINER_CLASS = 'pointer-events-auto fixed min-w-[196px] max-w-[300px] max-h-[356px] overflow-y-auto rounded-2xl border border-border bg-surface-raised p-1.5 shadow-[0_12px_36px_rgba(0,0,0,0.14),0_2px_8px_rgba(0,0,0,0.08)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.5),0_2px_8px_rgba(0,0,0,0.4)] animate-in fade-in zoom-in-95 duration-100';
+const MENU_CONTAINER_CLASS = 'pointer-events-auto fixed overflow-y-auto rounded-2xl border border-border bg-surface-raised p-1.5 shadow-[0_12px_36px_rgba(0,0,0,0.14),0_2px_8px_rgba(0,0,0,0.08)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.5),0_2px_8px_rgba(0,0,0,0.4)] animate-in fade-in zoom-in-95 duration-100';
 const MENU_ITEM_CLASS = 'flex h-9 w-full flex-shrink-0 items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-foreground hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors text-left';
 const MENU_ICON_CLASS = 'h-[18px] w-[18px] flex-shrink-0';
 const SUBMENU_ESTIMATED_WIDTH = 224;
 const VIEWPORT_MARGIN = 8;
+const MENU_MIN_WIDTH = 196;
+const MENU_MAX_WIDTH = 300;
+const MENU_MAX_HEIGHT = 356;
 
-// Media files where "copy contents as text" makes no sense.
-const MEDIA_TYPE_LABELS = new Set(['Image', 'Audio', 'Video']);
+const logContextMenuFailure = (operation: string, detail?: unknown): void => {
+  const message = `${operation} failed${detail ? `: ${String(detail)}` : ''}`;
+  console.warn(`[LocalFileContextMenu] ${message}`);
+  try {
+    window.electron?.log?.fromRenderer?.('warn', 'LocalFileContextMenu', message);
+  } catch {
+    // Diagnostic logging is best-effort and must not break file actions.
+  }
+};
 
 const AppIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -65,7 +76,12 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
   const fileName = normalizedPath.split(/[\\/]/).pop() ?? normalizedPath;
   const fileTypeLabel = getFileTypeInfo(fileName).label;
   const isImageFile = !isDirectory && fileTypeLabel === 'Image';
-  const supportsCopyContents = !isDirectory && !MEDIA_TYPE_LABELS.has(fileTypeLabel);
+  const supportsCopyContents = !isDirectory && canCopyLocalFileAsText(fileName);
+  const viewportMenuStyle = {
+    minWidth: Math.max(0, Math.min(MENU_MIN_WIDTH, window.innerWidth - (VIEWPORT_MARGIN * 2))),
+    maxWidth: Math.max(0, Math.min(MENU_MAX_WIDTH, window.innerWidth - (VIEWPORT_MARGIN * 2))),
+    maxHeight: Math.max(0, Math.min(MENU_MAX_HEIGHT, window.innerHeight - (VIEWPORT_MARGIN * 2))),
+  };
 
   useEffect(() => {
     if (isDirectory) return undefined;
@@ -141,16 +157,21 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
 
   const closeSubmenu = useCallback(() => setSubmenuOpen(false), []);
 
-  // The submenu height depends on the async app list; re-clamp when it settles.
+  // The submenu size depends on the async app list; re-clamp both axes when it
+  // settles so narrow/short windows never leave actions off-screen.
   useLayoutEffect(() => {
     if (!submenuOpen) return;
     const el = submenuRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const maxTop = window.innerHeight - rect.height - VIEWPORT_MARGIN;
-    if (rect.top > maxTop) {
-      setSubmenuPos(prev => (prev ? { ...prev, top: Math.max(VIEWPORT_MARGIN, maxTop) } : prev));
-    }
+    const maxLeft = window.innerWidth - rect.width - VIEWPORT_MARGIN;
+    setSubmenuPos(prev => {
+      if (!prev) return prev;
+      const top = Math.max(VIEWPORT_MARGIN, Math.min(prev.top, maxTop));
+      const left = Math.max(VIEWPORT_MARGIN, Math.min(prev.left, maxLeft));
+      return top === prev.top && left === prev.left ? prev : { top, left };
+    });
   }, [submenuOpen, apps, loadingApps]);
 
   const handleOpen = useCallback(async () => {
@@ -163,11 +184,11 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
     try {
       const result = await window.electron?.shell?.openPathWithApp(normalizedPath, appItem.path);
       if (!result?.success) {
-        console.warn('[LocalFileContextMenu] failed to open file with app:', appItem.name, result?.error);
+        logContextMenuFailure(`open with ${appItem.name}`, result?.error);
         showShellFailureToast(result, 'openFileFailed');
       }
     } catch (error) {
-      console.warn('[LocalFileContextMenu] failed to open file with app:', appItem.name, error);
+      logContextMenuFailure(`open with ${appItem.name}`, error);
       showShellFailureToast(null, 'openFileFailed');
     }
   }, [normalizedPath, onClose]);
@@ -177,11 +198,11 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
     try {
       const result = await window.electron?.dialog?.saveFileCopy(normalizedPath);
       if (result && !result.success) {
-        console.warn('[LocalFileContextMenu] failed to save file copy:', result.error);
+        logContextMenuFailure('save file copy', result.error);
         showToast(t('fileMenuSaveFailed'));
       }
     } catch (error) {
-      console.warn('[LocalFileContextMenu] failed to save file copy:', error);
+      logContextMenuFailure('save file copy', error);
       showToast(t('fileMenuSaveFailed'));
     }
   }, [normalizedPath, onClose]);
@@ -190,8 +211,12 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
     onClose();
     try {
       const result = await window.electron?.clipboard?.writeText(normalizedPath);
+      if (!result?.success) {
+        logContextMenuFailure('copy file path');
+      }
       showToast(t(result?.success ? 'copied' : 'copyFailed'));
-    } catch {
+    } catch (error) {
+      logContextMenuFailure('copy file path', error);
       showToast(t('copyFailed'));
     }
   }, [normalizedPath, onClose]);
@@ -200,14 +225,27 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
     onClose();
     try {
       const readResult = await window.electron?.dialog?.readTextFile(normalizedPath);
+      if (readResult?.truncated) {
+        logContextMenuFailure(
+          'copy file contents because the file exceeds the safe read limit',
+          `size=${readResult.size ?? 'unknown'}, readBytes=${readResult.readBytes ?? 'unknown'}`,
+        );
+        showToast(t('fileMenuCopyContentsTooLarge'));
+        return;
+      }
       const content = readResult?.success ? readResult.content : undefined;
       if (typeof content !== 'string' || content.includes('\u0000')) {
+        logContextMenuFailure('copy file contents', readResult?.error || 'file is not readable text');
         showToast(t('copyFailed'));
         return;
       }
       const writeResult = await window.electron?.clipboard?.writeText(content);
+      if (!writeResult?.success) {
+        logContextMenuFailure('write file contents to clipboard');
+      }
       showToast(t(writeResult?.success ? 'copied' : 'copyFailed'));
-    } catch {
+    } catch (error) {
+      logContextMenuFailure('copy file contents', error);
       showToast(t('copyFailed'));
     }
   }, [normalizedPath, onClose]);
@@ -216,8 +254,12 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
     onClose();
     try {
       const result = await window.electron?.clipboard?.writeImageFromFile(normalizedPath);
+      if (!result?.success) {
+        logContextMenuFailure('copy image');
+      }
       showToast(t(result?.success ? 'copied' : 'copyFailed'));
-    } catch {
+    } catch (error) {
+      logContextMenuFailure('copy image', error);
       showToast(t('copyFailed'));
     }
   }, [normalizedPath, onClose]);
@@ -243,6 +285,7 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
           top: menuPos?.top ?? position.y,
           left: menuPos?.left ?? position.x,
           visibility: menuPos ? undefined : 'hidden',
+          ...viewportMenuStyle,
         }}
       >
         <button type="button" onClick={handleOpen} onMouseEnter={closeSubmenu} className={MENU_ITEM_CLASS}>
@@ -287,7 +330,7 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
         <div
           ref={submenuRef}
           className={MENU_CONTAINER_CLASS}
-          style={{ top: submenuPos.top, left: submenuPos.left }}
+          style={{ top: submenuPos.top, left: submenuPos.left, ...viewportMenuStyle }}
         >
           {loadingApps ? (
             <div className="flex h-9 items-center gap-2.5 px-2.5 text-[13px] text-secondary">

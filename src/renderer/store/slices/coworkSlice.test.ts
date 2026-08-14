@@ -10,23 +10,31 @@ import {
   type CoworkSelectedTextSnippet,
   CoworkSelectedTextSource,
 } from '../../../shared/cowork/selectedText';
+import { CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { CoworkSessionStatusValue } from '../../types/cowork';
+import type { MediaModel } from '../../types/mediaGeneration';
 import coworkReducer, {
   addMessage,
+  addPendingSteer,
   addSession,
   appendBtwEntry,
   appendNewerMessages,
   clearBtwComposerIfUnchanged,
   clearCurrentSession,
+  clearMediaAccountState,
   closeBtwThread,
   deleteSession,
   finishSessionNavigation,
   openBtwThread,
+  setAgentSessions,
   setBtwDraft,
   setBtwSelectedTextSnippets,
   setConfig,
   setCurrentSession,
   setCurrentSessionId,
+  setMediaModels,
+  setMediaSelection,
+  setMessageWindow,
   setSessions,
   settleBtwEntry,
   updateCurrentSessionModelOverride,
@@ -79,6 +87,54 @@ test('defaults hidden OpenClaw session policy to thirty days', () => {
   });
   expect(state.config.skipMissedJobs).toBe(true);
   expect(state.config.openClawHeartbeatEnabled).toBe(true);
+});
+
+test('clears account-scoped media models and selections together', () => {
+  const imageModel: MediaModel = {
+    modelId: 'image-model',
+    displayName: 'Image Model',
+    provider: 'provider',
+    mediaType: 'image',
+    generationTimeout: 60,
+    pricing: {},
+  };
+  const withModels = coworkReducer(undefined, setMediaModels({
+    image: [imageModel],
+    video: [],
+    ownerAccountKey: 'enterprise:6:1001',
+  }));
+  const withSelection = coworkReducer(withModels, setMediaSelection({
+    draftKey: '__home__',
+    selection: {
+      mode: 'image',
+      modelId: imageModel.modelId,
+      modelName: imageModel.displayName,
+    },
+  }));
+  const withPendingMediaStatus = coworkReducer(withSelection, updateToolUseMediaStatus({
+    sessionId: 'session-1',
+    toolCallId: 'tool-enterprise-a',
+    details: { taskId: 'task-enterprise-a', status: 'running' },
+  }));
+  const withQueuedTurn = coworkReducer(withPendingMediaStatus, addPendingSteer({
+    id: 'steer-enterprise-a',
+    sessionId: 'session-1',
+    ownerAccountKey: 'enterprise:6:1001',
+    accountGeneration: 2,
+    text: 'generate an image',
+    mediaSelection: { mode: 'image', modelId: imageModel.modelId },
+    status: CoworkSteerStatus.Pending,
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const cleared = coworkReducer(withQueuedTurn, clearMediaAccountState());
+
+  expect(cleared.mediaModels).toEqual({ image: [], video: [] });
+  expect(cleared.mediaModelsOwnerAccountKey).toBeNull();
+  expect(cleared.mediaSelection).toEqual({});
+  expect(cleared.pendingMediaStatusUpdates).toEqual({});
+  expect(cleared.pendingSteers).toEqual({});
+  expect(cleared.rejectedSteers).toEqual({});
 });
 
 test('keeps a cross-agent session presentation target until the session loads', () => {
@@ -245,6 +301,161 @@ test('addMessage refreshes the session updated time only for user messages', () 
   );
   expect(userState.sessions[0].updatedAt).toBe(3000);
   expect(userState.currentSession?.updatedAt).toBe(3000);
+});
+
+test('addMessage keeps live tail messages outside a detached middle window', () => {
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: [
+      { id: 'message-20', type: 'user', content: 'twenty', timestamp: 20 },
+      { id: 'message-21', type: 'assistant', content: 'twenty one', timestamp: 21 },
+    ],
+    messagesOffset: 20,
+    totalMessages: 24,
+  })));
+
+  const state = coworkReducer(initialState, addMessage({
+    sessionId: 'session-1',
+    message: { id: 'message-24', type: 'assistant', content: 'live tail', timestamp: 24 },
+  }));
+
+  expect(state.currentSession?.messages.map(message => message.id)).toEqual([
+    'message-20',
+    'message-21',
+  ]);
+  expect(state.currentSession?.totalMessages).toBe(25);
+  expect(state.detachedTailMessagesBySessionId['session-1']?.map(message => message.id)).toEqual([
+    'message-24',
+  ]);
+});
+
+test('setMessageWindow retains the displaced tail for streaming updates', () => {
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: [
+      { id: 'message-22', type: 'user', content: 'twenty two', timestamp: 22 },
+      { id: 'message-23', type: 'assistant', content: 'streaming', timestamp: 23 },
+    ],
+    messagesOffset: 22,
+    totalMessages: 24,
+  })));
+  const detachedState = coworkReducer(initialState, setMessageWindow({
+    sessionId: 'session-1',
+    messages: [
+      { id: 'message-10', type: 'user', content: 'ten', timestamp: 10 },
+      { id: 'message-11', type: 'assistant', content: 'eleven', timestamp: 11 },
+    ],
+    messagesOffset: 10,
+    totalMessages: 24,
+  }));
+
+  const state = coworkReducer(detachedState, updateMessageContent({
+    sessionId: 'session-1',
+    messageId: 'message-23',
+    content: 'streaming update with needle',
+  }));
+
+  expect(state.currentSession?.messages.map(message => message.id)).toEqual([
+    'message-10',
+    'message-11',
+  ]);
+  expect(state.detachedTailMessagesBySessionId['session-1']?.find(
+    message => message.id === 'message-23',
+  )?.content).toBe('streaming update with needle');
+});
+
+test('setMessageWindow bounds the detached tail to the most recent messages', () => {
+  const allMessages = Array.from({ length: 150 }, (_, index) => ({
+    id: `message-${index}`,
+    type: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+    content: `message ${index}`,
+    timestamp: index,
+  }));
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: allMessages,
+    messagesOffset: 0,
+    totalMessages: allMessages.length,
+  })));
+
+  const state = coworkReducer(initialState, setMessageWindow({
+    sessionId: 'session-1',
+    messages: allMessages.slice(0, 50),
+    messagesOffset: 0,
+    totalMessages: allMessages.length,
+  }));
+
+  expect(state.detachedTailMessagesBySessionId['session-1']).toHaveLength(100);
+  expect(state.detachedTailMessagesBySessionId['session-1']?.[0]?.id).toBe('message-50');
+  expect(state.detachedTailMessagesBySessionId['session-1']?.[99]?.id).toBe('message-149');
+});
+
+test('setMessageWindow does not detach older messages when the next window includes the tail', () => {
+  const allMessages = Array.from({ length: 150 }, (_, index) => ({
+    id: `message-${index}`,
+    type: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+    content: `message ${index}`,
+    timestamp: index,
+  }));
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: allMessages,
+    messagesOffset: 0,
+    totalMessages: allMessages.length,
+  })));
+
+  const state = coworkReducer(initialState, setMessageWindow({
+    sessionId: 'session-1',
+    messages: allMessages.slice(100),
+    messagesOffset: 100,
+    totalMessages: allMessages.length,
+  }));
+
+  expect(state.currentSession?.messages.map(message => message.id)).toEqual(
+    allMessages.slice(100).map(message => message.id),
+  );
+  expect(state.detachedTailMessagesBySessionId['session-1']).toBeUndefined();
+});
+
+test('setMessageWindow accepts an authoritative lower total when no live message raced the request', () => {
+  const allMessages = Array.from({ length: 10 }, (_, index) => ({
+    id: `message-${index}`,
+    type: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+    content: `message ${index}`,
+    timestamp: index,
+  }));
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: allMessages,
+    messagesOffset: 0,
+    totalMessages: 12,
+  })));
+
+  const state = coworkReducer(initialState, setMessageWindow({
+    sessionId: 'session-1',
+    messages: allMessages,
+    messagesOffset: 0,
+    totalMessages: 10,
+  }));
+
+  expect(state.currentSession?.totalMessages).toBe(10);
+});
+
+test('setCurrentSession releases the previous session detached tail', () => {
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: [
+      { id: 'message-20', type: 'user', content: 'twenty', timestamp: 20 },
+    ],
+    messagesOffset: 20,
+    totalMessages: 24,
+  })));
+  const withDetachedTail = coworkReducer(initialState, addMessage({
+    sessionId: 'session-1',
+    message: { id: 'message-24', type: 'assistant', content: 'live tail', timestamp: 24 },
+  }));
+
+  const state = coworkReducer(withDetachedTail, setCurrentSession(makeSession({
+    id: 'session-2',
+    title: 'Session 2',
+  })));
+
+  expect(state.currentSession?.id).toBe('session-2');
+  expect(state.detachedTailMessagesBySessionId['session-1']).toBeUndefined();
 });
 
 test('appendNewerMessages extends a paged window without changing its offset or duplicating messages', () => {
@@ -665,6 +876,107 @@ test('updateSessionStatus marks completed inactive sessions unread', () => {
   );
 
   expect(completedState.unreadSessionIds).toEqual(['session-1']);
+  expect(completedState.completedUnreadSessionIds).toEqual(['session-1']);
+});
+
+test('agent-scoped session refresh preserves unread tasks from other agents', () => {
+  let state = coworkReducer(undefined, setSessions([{
+    id: 'agent-one-session',
+    title: 'Agent one task',
+    scheduledTaskId: null,
+    status: CoworkSessionStatusValue.Running,
+    pinned: false,
+    agentId: 'agent-one',
+    createdAt: 1,
+    updatedAt: 1,
+  }]));
+  state = coworkReducer(state, updateSessionStatus({
+    sessionId: 'agent-one-session',
+    status: CoworkSessionStatusValue.Completed,
+  }));
+
+  state = coworkReducer(state, setAgentSessions([{
+    id: 'agent-two-session',
+    title: 'Agent two task',
+    scheduledTaskId: null,
+    status: CoworkSessionStatusValue.Completed,
+    pinned: false,
+    agentId: 'agent-two',
+    createdAt: 2,
+    updatedAt: 2,
+  }]));
+
+  expect(state.unreadSessionIds).toEqual(['agent-one-session']);
+  expect(state.completedUnreadSessionIds).toEqual(['agent-one-session']);
+});
+
+test('full session refresh prunes unread completion state outside the snapshot', () => {
+  let state = coworkReducer(undefined, setSessions([{
+    id: 'stale-session',
+    title: 'Stale task',
+    scheduledTaskId: null,
+    status: CoworkSessionStatusValue.Running,
+    pinned: false,
+    agentId: 'main',
+    createdAt: 1,
+    updatedAt: 1,
+  }]));
+  state = coworkReducer(state, updateSessionStatus({
+    sessionId: 'stale-session',
+    status: CoworkSessionStatusValue.Completed,
+  }));
+
+  state = coworkReducer(state, setSessions([]));
+
+  expect(state.unreadSessionIds).toEqual([]);
+  expect(state.completedUnreadSessionIds).toEqual([]);
+});
+
+test('running a completed task again clears only its completion unread state', () => {
+  let state = coworkReducer(undefined, setSessions([{
+    id: 'rerun-session',
+    title: 'Rerun task',
+    scheduledTaskId: null,
+    status: CoworkSessionStatusValue.Running,
+    pinned: false,
+    agentId: 'main',
+    createdAt: 1,
+    updatedAt: 1,
+  }]));
+  state = coworkReducer(state, updateSessionStatus({
+    sessionId: 'rerun-session',
+    status: CoworkSessionStatusValue.Completed,
+  }));
+
+  state = coworkReducer(state, updateSessionStatus({
+    sessionId: 'rerun-session',
+    status: CoworkSessionStatusValue.Running,
+  }));
+
+  expect(state.unreadSessionIds).toEqual(['rerun-session']);
+  expect(state.completedUnreadSessionIds).toEqual([]);
+});
+
+test('deleting a session clears its completion unread state', () => {
+  let state = coworkReducer(undefined, setSessions([{
+    id: 'deleted-session',
+    title: 'Deleted task',
+    scheduledTaskId: null,
+    status: CoworkSessionStatusValue.Running,
+    pinned: false,
+    agentId: 'main',
+    createdAt: 1,
+    updatedAt: 1,
+  }]));
+  state = coworkReducer(state, updateSessionStatus({
+    sessionId: 'deleted-session',
+    status: CoworkSessionStatusValue.Completed,
+  }));
+
+  state = coworkReducer(state, deleteSession('deleted-session'));
+
+  expect(state.unreadSessionIds).toEqual([]);
+  expect(state.completedUnreadSessionIds).toEqual([]);
 });
 
 test('updateSessionStatus does not mark the active completed session unread', () => {

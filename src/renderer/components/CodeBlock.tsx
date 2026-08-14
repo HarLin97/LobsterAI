@@ -40,12 +40,31 @@ import { createPortal } from 'react-dom';
 
 import { copyTextToClipboard } from '../services/clipboard';
 import { i18nService } from '../services/i18n';
+import { registerVirtualSearchText } from '../utils/searchDomProjection';
 import {
   bucketLength,
   getMessageLineCount,
   reportConversationBlockAction,
 } from './cowork/conversationAnalytics';
 import Tooltip, { TooltipAlign, TooltipPosition } from './ui/Tooltip';
+
+const VirtualizedCodeSearchProjection: React.FC<{ text: string }> = ({ text }) => {
+  const markerRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const marker = markerRef.current;
+    if (!marker) return undefined;
+    return registerVirtualSearchText(marker, text);
+  }, [text]);
+
+  return (
+    <span
+      ref={markerRef}
+      data-cowork-search-virtual-text="true"
+      aria-hidden="true"
+    />
+  );
+};
 
 const CodeBlockIcon: React.FC<{
   className?: string;
@@ -1544,7 +1563,10 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
         />
       )}
       {/* Header */}
-      <div className="bg-surface-raised/70 border-b border-border-subtle px-3.5 py-1.5 text-xs text-secondary font-medium flex items-center justify-between">
+      <div
+        className="bg-surface-raised/70 border-b border-border-subtle px-3.5 py-1.5 text-xs text-secondary font-medium flex items-center justify-between"
+        data-cowork-search-exclude="true"
+      >
         <span className="font-mono opacity-70">{displayLang}</span>
         <div className="flex items-center gap-0.5">
           {/* Collapse / expand the entire code body */}
@@ -1601,26 +1623,31 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
       </div>
 
       {/* Body - hidden when collapsed */}
+      {shouldUseCodeMirror && (
+        <VirtualizedCodeSearchProjection text={codeText} />
+      )}
       {!collapsed &&
         (shouldUseCodeMirror ? (
-          isDiffBlock && diffParsed ? (
-            <DiffView
-              original={diffParsed.original}
-              modified={diffParsed.modified}
-              langSupport={langSupport}
-              isDark={isDark}
-              wrap={wrap}
-            />
-          ) : (
-            <CodeMirrorEditor
-              doc={trimmedCodeText}
-              isDark={isDark}
-              wrap={wrap}
-              langSupport={langSupport}
-              onViewReady={ignoreCodeMirrorView}
-              onSearchOpenChange={ignoreSearchOpenChange}
-            />
-          )
+          <div data-cowork-search-exclude="true">
+            {isDiffBlock && diffParsed ? (
+              <DiffView
+                original={diffParsed.original}
+                modified={diffParsed.modified}
+                langSupport={langSupport}
+                isDark={isDark}
+                wrap={wrap}
+              />
+            ) : (
+              <CodeMirrorEditor
+                doc={trimmedCodeText}
+                isDark={isDark}
+                wrap={wrap}
+                langSupport={langSupport}
+                onViewReady={ignoreCodeMirrorView}
+                onSearchOpenChange={ignoreSearchOpenChange}
+              />
+            )}
+          </div>
         ) : (
           <div className="m-0 overflow-x-auto text-code">
             <code

@@ -1,8 +1,10 @@
 import {
-  ArrowUpIcon,
+  ChatBubbleLeftEllipsisIcon,
   StopIcon,
+  TrashIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
+import { ArrowUpIcon } from '@heroicons/react/24/solid';
 import React, {
   useCallback,
   useEffect,
@@ -22,6 +24,7 @@ import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedT
 import { i18nService } from '../../services/i18n';
 import EditIcon from '../icons/EditIcon';
 import MarkdownContent from '../MarkdownContent';
+import { ActivityIndicator } from './AssistantTurnBlock';
 import {
   clampCoworkBtwPanelGeometry,
   COWORK_BTW_PANEL_DEFAULT_HEIGHT,
@@ -39,6 +42,7 @@ interface CoworkBtwFloatingPanelProps {
   thread: CoworkBtwThread;
   promptAnchorRef?: React.RefObject<HTMLElement | null>;
   onClose: () => void;
+  onClearEntries: () => void;
   onDraftChange: (draft: string) => void;
   onSelectedTextSnippetsChange: (snippets: CoworkSelectedTextSnippet[]) => void;
   onLocateSelectedText?: (sourceMessageId: string) => void;
@@ -148,6 +152,7 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
   thread,
   promptAnchorRef,
   onClose,
+  onClearEntries,
   onDraftChange,
   onSelectedTextSnippetsChange,
   onLocateSelectedText,
@@ -187,13 +192,9 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
   const pending = Boolean(pendingEntry);
   // Avoid allocating a trimmed copy of an unbounded controlled draft on every
   // keystroke while preserving the whitespace-only disabled state.
-  const hasComposerContent = selectedTextSnippets.length > 0 || /\S/.test(thread.draft);
-  const emptyThreadText = i18nService.t(
-    selectedTextSnippets.length > 0
-      ? 'coworkBtwEmptyThreadWithSelection'
-      : 'coworkBtwEmptyThread',
-  );
-  const pendingText = i18nService.t('coworkBtwPending');
+  const hasSelectedSnippets = selectedTextSnippets.length > 0;
+  const hasComposerContent = hasSelectedSnippets || /\S/.test(thread.draft);
+  const emptyThreadText = i18nService.t('coworkBtwEmptyThread');
   const failedText = i18nService.t('coworkBtwFailed');
   const stoppedText = i18nService.t('coworkBtwStopped');
   const canSubmit = hasComposerContent && !pending;
@@ -221,8 +222,13 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
   const renderedEntries = useMemo(() => (
     <>
       {thread.entries.length === 0 && (
-        <div className="flex h-full min-h-32 items-center justify-center px-6 text-center text-sm text-muted">
-          {emptyThreadText}
+        <div className="flex h-full min-h-40 flex-col items-center justify-center px-8 text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/[0.08] dark:bg-primary/[0.14]">
+            <ChatBubbleLeftEllipsisIcon className="h-5 w-5 text-primary/70" />
+          </div>
+          <p className="mt-3 max-w-[248px] text-[13px] leading-relaxed text-muted">
+            {emptyThreadText}
+          </p>
         </div>
       )}
       <div className="space-y-3">
@@ -231,7 +237,7 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
           return (
             <article key={entry.runId} className="space-y-2">
               <div className="group flex flex-col items-end">
-                <div className="w-fit max-w-[85%] rounded-2xl bg-surface-raised px-3 py-2 text-sm whitespace-pre-wrap break-words text-foreground shadow-subtle">
+                <div className="w-fit max-w-[85%] rounded-2xl bg-surface px-4 py-2.5 text-sm whitespace-pre-wrap break-words text-foreground shadow-subtle">
                   {entrySelectedTextSnippets.length > 0 && (
                     <div className={entry.question ? 'mb-2' : undefined}>
                       <SelectedTextSnippetBadge
@@ -256,12 +262,13 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
                   </MessageActionButton>
                 </div>
               </div>
-              <div className="group mr-8 px-1 py-1">
+              <div className="group py-1">
                 {entry.status === CoworkBtwStatus.Pending && (
-                  <div className="flex items-center gap-2 text-sm text-muted">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-                    {pendingText}
-                  </div>
+                  <ActivityIndicator
+                    fingerprint={entry.runId}
+                    hasContent={false}
+                    startTimestamp={entry.createdAt}
+                  />
                 )}
                 {entry.status === CoworkBtwStatus.Answered && (
                   <MarkdownContent
@@ -297,7 +304,6 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
     failedText,
     handleEditQuestion,
     handleLocateSelectedText,
-    pendingText,
     resolveLocalFilePath,
     stoppedText,
     thread.entries,
@@ -348,6 +354,15 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
       inputRef.current?.focus();
     }
   }, [thread.isOpen, thread.sessionId]);
+
+  // Grow the composer from one line with its content; 128 mirrors max-h-32.
+  useLayoutEffect(() => {
+    if (!thread.isOpen) return;
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 128)}px`;
+  }, [geometry.width, thread.draft, thread.isOpen]);
 
   const handleDragPointerDown = useCallback((
     event: React.PointerEvent<HTMLDivElement>,
@@ -437,7 +452,7 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
       data-cowork-btw-floating-panel
       role="dialog"
       aria-label={i18nService.t('coworkBtwWindowTitle')}
-      className="non-draggable fixed z-40 flex rounded-2xl border border-border bg-surface shadow-modal ring-1 ring-black/[0.03] dark:ring-white/[0.06] dark:shadow-[0_16px_50px_rgba(0,0,0,0.62)]"
+      className="non-draggable fixed z-40 flex rounded-2xl border border-border bg-background shadow-modal ring-1 ring-black/[0.03] dark:ring-white/[0.06] dark:shadow-[0_16px_50px_rgba(0,0,0,0.62)]"
       style={{
         left: geometry.x,
         top: geometry.y,
@@ -452,22 +467,30 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
           onPointerMove={handleDragPointerMove}
           onPointerUp={handleDragPointerEnd}
           onPointerCancel={handleDragPointerEnd}
-          className="flex h-12 shrink-0 touch-none select-none items-center gap-2 border-b border-border-subtle bg-surface px-3 cursor-move"
+          className="flex h-11 shrink-0 cursor-move touch-none select-none items-center gap-2 px-4"
         >
-          <span className="h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden="true" />
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold text-foreground">
-              {i18nService.t('coworkBtwWindowTitle')}
-            </div>
-            <div className="truncate text-[11px] text-muted">
-              {i18nService.t('coworkBtwWindowSubtitle')}
-            </div>
+          <div className="min-w-0 flex-1 truncate text-sm font-medium text-secondary">
+            {i18nService.t('coworkBtwWindowTitle')}
           </div>
           <button
             type="button"
             onPointerDown={event => event.stopPropagation()}
+            onClick={() => {
+              if (pendingEntry) onStop(pendingEntry.runId);
+              onClearEntries();
+            }}
+            disabled={thread.entries.length === 0}
+            className="shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            title={i18nService.t('coworkBtwClearContext')}
+            aria-label={i18nService.t('coworkBtwClearContext')}
+          >
+            <TrashIcon className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onPointerDown={event => event.stopPropagation()}
             onClick={onClose}
-            className="shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+            className="-mr-1.5 shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
             title={i18nService.t('coworkBtwCloseWindow')}
             aria-label={i18nService.t('coworkBtwCloseWindow')}
           >
@@ -478,15 +501,15 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
         <div
           ref={messageListRef}
           aria-live="polite"
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-surface p-3"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-3 pt-0.5 [scrollbar-gutter:stable_both-edges]"
         >
           {renderedEntries}
         </div>
 
-        <div className="shrink-0 border-t border-border-subtle bg-surface p-3">
+        <div className="shrink-0 px-3 pb-3 pt-1.5">
           <div className="rounded-2xl border border-border bg-surface shadow-card transition-[border-color,box-shadow] duration-200 focus-within:border-primary/35 focus-within:shadow-elevated">
-            {selectedTextSnippets.length > 0 && (
-              <div className="px-3 pt-3">
+            {hasSelectedSnippets && (
+              <div className="px-3 pt-2.5">
                 <SelectedTextSnippetBadge
                   snippets={selectedTextSnippets}
                   onClear={() => onSelectedTextSnippetsChange([])}
@@ -497,26 +520,26 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
                 />
               </div>
             )}
-            <textarea
-              ref={inputRef}
-              value={thread.draft}
-              onChange={event => onDraftChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (
-                  event.key === 'Enter'
-                  && !event.shiftKey
-                  && !event.nativeEvent.isComposing
-                ) {
-                  event.preventDefault();
-                  if (canSubmit) onSubmit();
-                }
-              }}
-              rows={3}
-              aria-label={i18nService.t('coworkBtwInputPlaceholder')}
-              placeholder={i18nService.t('coworkBtwInputPlaceholder')}
-              className="block max-h-32 min-h-20 w-full resize-none bg-transparent px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted"
-            />
-            <div className="flex items-center justify-end gap-2 px-3 pb-3 pt-1">
+            <div className="flex items-end gap-2 py-1.5 pl-3.5 pr-1.5">
+              <textarea
+                ref={inputRef}
+                value={thread.draft}
+                onChange={event => onDraftChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === 'Enter'
+                    && !event.shiftKey
+                    && !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    if (canSubmit) onSubmit();
+                  }
+                }}
+                rows={1}
+                aria-label={i18nService.t('coworkBtwInputPlaceholder')}
+                placeholder={i18nService.t('coworkBtwInputPlaceholder')}
+                className="block max-h-32 w-full flex-1 resize-none overflow-y-auto bg-transparent py-0.5 text-sm leading-6 text-foreground outline-none placeholder:text-muted"
+              />
               <button
                 type="button"
                 onClick={() => {
@@ -527,7 +550,7 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
                   }
                 }}
                 disabled={!pendingEntry && !canSubmit}
-                className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition-all ${
+                className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-all ${
                   pendingEntry || canSubmit
                     ? 'bg-neutral-950 text-white shadow-subtle hover:bg-neutral-800 active:scale-95 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200'
                     : 'cursor-not-allowed bg-neutral-300 text-white dark:bg-neutral-700 dark:text-neutral-500'
@@ -537,12 +560,9 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
               >
                 {pendingEntry
                   ? <StopIcon className="h-4 w-4 fill-current" />
-                  : <ArrowUpIcon className="h-4 w-4" />}
+                  : <ArrowUpIcon className="h-[17px] w-[17px]" />}
               </button>
             </div>
-          </div>
-          <div className="mt-1.5 text-[10px] text-muted">
-            {i18nService.t('coworkBtwFollowUpHint')}
           </div>
         </div>
       </div>

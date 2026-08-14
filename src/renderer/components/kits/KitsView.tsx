@@ -1,6 +1,7 @@
 import React from 'react';
 
 import { i18nService } from '../../services/i18n';
+import { MANAGEMENT_PAGE_TITLE_TEXT } from '../common/managementTypography';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import KitsManager from './KitsManager';
@@ -43,14 +44,14 @@ const KitsView: React.FC<KitsViewProps> = ({ isSidebarCollapsed, onToggleSidebar
               {updateBadge}
             </div>
           )}
-          <h1 className="text-lg font-semibold text-foreground">
+          <h1 className={`${MANAGEMENT_PAGE_TITLE_TEXT} font-semibold text-foreground`}>
             {i18nService.t('kits')}
           </h1>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0 [scrollbar-gutter:stable]">
-        <div className="mx-auto w-full max-w-[1120px] px-6 py-6">
+        <div className="mx-auto w-full max-w-[1120px] px-8 py-6">
           <KitsManager onTryAsking={onTryAsking} onUseKit={onUseKit} />
         </div>
       </div>

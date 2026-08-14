@@ -1,3 +1,4 @@
+import { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
 import { ModelThinkingLevel, OpenClawThinkingLevel } from '@shared/providers/modelThinking';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 
@@ -16,6 +17,7 @@ const PRO_MODEL = {
   id: 'deepseek-v4-pro',
   providerKey: 'lobsterai-server',
   isServerModel: true,
+  requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
   thinkingConfig: {
     options: [
       { level: ModelThinkingLevel.High, openclawLevel: OpenClawThinkingLevel.High },
@@ -114,6 +116,17 @@ test('resolves no level for models without thinking support', () => {
 
   expect(resolveThinkingLevelForModel({ id: 'plain', providerKey: 'custom' })).toBe('');
   expect(resolveThinkingLevelForModel(null)).toBe('');
+});
+
+test('resolves no level when the server withdraws request-options support', () => {
+  installLocalStorage({
+    [STORAGE_KEY]: JSON.stringify({ [PRO_KEY]: ModelThinkingLevel.Max }),
+  });
+
+  expect(resolveThinkingLevelForModel({
+    ...PRO_MODEL,
+    requestCapabilities: undefined,
+  })).toBe('');
 });
 
 test('stays inert outside a browser window', () => {
