@@ -13,11 +13,13 @@ import {
   type BrowserAnnotationGuestEnvelope,
   BrowserAnnotationGuestEventType,
   BrowserAnnotationLimit,
+  BrowserAnnotationPageScreenshotAnnotationId,
   BrowserAnnotationProtocolVersion,
   type BrowserAnnotationScreenshotRef,
   BrowserAnnotationScreenshotStatus,
   type CoworkBrowserAnnotation,
   type CoworkBrowserAnnotationBatch,
+  hasBrowserAnnotationContent,
 } from '@shared/cowork/browserAnnotations';
 import type { CoworkSelectedTextSnippet } from '@shared/cowork/selectedText';
 import {
@@ -665,6 +667,8 @@ interface ArtifactPanelProps {
   onAddSelectedText?: (snippet: CoworkSelectedTextSnippet) => void;
   selectedTextEnabled?: boolean;
   subagentPanel?: React.ReactNode;
+  userAttachmentPanel?: React.ReactNode;
+  onAnnotationSend?: () => void;
 }
 
 interface BrowserPublishAction {
@@ -752,6 +756,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   onAddSelectedText,
   selectedTextEnabled = false,
   subagentPanel,
+  userAttachmentPanel,
+  onAnnotationSend,
 }) => {
   const dispatch = useDispatch();
   const artifactFileShare = useOptionalArtifactFileShare();
@@ -766,6 +772,13 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       || EMPTY_BROWSER_ANNOTATION_BATCHES
     ),
   );
+  // Annotations that survive send-time normalization (comment or element edit).
+  const annotationSendCount = useMemo(() => browserAnnotationBatches.reduce(
+    (total, batch) => total + batch.annotations.filter(
+      annotation => hasBrowserAnnotationContent(annotation.comment, annotation.elementEdit),
+    ).length,
+    0,
+  ), [browserAnnotationBatches]);
   const [showFileListDrawer, setShowFileListDrawer] = useState(false);
   const [isFileListDrawerVisible, setIsFileListDrawerVisible] = useState(false);
   const [localBrowserAddress, setLocalBrowserAddress] = useState('');
@@ -4775,9 +4788,13 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                 }));
               }
             }}
+            annotationSendCount={annotationSendCount}
+            onAnnotationSend={onAnnotationSend}
           />
         ) : activeSpecialTab === ArtifactSpecialTab.Subagents && subagentPanel ? (
           subagentPanel
+        ) : activeSpecialTab === ArtifactSpecialTab.UserAttachment && userAttachmentPanel ? (
+          userAttachmentPanel
         ) : (
           /* No artifact selected: show full-width file list */
           <div className="flex-1 flex flex-col h-full overflow-hidden">
@@ -6166,6 +6183,9 @@ interface BrowserTabContentProps {
   draftKey: string;
   annotationBatch?: CoworkBrowserAnnotationBatch;
   onAnnotationBatchChange: (batch: CoworkBrowserAnnotationBatch | null) => void;
+  /** Draft annotations (across pages) that would survive send-time normalization. */
+  annotationSendCount?: number;
+  onAnnotationSend?: () => void;
 }
 
 const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
@@ -6182,6 +6202,8 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
   draftKey,
   annotationBatch,
   onAnnotationBatchChange,
+  annotationSendCount = 0,
+  onAnnotationSend,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
@@ -6331,11 +6353,12 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
       });
       const image = await webviewNodeRef.current?.capturePage?.();
       if (!image) throw new Error('Browser screenshot capture is unavailable.');
+      const imageDataUrl = image.toDataURL();
       const saved = await window.electron?.artifact?.saveBrowserAnnotationAsset({
         draftKey,
         batchId: batch.id,
         annotationId: annotation.id,
-        imageDataUrl: image.toDataURL(),
+        imageDataUrl,
         viewportWidth: capture.viewportWidth,
         viewportHeight: capture.viewportHeight,
         targetRect: capture.targetRect,
@@ -6343,11 +6366,33 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         compact: batch.annotations.length >= BrowserAnnotationLimit.CompactThreshold,
       });
       if (!saved?.success || !saved.asset) throw new Error(saved?.error || 'Screenshot save failed.');
+      // Keep an uncropped batch-level page screenshot alongside the annotation
+      // crop; the restore view re-frames each annotation region on it.
+      const pageSaved = await window.electron?.artifact?.saveBrowserAnnotationAsset({
+        draftKey,
+        batchId: batch.id,
+        annotationId: BrowserAnnotationPageScreenshotAnnotationId,
+        imageDataUrl,
+        viewportWidth: capture.viewportWidth,
+        viewportHeight: capture.viewportHeight,
+      });
       const current = annotationBatchRef.current;
       if (!current || current.id !== batch.id) return;
+      const previousPageAsset = current.pageScreenshot?.asset;
+      const nextPageScreenshot = pageSaved?.success && pageSaved.asset
+        ? {
+            asset: pageSaved.asset,
+            viewportWidth: capture.viewportWidth,
+            viewportHeight: capture.viewportHeight,
+            scrollX: capture.scrollX,
+            scrollY: capture.scrollY,
+            capturedAt: Date.now(),
+          }
+        : current.pageScreenshot;
       const next = {
         ...current,
         updatedAt: Date.now(),
+        pageScreenshot: nextPageScreenshot,
         annotations: current.annotations.map(item => item.id === annotation.id
           ? {
               ...item,
@@ -6358,6 +6403,18 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
           : item),
       };
       commitAnnotationBatch(next);
+      if (
+        pageSaved?.success && pageSaved.asset
+        && previousPageAsset
+        && previousPageAsset.assetId !== pageSaved.asset.assetId
+      ) {
+        void window.electron?.artifact?.deleteBrowserAnnotationAsset({
+          draftKey,
+          batchId: batch.id,
+          annotationId: BrowserAnnotationPageScreenshotAnnotationId,
+          assetId: previousPageAsset.assetId,
+        });
+      }
       sendAnnotationCommand(BrowserAnnotationGuestCommandType.Sync, next, {
         annotations: next.annotations,
       });
@@ -7346,6 +7403,23 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
               ) : null}
             </button>
           </div>
+          {isAnnotating && annotationSendCount > 0 && onAnnotationSend ? (
+            <button
+              type="button"
+              onClick={() => {
+                reportBrowserAction('browser_annotation_send', {
+                  annotationCount: annotationSendCount,
+                });
+                onAnnotationSend();
+              }}
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-primary pl-2.5 pr-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+            >
+              <span className="whitespace-nowrap">{t('browserAnnotationsSend')}</span>
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-white/25 px-1 text-[10px] font-semibold">
+                {annotationSendCount}
+              </span>
+            </button>
+          ) : null}
           <button
             ref={browserMenuButtonRef}
             type="button"

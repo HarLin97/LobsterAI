@@ -30,6 +30,7 @@ export const ArtifactSpecialTab = {
   FileList: 'fileList',
   Browser: 'browser',
   Subagents: 'subagents',
+  UserAttachment: 'userAttachment',
 } as const;
 export type ArtifactSpecialTab = typeof ArtifactSpecialTab[keyof typeof ArtifactSpecialTab];
 
@@ -372,6 +373,11 @@ const artifactSlice = createSlice({
       setPanelOpen(state, action.payload.sessionId, true);
     },
 
+    activateArtifactUserAttachmentTab(state, action: PayloadAction<{ sessionId: string }>) {
+      activatePreviewTab(state, action.payload.sessionId, null);
+      setPanelOpen(state, action.payload.sessionId, true);
+    },
+
     closeArtifactPreviewTab(state, action: PayloadAction<{ sessionId: string; tabId: string }>) {
       const { sessionId, tabId } = action.payload;
       const tabs = state.previewTabsBySession[sessionId] ?? [];
@@ -439,6 +445,7 @@ export const {
   openArtifactPreviewTab,
   activateArtifactBrowserTab,
   activateArtifactSubagentTab,
+  activateArtifactUserAttachmentTab,
   activateArtifactPreviewTab,
   activateArtifactFileListTab,
   closeArtifactPreviewTab,
