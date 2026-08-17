@@ -14,13 +14,14 @@
 // No Electron imports here so the whole install path stays scriptable and
 // unit testable.
 
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
 import * as path from 'path';
 
+import { DshInstallStage } from '../../shared/dshEngine/constants';
 import { validateDshRuntimeLayout } from './dshRuntime';
 
 const INSTALL_SENTINEL = '.lobsterai-install-ok.json';
@@ -55,10 +56,10 @@ export interface DshRuntimeInstallResult {
 }
 
 export type DshInstallProgress =
-  | { phase: 'manifest' }
-  | { phase: 'download'; receivedBytes: number; totalBytes: number }
-  | { phase: 'verify' }
-  | { phase: 'extract' };
+  | { stage: typeof DshInstallStage.Manifest }
+  | { stage: typeof DshInstallStage.Download; receivedBytes: number; totalBytes: number }
+  | { stage: typeof DshInstallStage.Verify }
+  | { stage: typeof DshInstallStage.Extract };
 
 export function parseDshRuntimeManifest(raw: string): DshRuntimeManifest | null {
   try {
@@ -201,15 +202,15 @@ export async function installDshRuntime(options: {
   const archiveTempPath = path.join(baseDir, `.download-${process.pid}-${artifact.version}-${artifact.target}.tar.gz`);
   const stagingRoot = `${installedDshRuntimeRoot(baseDir, artifact.version)}.staging`;
   try {
-    onProgress?.({ phase: 'manifest' });
+    onProgress?.({ stage: DshInstallStage.Manifest });
     if (artifact.url) {
       await httpGetToFile(artifact.url, archiveTempPath, artifact.size, onProgress);
     } else {
       await fs.promises.copyFile(artifact.filePath as string, archiveTempPath);
-      onProgress?.({ phase: 'download', receivedBytes: artifact.size, totalBytes: artifact.size });
+      onProgress?.({ stage: DshInstallStage.Download, receivedBytes: artifact.size, totalBytes: artifact.size });
     }
 
-    onProgress?.({ phase: 'verify' });
+    onProgress?.({ stage: DshInstallStage.Verify });
     const actualSize = fs.statSync(archiveTempPath).size;
     if (actualSize !== artifact.size) {
       throw new Error(`Archive size mismatch: expected ${artifact.size}, got ${actualSize}`);
@@ -219,21 +220,13 @@ export async function installDshRuntime(options: {
       throw new Error(`Archive sha256 mismatch: expected ${artifact.sha256}, got ${actualSha}`);
     }
 
-    onProgress?.({ phase: 'extract' });
+    onProgress?.({ stage: DshInstallStage.Extract });
     fs.rmSync(stagingRoot, { recursive: true, force: true });
     fs.mkdirSync(stagingRoot, { recursive: true });
     // No shell: the paths below are absolute and may contain spaces, which a
     // shell would re-split.
     const tarCommand = resolveTarCommand(process.platform, fs.existsSync, process.env.SystemRoot);
-    const tarResult = spawnSync(tarCommand, ['-xzf', archiveTempPath, '-C', stagingRoot], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-    if (tarResult.error) {
-      throw new Error(`tar extract could not start (${tarCommand}): ${tarResult.error.message}`);
-    }
-    if (tarResult.status !== 0) {
-      throw new Error(`tar extract failed: ${String(tarResult.stderr ?? '').slice(0, 500)}`);
-    }
+    await extractTarArchive(tarCommand, archiveTempPath, stagingRoot);
 
     const layout = validateDshRuntimeLayout(stagingRoot, fs.existsSync, path.join);
     if (!layout.ok) {
@@ -253,6 +246,31 @@ export async function installDshRuntime(options: {
     fs.rmSync(archiveTempPath, { force: true });
     fs.rmSync(stagingRoot, { recursive: true, force: true });
   }
+}
+
+// Async on purpose: a runtime archive takes seconds to unpack, and the install
+// runs in the Electron main process, where a synchronous child would freeze
+// IPC, the gateway client, and the UI for that whole time.
+function extractTarArchive(tarCommand: string, archivePath: string, destDir: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(tarCommand, ['-xzf', archivePath, '-C', destDir], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once('error', (error) => {
+      reject(new Error(`tar extract could not start (${tarCommand}): ${error.message}`));
+    });
+    child.once('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`tar extract failed: ${stderr.slice(0, 500)}`));
+    });
+  });
 }
 
 function sha256OfFile(filePath: string): Promise<string> {
@@ -290,7 +308,7 @@ function httpGetToFile(
       let received = 0;
       response.on('data', (chunk: Buffer) => {
         received += chunk.length;
-        onProgress?.({ phase: 'download', receivedBytes: received, totalBytes });
+        onProgress?.({ stage: DshInstallStage.Download, receivedBytes: received, totalBytes });
       });
       response.pipe(file);
       file.on('finish', () => file.close(() => resolve()));

@@ -110,15 +110,10 @@ export async function ensureDshEngineReady(): Promise<string> {
   removeLegacyPrivatePatchLayer(manager.getPrivateDshHomeDir());
 
   // Packaged builds carry no runtime; it is fetched on first use from the URL
-  // recorded for this platform in package.json `dsh.runtimes`.
-  await manager.ensureRuntimeInstalled((progress) => {
-    if (progress.phase === 'download' && progress.totalBytes > 0) {
-      const percent = Math.floor((progress.receivedBytes / progress.totalBytes) * 100);
-      if (percent % 25 === 0) console.log(`[DSH] Downloading runtime ${percent}%`);
-    } else if (progress.phase !== 'download') {
-      console.log(`[DSH] Runtime install: ${progress.phase}`);
-    }
-  });
+  // recorded for this platform in package.json `dsh.runtimes`. That first fetch
+  // is a ~40s one-off, so the manager publishes its progress on the engine
+  // state and the settings card renders it.
+  await manager.ensureRuntimeInstalled();
   manager.setHomeDirectorySource(() => resolution.dataHome);
   manager.setManagedSettingsSource(computeManagedSettings);
   manager.setWorkingDirectorySource(() => moduleDeps?.getDefaultCwd() ?? '');
@@ -211,9 +206,11 @@ export function registerDshHandlers(deps: DshHandlerDeps): void {
       await stopDshFeatureRuntimes();
     }
     // The dsh-code MCP server enters/leaves OpenClaw's mcp.servers with the
-    // flag, so the toggle re-runs config sync. It is a URL server, which the
-    // gateway hot-reloads; forcing a restart here would kill live sessions for
-    // a change the gateway already applied in place.
+    // flag, so the toggle re-runs config sync. Note that this restarts a
+    // running gateway either way: the sync classifies any change to the `mcp`
+    // key as restart impact, which forces a hard restart regardless of
+    // restartGatewayIfRunning. Leaving the flag off keeps that decision with
+    // the impact classifier instead of duplicating it here.
     void deps.syncOpenClawConfig({ reason: 'dsh-feature-toggle' });
     return { enabled: next };
   });

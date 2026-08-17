@@ -12,17 +12,25 @@ import * as http from 'http';
 import * as net from 'net';
 import * as path from 'path';
 
-import { DSH_STATE_DIR_NAME,DshEngineErrorCode, DshEnginePhase } from '../../shared/dshEngine/constants';
+import {
+  DSH_STATE_DIR_NAME,
+  DshEngineErrorCode,
+  DshEnginePhase,
+  DshInstallProgressState,
+  DshInstallStage,
+} from '../../shared/dshEngine/constants';
 import { DshManagedSettings, writeDshManagedSettings } from './dshConfigSync';
 import {
   buildDshSpawnEnv,
   buildDshWebArgs,
   DSH_NODE_EXEC_ARGV,
   DSH_RUNTIME_ENTRY_RELPATH,
+  dshInstallPercent,
   DshRuntimeBuildInfo,
   parseDshRuntimeBuildInfo,
   resolveDshRuntimeCandidates,
   resolveDshWorkingDirectory,
+  shouldPublishInstallProgress,
   validateDshRuntimeLayout,
 } from './dshRuntime';
 import {
@@ -76,6 +84,12 @@ function resolveHostDshTargetId(): string {
 // a child that dies is caught by the liveness check, not by this.
 const READY_TIMEOUT_MS = 180_000;
 const READY_POLL_INTERVAL_MS = 250;
+// dsh starts listening before its plugin tree finishes loading, so a boot
+// failure answers the first probe with 200 and exits ~50ms later. Ready on that
+// first 200 opens the workbench onto a dead port: a blank window whose only
+// symptom is ERR_CONNECTION_REFUSED in its devtools. Re-probe after this settle
+// so a runtime that dies during boot is reported as a failure instead.
+const READY_SETTLE_MS = 750;
 const READY_PROGRESS_LOG_INTERVAL_MS = 15_000;
 const STOP_GRACE_MS = 5_000;
 const LOG_RING_MAX_LINES = 400;
@@ -97,6 +111,11 @@ export interface DshEngineState {
    * machine's shared one.
    */
   sessionStoreShared: boolean;
+  /**
+   * Non-null only while the runtime is being fetched and unpacked, which is a
+   * ~40s one-time cost the settings card renders as progress.
+   */
+  install: DshInstallProgressState | null;
 }
 
 type DshChild = ChildProcess | Electron.UtilityProcess;
@@ -110,6 +129,7 @@ export class DshEngineManager {
     version: null,
     errorCode: null,
     sessionStoreShared: true,
+    install: null,
   };
   private readonly logRing: string[] = [];
   private listeners = new Set<(state: DshEngineState) => void>();
@@ -178,11 +198,11 @@ export class DshEngineManager {
 
   // Downloads and installs the pinned runtime when it is not present yet.
   // Resolves the installed root, or null when the app carries no artifact for
-  // this platform (dev builds read vendor/dsh-runtime instead).
-  async ensureRuntimeInstalled(
-    onProgress?: (progress: DshInstallProgress) => void
-  ): Promise<string | null> {
-    if (this.resolveRuntime()) return this.resolveRuntime()?.root ?? null;
+  // this platform (dev builds read vendor/dsh-runtime instead). Progress is
+  // published on the engine state so the settings card can show it.
+  async ensureRuntimeInstalled(): Promise<string | null> {
+    const present = this.resolveRuntime();
+    if (present) return present.root;
 
     const meta = readDshPackageMeta();
     const artifact = resolveDshArtifactFromConfig(meta.runtimes ?? null, resolveHostDshTargetId(), meta.version ?? '');
@@ -191,14 +211,43 @@ export class DshEngineManager {
       return null;
     }
     console.log(`[DSH] Installing runtime ${artifact.version} for ${artifact.target}`);
-    const result = await installDshRuntime({
-      artifact,
-      baseDir: this.getRuntimeInstallBaseDir(),
-      expectedTarget: artifact.target,
-      onProgress,
+    this.setState({
+      phase: DshEnginePhase.Installing,
+      errorCode: null,
+      install: { stage: DshInstallStage.Manifest, receivedBytes: 0, totalBytes: artifact.size },
     });
-    console.log(`[DSH] Runtime ${result.version} ready at ${result.root}`);
-    return result.root;
+    try {
+      const result = await installDshRuntime({
+        artifact,
+        baseDir: this.getRuntimeInstallBaseDir(),
+        expectedTarget: artifact.target,
+        onProgress: (progress) => this.publishInstallProgress(progress),
+      });
+      console.log(`[DSH] Runtime ${result.version} ready at ${result.root}`);
+      this.setState({ phase: DshEnginePhase.Stopped, install: null });
+      return result.root;
+    } catch (error) {
+      // The caller reports the message; the state carries the red dot so the
+      // card does not sit on "installing" after the install gave up.
+      this.setState({ phase: DshEnginePhase.Failed, errorCode: DshEngineErrorCode.InstallFailed, install: null });
+      throw error;
+    }
+  }
+
+  private publishInstallProgress(progress: DshInstallProgress): void {
+    const previous = this.state.install;
+    const next: DshInstallProgressState =
+      progress.stage === DshInstallStage.Download
+        ? { stage: progress.stage, receivedBytes: progress.receivedBytes, totalBytes: progress.totalBytes }
+        : { stage: progress.stage, receivedBytes: previous?.receivedBytes ?? 0, totalBytes: previous?.totalBytes ?? 0 };
+    if (!shouldPublishInstallProgress(previous, next)) return;
+    this.setState({ install: next });
+    if (next.stage !== DshInstallStage.Download) {
+      console.log(`[DSH] Runtime install: ${next.stage}`);
+      return;
+    }
+    const percent = dshInstallPercent(next);
+    if (percent % 25 === 0) console.log(`[DSH] Downloading runtime ${percent}%`);
   }
 
   resolveRuntime(): DshResolvedRuntime | null {
@@ -349,7 +398,10 @@ export class DshEngineManager {
     const readyError = await this.waitForReady(port, generation);
     if (this.generation !== generation) return this.getState();
     if (readyError) {
-      console.error(`[DSH] Runtime did not become ready: ${readyError}. Recent output:\n${this.logRing.slice(-20).join('\n')}`);
+      // A child that already exited dumped its output from the exit handler; a
+      // wedged one is still running and has not, so carry the tail here.
+      const tail = this.child ? `. Recent output:\n${this.logRing.slice(-20).join('\n')}` : '';
+      console.error(`[DSH] Runtime did not become ready: ${readyError}${tail}`);
       await this.stop();
       this.setState({ phase: DshEnginePhase.Failed, port: null, errorCode: readyError });
       return this.getState();
@@ -373,6 +425,12 @@ export class DshEngineManager {
     child.on('exit', (code: number | null) => {
       if (this.generation !== generation) return;
       this.child = null;
+      // A boot failure prints its stack on the child's own streams and nowhere
+      // else, and the generation guard above already filtered out the stops we
+      // asked for, so any exit reaching here owes the main log its output.
+      if (code !== 0) {
+        console.error(`[DSH] Runtime exited (code=${code ?? 'null'}). Recent output:\n${this.logRing.slice(-40).join('\n')}`);
+      }
       if (this.state.phase === DshEnginePhase.Ready) {
         console.warn(`[DSH] Runtime exited unexpectedly (code=${code ?? 'null'})`);
         this.setState({ phase: DshEnginePhase.Stopped, port: null, errorCode: null });
@@ -380,7 +438,8 @@ export class DshEngineManager {
     });
   }
 
-  // Resolves null once the web server answers, or the error code on failure.
+  // Resolves null once the web server answers and keeps answering, or the error
+  // code on failure.
   private async waitForReady(port: number, generation: number): Promise<DshEngineErrorCode | null> {
     const startedAt = Date.now();
     const deadline = startedAt + READY_TIMEOUT_MS;
@@ -388,7 +447,7 @@ export class DshEngineManager {
     while (Date.now() < deadline) {
       if (this.generation !== generation || !this.child) return DshEngineErrorCode.CrashedEarly;
       const status = await probeHttpStatus(port);
-      if (status === 200) return null;
+      if (status === 200) return this.confirmStillServing(port, generation);
       if (Date.now() >= nextProgressLog) {
         console.log(`[DSH] Still waiting for the runtime on 127.0.0.1:${port} (${Math.round((Date.now() - startedAt) / 1000)}s)`);
         nextProgressLog = Date.now() + READY_PROGRESS_LOG_INTERVAL_MS;
@@ -396,6 +455,14 @@ export class DshEngineManager {
       await delay(READY_POLL_INTERVAL_MS);
     }
     return DshEngineErrorCode.ReadyTimeout;
+  }
+
+  // See READY_SETTLE_MS: a first 200 only proves the HTTP server bound, not that
+  // the runtime survived boot.
+  private async confirmStillServing(port: number, generation: number): Promise<DshEngineErrorCode | null> {
+    await delay(READY_SETTLE_MS);
+    if (this.generation !== generation || !this.child) return DshEngineErrorCode.CrashedEarly;
+    return (await probeHttpStatus(port)) === 200 ? null : DshEngineErrorCode.CrashedEarly;
   }
 
   private async terminateChild(child: DshChild): Promise<void> {

@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterAll, describe, expect, test } from 'vitest';
 
+import { DshInstallStage } from '../../shared/dshEngine/constants';
 import {
   installDshRuntime,
   isHttpSource,
@@ -146,19 +147,19 @@ describe('installDshRuntime (local source round-trip)', () => {
     writeFakeRuntime(runtimeDir);
     const manifestName = packFakeRuntime(runtimeDir, distDir, '9.9.9', 'mac-arm64');
 
-    const phases: string[] = [];
+    const stages: string[] = [];
     const artifact = resolveDshArtifactFromManifest(distDir, manifestName);
     const first = await installDshRuntime({
       artifact,
       baseDir,
       expectedTarget: 'mac-arm64',
-      onProgress: (p) => phases.push(p.phase),
+      onProgress: (p) => stages.push(p.stage),
     });
     expect(first.alreadyInstalled).toBe(false);
     expect(fs.existsSync(path.join(first.root, 'lib', 'bin.js'))).toBe(true);
-    expect(phases).toContain('download');
-    expect(phases).toContain('verify');
-    expect(phases).toContain('extract');
+    expect(stages).toContain(DshInstallStage.Download);
+    expect(stages).toContain(DshInstallStage.Verify);
+    expect(stages).toContain(DshInstallStage.Extract);
     expect(resolveInstalledDshRuntime(baseDir, '9.9.9')).toBe(first.root);
 
     const second = await installDshRuntime({ artifact, baseDir, expectedTarget: 'mac-arm64' });

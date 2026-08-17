@@ -792,6 +792,7 @@ interface IElectronAPI {
       version: string | null;
       errorCode: string | null;
       sessionStoreShared?: boolean;
+      install?: { stage: string; receivedBytes: number; totalBytes: number } | null;
     }>;
     getConfig: () => Promise<{ enabled: boolean }>;
     setEnabled: (enabled: boolean) => Promise<{ enabled: boolean }>;

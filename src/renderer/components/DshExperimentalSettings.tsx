@@ -1,22 +1,58 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
-import { DshEnginePhase } from '../../shared/dshEngine/constants';
+import { DshEnginePhase, DshInstallStage } from '../../shared/dshEngine/constants';
 import { i18nService } from '../services/i18n';
+
+interface DshInstallView {
+  stage: string;
+  receivedBytes: number;
+  totalBytes: number;
+}
 
 interface DshEngineStateView {
   phase: string;
   version: string | null;
   errorCode: string | null;
   sessionStoreShared?: boolean;
+  install?: DshInstallView | null;
 }
 
 const PHASE_LABEL_KEY: Record<string, string> = {
   [DshEnginePhase.Ready]: 'dshStatusReady',
   [DshEnginePhase.Starting]: 'dshStatusStarting',
   [DshEnginePhase.Stopped]: 'dshStatusStopped',
+  [DshEnginePhase.Installing]: 'dshStatusInstalling',
   [DshEnginePhase.Failed]: 'dshStatusFailed',
   [DshEnginePhase.NotInstalled]: 'dshStatusNotInstalled',
 };
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function installPercent(install: DshInstallView): number {
+  if (install.totalBytes <= 0) return 0;
+  return Math.min(100, Math.floor((install.receivedBytes / install.totalBytes) * 100));
+}
+
+function installLabel(install: DshInstallView): string {
+  switch (install.stage) {
+    case DshInstallStage.Download:
+      return i18nService
+        .t('dshInstallDownloading')
+        .replace('{percent}', String(installPercent(install)))
+        .replace('{received}', formatBytes(install.receivedBytes))
+        .replace('{total}', formatBytes(install.totalBytes));
+    case DshInstallStage.Verify:
+      return i18nService.t('dshInstallVerifying');
+    case DshInstallStage.Extract:
+      return i18nService.t('dshInstallExtracting');
+    default:
+      return i18nService.t('dshInstallPreparing');
+  }
+}
 
 export const DshExperimentalSettings: React.FC = () => {
   const [enabled, setEnabled] = useState(false);
@@ -38,13 +74,22 @@ export const DshExperimentalSettings: React.FC = () => {
 
   useEffect(() => {
     mountedRef.current = true;
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 3000);
     return () => {
       mountedRef.current = false;
-      window.clearInterval(timer);
     };
-  }, [refresh]);
+  }, []);
+
+  // The first open downloads and unpacks the runtime, which takes tens of
+  // seconds and is only visible through this poll, so it ticks faster while
+  // something is in flight and drops back to idle pace once it settles.
+  const busy =
+    opening || engineState.phase === DshEnginePhase.Installing || engineState.phase === DshEnginePhase.Starting;
+
+  useEffect(() => {
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), busy ? 1000 : 3000);
+    return () => window.clearInterval(timer);
+  }, [refresh, busy]);
 
   const handleToggle = useCallback(async () => {
     const next = !enabled;
@@ -71,11 +116,12 @@ export const DshExperimentalSettings: React.FC = () => {
     }
   }, [refresh]);
 
+  const install = engineState.install ?? null;
   const phaseLabel = i18nService.t(PHASE_LABEL_KEY[engineState.phase] ?? 'dshStatusStopped');
   const phaseDotClass =
     engineState.phase === DshEnginePhase.Ready
       ? 'bg-emerald-500'
-      : engineState.phase === DshEnginePhase.Starting
+      : engineState.phase === DshEnginePhase.Starting || engineState.phase === DshEnginePhase.Installing
         ? 'bg-amber-400'
         : engineState.phase === DshEnginePhase.Failed
           ? 'bg-red-500'
@@ -86,12 +132,7 @@ export const DshExperimentalSettings: React.FC = () => {
       <div className="rounded-xl border border-border bg-card p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h4 className="text-sm font-semibold text-foreground">{i18nService.t('dshSettingsTitle')}</h4>
-              <span className="rounded-full border border-amber-400/50 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
-                {i18nService.t('dshExperimentalBadge')}
-              </span>
-            </div>
+            <h4 className="text-sm font-semibold text-foreground">{i18nService.t('dshSettingsTitle')}</h4>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">{i18nService.t('dshSettingsDesc')}</p>
           </div>
           <button
@@ -122,6 +163,25 @@ export const DshExperimentalSettings: React.FC = () => {
           <p className="mt-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-[11px] leading-4 text-amber-700 dark:text-amber-400">
             {i18nService.t('dshSessionStoreIsolatedNote')}
           </p>
+        )}
+
+        {enabled && install && (
+          <div className="mt-4 border-t border-border pt-4">
+            <div className="h-1.5 overflow-hidden rounded-full bg-primary/20">
+              {install.stage === DshInstallStage.Download ? (
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300"
+                  style={{ width: `${installPercent(install)}%` }}
+                />
+              ) : (
+                <div className="h-full w-full animate-pulse rounded-full bg-primary/60" />
+              )}
+            </div>
+            <p className="mt-2 text-[11px] leading-4 text-muted-foreground">{installLabel(install)}</p>
+            <p className="mt-1 text-[11px] leading-4 text-muted-foreground/70">
+              {i18nService.t('dshInstallFirstRunNote')}
+            </p>
+          </div>
         )}
 
         {enabled && (

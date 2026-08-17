@@ -304,7 +304,7 @@ async function main() {
     baseDir: installBase,
     expectedTarget: targetId,
     onProgress: (progress) => {
-      if (progress.phase !== 'download') log(`   install phase: ${progress.phase}`);
+      if (progress.stage !== 'download') log(`   install stage: ${progress.stage}`);
     },
   });
   if (installed.alreadyInstalled) fail('fresh install unexpectedly reported alreadyInstalled');

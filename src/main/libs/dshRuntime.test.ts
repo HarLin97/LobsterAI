@@ -1,14 +1,17 @@
 import * as path from 'path';
 import { describe, expect, test } from 'vitest';
 
+import { DshInstallStage } from '../../shared/dshEngine/constants';
 import {
   buildDshSpawnEnv,
   buildDshWebArgs,
   DSH_NODE_EXEC_ARGV,
   DSH_RUNTIME_ENTRY_RELPATH,
+  dshInstallPercent,
   parseDshRuntimeBuildInfo,
   resolveDshRuntimeCandidates,
   resolveDshWorkingDirectory,
+  shouldPublishInstallProgress,
   validateDshRuntimeLayout,
 } from './dshRuntime';
 
@@ -135,5 +138,35 @@ describe('spawn argument helpers', () => {
 
   test('exec argv carries the loader internals flag', () => {
     expect(DSH_NODE_EXEC_ARGV).toContain('--expose-internals');
+  });
+});
+
+describe('install progress helpers', () => {
+  const download = (receivedBytes: number, totalBytes = 1000) => ({
+    stage: DshInstallStage.Download,
+    receivedBytes,
+    totalBytes,
+  });
+
+  test('percent is floored and clamped, and a missing total reads as zero', () => {
+    expect(dshInstallPercent(null)).toBe(0);
+    expect(dshInstallPercent(download(0))).toBe(0);
+    expect(dshInstallPercent(download(419))).toBe(41);
+    expect(dshInstallPercent({ stage: DshInstallStage.Verify, receivedBytes: 10, totalBytes: 0 })).toBe(0);
+    // A server that sends more than the manifest size must not overrun the bar.
+    expect(dshInstallPercent(download(1200))).toBe(100);
+  });
+
+  test('publishes on the first report, on a stage change, and on a whole percent change', () => {
+    expect(shouldPublishInstallProgress(null, download(0))).toBe(true);
+    expect(shouldPublishInstallProgress(download(419), { ...download(419), stage: DshInstallStage.Verify })).toBe(true);
+    expect(shouldPublishInstallProgress(download(419), download(425))).toBe(true);
+  });
+
+  // The per-chunk reports of a 36MB download are thousands of events; only the
+  // ones that change what a viewer would see are worth pushing.
+  test('suppresses reports that land inside the same percent', () => {
+    expect(shouldPublishInstallProgress(download(411), download(419))).toBe(false);
+    expect(shouldPublishInstallProgress(download(419), download(419))).toBe(false);
   });
 });

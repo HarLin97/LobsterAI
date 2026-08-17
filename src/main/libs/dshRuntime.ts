@@ -2,6 +2,8 @@
 // Harness (dsh) runtime. No Electron imports here so the logic stays unit
 // testable; dshEngineManager.ts owns process/Electron concerns.
 
+import { DshInstallProgressState } from '../../shared/dshEngine/constants';
+
 export const DSH_RUNTIME_ENTRY_RELPATH = 'lib/bin.js';
 
 // The Cordis loader needs Node internals for its HMR/entry machinery. Its
@@ -77,6 +79,24 @@ export function validateDshRuntimeLayout(
 ): DshRuntimeLayoutCheck {
   const missing = REQUIRED_RUNTIME_PATHS.filter((relPath) => !exists(joinPath(runtimeRoot, ...relPath.split('/'))));
   return { ok: missing.length === 0, missing };
+}
+
+export function dshInstallPercent(progress: DshInstallProgressState | null): number {
+  if (!progress || progress.totalBytes <= 0) return 0;
+  return Math.min(100, Math.floor((progress.receivedBytes / progress.totalBytes) * 100));
+}
+
+// A 36MB download reports progress per chunk — thousands of events. Publishing
+// each one would push that many state updates through the IPC-facing listeners
+// and repeat the same line in the log (the old 25% log printed 15 times), so a
+// report only counts as news when the stage or the whole percent changed.
+export function shouldPublishInstallProgress(
+  previous: DshInstallProgressState | null,
+  next: DshInstallProgressState
+): boolean {
+  if (!previous) return true;
+  if (previous.stage !== next.stage) return true;
+  return dshInstallPercent(previous) !== dshInstallPercent(next);
 }
 
 export interface DshSpawnEnvOptions {
