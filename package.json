@@ -148,6 +148,7 @@
     "dsh:runtime:verify": "node scripts/verify-dsh-runtime.cjs",
     "dsh:runtime:pack": "node scripts/pack-dsh-runtime.cjs",
     "dsh:runtime:url": "node scripts/set-dsh-runtime-url.cjs",
+    "dsh:runtime:verify-urls": "node scripts/verify-dsh-runtime-urls.cjs",
     "dsh:e2e": "node scripts/e2e-dsh-foundation.cjs",
     "regenerate:icon": "bash scripts/regenerate-mac-icon.sh",
     "fix:mac-icon": "bash scripts/fix-mac-icon-display.sh"
