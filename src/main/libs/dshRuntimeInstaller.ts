@@ -107,7 +107,10 @@ export function resolveTarCommand(
   systemRoot: string | undefined
 ): string {
   if (platform !== 'win32') return 'tar';
-  const systemTar = path.join(systemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  // Build with the Windows joiner explicitly: this path targets win32 even when
+  // resolveTarCommand runs on a posix host (e.g. tests), where the default
+  // `path.join` would use posix separators and produce a path that never matches.
+  const systemTar = path.win32.join(systemRoot || 'C:\\Windows', 'System32', 'tar.exe');
   return exists(systemTar) ? systemTar : 'tar';
 }
 

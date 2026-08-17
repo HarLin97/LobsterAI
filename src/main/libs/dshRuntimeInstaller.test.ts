@@ -94,7 +94,7 @@ describe('resolveTarCommand', () => {
   // GNU tar on PATH reads `-xzf C:\...` as `host:file`; the system bsdtar does
   // not, so Windows extracts must name it instead of trusting PATH order.
   test('names the system bsdtar on Windows and falls back to PATH', () => {
-    const systemTar = path.join('C:\\WINDOWS', 'System32', 'tar.exe');
+    const systemTar = path.win32.join('C:\\WINDOWS', 'System32', 'tar.exe');
     expect(resolveTarCommand('win32', (p) => p === systemTar, 'C:\\WINDOWS')).toBe(systemTar);
     expect(resolveTarCommand('win32', () => false, 'C:\\WINDOWS')).toBe('tar');
     expect(resolveTarCommand('win32', (p) => p === 'C:\\Windows\\System32\\tar.exe', undefined)).toBe(
