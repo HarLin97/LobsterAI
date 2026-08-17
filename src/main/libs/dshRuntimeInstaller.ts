@@ -23,6 +23,7 @@ import * as path from 'path';
 
 import { DshInstallStage } from '../../shared/dshEngine/constants';
 import { validateDshRuntimeLayout } from './dshRuntime';
+import { safelyReplaceTextFileSync } from './safeFileReplace';
 
 const INSTALL_SENTINEL = '.lobsterai-install-ok.json';
 const MAX_REDIRECTS = 5;
@@ -53,6 +54,24 @@ export interface DshRuntimeInstallResult {
   root: string;
   version: string;
   alreadyInstalled: boolean;
+}
+
+export interface DshRuntimeIdentityExpectation {
+  target?: string;
+  sha256?: string;
+}
+
+interface DshRuntimeInstallSentinel {
+  installedAt: string;
+  lastReadyAt?: string | null;
+  version: string;
+  target?: string;
+  sha256: string;
+}
+
+export interface DshRuntimePruneResult {
+  retained: string[];
+  removed: string[];
 }
 
 export type DshInstallProgress =
@@ -118,33 +137,143 @@ export function installedDshRuntimeRoot(baseDir: string, version: string): strin
   return path.join(baseDir, version);
 }
 
-// Scan the install base for the newest valid runtime (semver-ish string sort
-// is fine for dsh's 0.x.y-rc.N scheme at pin granularity — the app only ever
-// installs the one pinned version, so multiple entries mean an upgrade).
-export function resolveNewestInstalledDshRuntime(baseDir: string): { root: string; version: string } | null {
-  let entries: string[];
+function readDshRuntimeInstallSentinel(root: string): DshRuntimeInstallSentinel | null {
   try {
-    entries = fs.readdirSync(baseDir);
+    const parsed: unknown = JSON.parse(fs.readFileSync(path.join(root, INSTALL_SENTINEL), 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return null;
+    const record = parsed as Record<string, unknown>;
+    if (
+      typeof record.installedAt !== 'string' ||
+      typeof record.version !== 'string' ||
+      typeof record.sha256 !== 'string' ||
+      !/^[0-9a-f]{64}$/i.test(record.sha256)
+    ) {
+      return null;
+    }
+    let lastReadyAt: string | null | undefined;
+    if (Object.prototype.hasOwnProperty.call(record, 'lastReadyAt')) {
+      const value = record.lastReadyAt;
+      if (value === null) lastReadyAt = null;
+      else if (typeof value === 'string') lastReadyAt = value;
+      else return null;
+    }
+    return {
+      installedAt: record.installedAt,
+      lastReadyAt,
+      version: record.version,
+      target: typeof record.target === 'string' ? record.target : undefined,
+      sha256: record.sha256.toLowerCase(),
+    };
   } catch {
     return null;
   }
-  const valid = entries
-    .filter((name) => !name.endsWith('.staging') && resolveInstalledDshRuntime(baseDir, name) !== null)
-    .sort()
-    .reverse();
-  if (valid.length === 0) return null;
-  const version = valid[0];
-  return { root: installedDshRuntimeRoot(baseDir, version), version };
+}
+
+export function markInstalledDshRuntimeReady(
+  baseDir: string,
+  version: string,
+  expectation: DshRuntimeIdentityExpectation = {}
+): boolean {
+  const root = resolveInstalledDshRuntime(baseDir, version, expectation);
+  if (!root) return false;
+  const sentinel = readDshRuntimeInstallSentinel(root);
+  if (!sentinel) return false;
+  safelyReplaceTextFileSync({
+    filePath: path.join(root, INSTALL_SENTINEL),
+    content: `${JSON.stringify({ ...sentinel, lastReadyAt: new Date().toISOString() }, null, 2)}\n`,
+    mode: 0o600,
+    tempLabel: 'ready',
+  });
+  return true;
 }
 
 // A runtime counts as installed only when the install sentinel exists and the
 // layout still passes — a torn extract or a user-deleted node_modules must
 // read as "not installed" so the next install repairs it.
-export function resolveInstalledDshRuntime(baseDir: string, version: string): string | null {
+export function resolveInstalledDshRuntime(
+  baseDir: string,
+  version: string,
+  expectation: DshRuntimeIdentityExpectation = {}
+): string | null {
   const root = installedDshRuntimeRoot(baseDir, version);
-  if (!fs.existsSync(path.join(root, INSTALL_SENTINEL))) return null;
+  const sentinel = readDshRuntimeInstallSentinel(root);
+  if (!sentinel || sentinel.version !== version) return null;
+  if (expectation.sha256 && sentinel.sha256 !== expectation.sha256.toLowerCase()) return null;
+
+  let buildTarget: string | undefined;
+  let buildVersion: string | undefined;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(root, 'runtime-build-info.json'), 'utf8')) as Record<string, unknown>;
+    buildTarget = typeof parsed.target === 'string' ? parsed.target : undefined;
+    buildVersion = typeof parsed.dshVersion === 'string' ? parsed.dshVersion : undefined;
+  } catch {
+    // Older archives can rely on the signed install sentinel alone.
+  }
+  if (buildVersion && buildVersion !== version) return null;
+  if (expectation.target && (sentinel.target ?? buildTarget) !== expectation.target) return null;
+
   const layout = validateDshRuntimeLayout(root, fs.existsSync, path.join);
   return layout.ok ? root : null;
+}
+
+// Keep the active pinned runtime plus a bounded number of prior valid installs.
+// Ordering uses the install timestamp, never the version string: lexicographic
+// sorting puts rc.9 after rc.10 and can also select a runtime from a newer app
+// after the user downgrades LobsterAI.
+export async function pruneInstalledDshRuntimes(
+  baseDir: string,
+  currentVersion: string,
+  retainPrevious = 1
+): Promise<DshRuntimePruneResult> {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(baseDir, { withFileTypes: true });
+  } catch {
+    return { retained: [], removed: [] };
+  }
+
+  const installed = entries
+    .filter((entry) => entry.isDirectory() && !entry.name.endsWith('.staging'))
+    .map((entry) => {
+      const root = resolveInstalledDshRuntime(baseDir, entry.name);
+      if (!root) return null;
+      const sentinel = readDshRuntimeInstallSentinel(root);
+      if (!sentinel) return null;
+      const parsedInstalledAt = Date.parse(sentinel.installedAt);
+      const installedAt = Number.isFinite(parsedInstalledAt)
+        ? parsedInstalledAt
+        : fs.statSync(path.join(root, INSTALL_SENTINEL)).mtimeMs;
+      const parsedLastReadyAt = typeof sentinel.lastReadyAt === 'string' ? Date.parse(sentinel.lastReadyAt) : NaN;
+      const rollbackAt =
+        sentinel.lastReadyAt === null
+          ? null
+          : Number.isFinite(parsedLastReadyAt)
+            ? parsedLastReadyAt
+            : installedAt;
+      return { root, version: entry.name, installedAt, rollbackAt };
+    })
+    .filter(
+      (entry): entry is { root: string; version: string; installedAt: number; rollbackAt: number | null } => entry !== null
+    );
+
+  const previous = installed
+    .filter((entry) => entry.version !== currentVersion && entry.rollbackAt !== null)
+    .sort(
+      (a, b) =>
+        (b.rollbackAt as number) - (a.rollbackAt as number) ||
+        b.version.localeCompare(a.version, undefined, { numeric: true })
+    );
+  const keep = new Set([currentVersion, ...previous.slice(0, Math.max(0, retainPrevious)).map((entry) => entry.version)]);
+  const removed: string[] = [];
+  for (const entry of installed) {
+    if (keep.has(entry.version)) continue;
+    await fs.promises.rm(entry.root, { recursive: true, force: true });
+    removed.push(entry.version);
+  }
+  return {
+    retained: installed.filter((entry) => keep.has(entry.version)).map((entry) => entry.version),
+    removed,
+  };
 }
 
 // Builds an artifact from the app's own configuration (package.json
@@ -196,7 +325,10 @@ export async function installDshRuntime(options: {
     throw new Error(`Artifact for ${artifact.target} names neither a url nor a filePath`);
   }
 
-  const existing = resolveInstalledDshRuntime(baseDir, artifact.version);
+  const existing = resolveInstalledDshRuntime(baseDir, artifact.version, {
+    target: expectedTarget,
+    sha256: artifact.sha256,
+  });
   if (existing) {
     return { root: existing, version: artifact.version, alreadyInstalled: true };
   }
@@ -238,7 +370,17 @@ export async function installDshRuntime(options: {
 
     fs.writeFileSync(
       path.join(stagingRoot, INSTALL_SENTINEL),
-      `${JSON.stringify({ installedAt: new Date().toISOString(), version: artifact.version, sha256: artifact.sha256 }, null, 2)}\n`
+      `${JSON.stringify(
+        {
+          installedAt: new Date().toISOString(),
+          lastReadyAt: null,
+          version: artifact.version,
+          target: artifact.target,
+          sha256: artifact.sha256,
+        },
+        null,
+        2
+      )}\n`
     );
 
     const finalRoot = installedDshRuntimeRoot(baseDir, artifact.version);

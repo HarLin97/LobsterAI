@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
-import { DshEnginePhase, DshInstallStage } from '../../shared/dshEngine/constants';
+import { DshEngineErrorCode, DshEnginePhase, DshInstallStage } from '../../shared/dshEngine/constants';
 import { i18nService } from '../services/i18n';
 
 interface DshInstallView {
@@ -25,6 +25,16 @@ const PHASE_LABEL_KEY: Record<string, string> = {
   [DshEnginePhase.Failed]: 'dshStatusFailed',
   [DshEnginePhase.NotInstalled]: 'dshStatusNotInstalled',
 };
+
+const ERROR_LABEL_KEY: Record<string, string> = {
+  [DshEngineErrorCode.PluginLoadFailed]: 'dshErrorPluginLoadFailed',
+};
+
+function localizeOpenError(message: string): string {
+  const knownError = Object.entries(ERROR_LABEL_KEY).find(([errorCode]) => message.includes(`error=${errorCode}`));
+  const detail = knownError?.[1] ? i18nService.t(knownError[1]) : message;
+  return i18nService.t('dshOpenFailed').replace('{error}', detail);
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -109,7 +119,7 @@ export const DshExperimentalSettings: React.FC = () => {
       await window.electron.dsh.openWorkbench();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setOpenError(i18nService.t('dshOpenFailed').replace('{error}', message));
+      setOpenError(localizeOpenError(message));
     } finally {
       if (mountedRef.current) setOpening(false);
       void refresh();
@@ -118,6 +128,8 @@ export const DshExperimentalSettings: React.FC = () => {
 
   const install = engineState.install ?? null;
   const phaseLabel = i18nService.t(PHASE_LABEL_KEY[engineState.phase] ?? 'dshStatusStopped');
+  const errorLabelKey = engineState.errorCode ? ERROR_LABEL_KEY[engineState.errorCode] : undefined;
+  const engineError = errorLabelKey ? i18nService.t(errorLabelKey) : null;
   const phaseDotClass =
     engineState.phase === DshEnginePhase.Ready
       ? 'bg-emerald-500'
@@ -203,6 +215,7 @@ export const DshExperimentalSettings: React.FC = () => {
         )}
 
         {openError && <p className="mt-3 text-xs text-red-500">{openError}</p>}
+        {!openError && engineError && <p className="mt-3 text-xs text-red-500">{engineError}</p>}
       </div>
     </div>
   );
