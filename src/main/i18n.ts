@@ -31,6 +31,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     permissionNotificationBodyGeneric: 'Agent 请求执行操作，等待你的确认',
     questionNotificationTitle: '等待你的回答',
     questionNotificationBody: '需要你回答问题后才能继续',
+    contextMenuCut: '剪切',
+    contextMenuCopy: '复制',
+    contextMenuPaste: '粘贴',
+    contextMenuSelectAll: '全选',
 
     // Session titles (created by ChannelSessionSync)
     coworkDefaultSessionTitle: '新对话',
@@ -358,6 +362,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     permissionNotificationBodyGeneric: 'The agent requests to run an action and is waiting for your confirmation.',
     questionNotificationTitle: 'Waiting for Your Answer',
     questionNotificationBody: 'Waiting for your answer to continue.',
+    contextMenuCut: 'Cut',
+    contextMenuCopy: 'Copy',
+    contextMenuPaste: 'Paste',
+    contextMenuSelectAll: 'Select All',
 
     // Session titles
     coworkDefaultSessionTitle: 'New Chat',

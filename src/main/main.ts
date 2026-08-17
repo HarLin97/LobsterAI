@@ -3,9 +3,11 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  type ContextMenuParams,
   dialog,
   ipcMain,
   Menu,
+  type MenuItemConstructorOptions,
   nativeImage,
   nativeTheme,
   net,
@@ -4246,6 +4248,50 @@ const showSystemMenu = (position?: { x?: number; y?: number }) => {
     x: Math.max(0, Math.round(position?.x ?? 0)),
     y: Math.max(0, Math.round(position?.y ?? 0)),
   });
+};
+
+const EDIT_CONTEXT_FORM_CONTROLS = new Set<ContextMenuParams['formControlType']>([
+  'input-email',
+  'input-number',
+  'input-password',
+  'input-search',
+  'input-telephone',
+  'input-text',
+  'input-url',
+  'text-area',
+]);
+
+const shouldShowEditContextMenu = (params: ContextMenuParams): boolean =>
+  params.isEditable && EDIT_CONTEXT_FORM_CONTROLS.has(params.formControlType);
+
+const installEditContextMenu = (webContents: WebContents) => {
+  webContents.on('context-menu', (_event, params) => {
+    if (!shouldShowEditContextMenu(params)) return;
+
+    const template: MenuItemConstructorOptions[] = [];
+
+    template.push(
+      { label: t('contextMenuCut'), role: 'cut', enabled: params.editFlags.canCut },
+      { label: t('contextMenuCopy'), role: 'copy', enabled: params.editFlags.canCopy },
+      { label: t('contextMenuPaste'), role: 'paste', enabled: params.editFlags.canPaste },
+      { type: 'separator' },
+      { label: t('contextMenuSelectAll'), role: 'selectAll', enabled: params.editFlags.canSelectAll },
+    );
+
+    const targetWindow = BrowserWindow.fromWebContents(webContents);
+    if (!targetWindow || targetWindow.isDestroyed()) return;
+
+    try {
+      Menu.buildFromTemplate(template).popup({
+        window: targetWindow,
+        x: params.x,
+        y: params.y,
+      });
+    } catch (error) {
+      console.warn('[Main] failed to show edit context menu:', error);
+    }
+  });
+  console.log('[Main] edit context menu installed for main window.');
 };
 
 const scheduleReload = (reason: string, webContents?: WebContents) => {
@@ -12664,6 +12710,7 @@ if (!gotTheLock) {
 
     // 禁用窗口菜单
     mainWindow.setMenu(null);
+    installEditContextMenu(mainWindow.webContents);
 
     // 处理 window.open 请求（企微 SDK 授权弹窗等）
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
