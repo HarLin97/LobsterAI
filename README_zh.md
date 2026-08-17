@@ -170,6 +170,66 @@ OPENCLAW_FORCE_BUILD=1 npm run electron:dev:openclaw
 OPENCLAW_SKIP_ENSURE=1 npm run electron:dev:openclaw
 ```
 
+### DeepSeek Harness Runtime
+
+锁定的 dsh 版本以及各平台的分发包描述位于 `package.json` 的 `dsh` 字段。开发环境读取 `vendor/dsh-runtime/current`；发布版在首次使用时下载分发包，并用应用自带的摘要校验。
+
+```bash
+# 构建并激活当前平台的 runtime
+npm run dsh:runtime:host
+
+# 启动一次并验证 Web UI 可访问
+npm run dsh:runtime:verify
+
+# 完整门禁：构建、打包、经 HTTP 安装、启动、跑通委托编码任务
+npm run dsh:e2e
+```
+
+<details>
+<summary>发布 runtime 分发包（分平台）</summary>
+
+每个目标平台必须在对应机器上构建：原生依赖按宿主平台安装，跨架构构建产出的包能正常打包上传，只会在用户机器上失败。构建脚本会在宿主与目标不匹配时直接报错退出。
+
+| 目标 | 构建机器 |
+| --- | --- |
+| `mac-arm64` | Apple Silicon mac |
+| `mac-x64` | Intel mac |
+| `win-x64` | Windows 10 1803+（自带 `tar.exe`） |
+
+在对应机器上执行，把目标名替换掉即可：
+
+```bash
+# 1. 构建（应用锁定的补丁，裁剪到约 160 MB）
+npm run dsh:runtime:mac-arm64
+
+# 2. 打包，输出 sha256 与体积
+npm run dsh:runtime:pack mac-arm64
+
+# 3. 把 vendor/dsh-dist/dsh-runtime-<版本>-mac-arm64.tar.gz 上传到 CDN，
+#    然后登记地址。摘要与体积取自本地 manifest，不会与实际打包的字节脱节。
+npm run dsh:runtime:url mac-arm64 "https://cdn.example.com/<上传后的地址>"
+
+# 4. 确认该地址返回的就是这些字节
+npm run dsh:runtime:verify-urls mac-arm64
+```
+
+第 3 步会把 `dsh.runtimes[目标]` 写入 `package.json`，记得提交这段改动，确保各平台的描述在同一个构建里齐全。每个目标只保存一个绝对 URL 且不做任何拼接，因此"每个文件一个独立地址"的 CDN 无需共享目录。
+
+</details>
+
+<details>
+<summary>升级 dsh 版本</summary>
+
+1. 修改 `package.json` 的 `dsh.version`。
+2. 复制补丁目录：`cp -R scripts/dsh-patches/<旧版本> scripts/dsh-patches/<新版本>`。补丁按版本号查找，目录缺失时**一个补丁都不会应用且不会报错**——Windows 控制台隐藏与目录选择器两个修复会就此静默消失。复制后构建时的 sentinel 会重新校验每个补丁是否仍能落地，上游改动导致失效时会让构建失败。
+3. 清空 `dsh.runtimes`。残留的旧描述仍能通过摘要校验，于是旧 runtime 会被安装到新版本号命名的目录下。
+4. 按上文重新构建、上传并登记三个平台。
+5. 重跑 `npm run dsh:runtime:verify-urls` 与 `npm run dsh:e2e`。
+
+已知缺口：老用户会继续使用已安装的那份 runtime。`ensureRuntimeInstalled` 只要检测到任何已安装 runtime 就直接返回，从不与锁定版本比对，因此只有全新安装才会用上新版 dsh。已安装版本之间的选择还是字典序，会把 `rc.6` 排在 `rc.10` 前面。
+
+</details>
+
 ## 打包
 
 <details>

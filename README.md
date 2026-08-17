@@ -170,6 +170,67 @@ OPENCLAW_FORCE_BUILD=1 npm run electron:dev:openclaw
 OPENCLAW_SKIP_ENSURE=1 npm run electron:dev:openclaw
 ```
 
+### DeepSeek Harness Runtime
+
+The pinned dsh version and one archive descriptor per platform live in `package.json` under `dsh`. Development reads `vendor/dsh-runtime/current`; shipped apps download the archive on first use and verify it against the digest they carry.
+
+```bash
+# Build and activate the current-platform runtime
+npm run dsh:runtime:host
+
+# Boot it once and assert the web UI answers
+npm run dsh:runtime:verify
+
+# Full gate: build, pack, install over HTTP, boot, delegate a coding task
+npm run dsh:e2e
+```
+
+<details>
+<summary>Publish a runtime archive (per platform)</summary>
+
+Each target must be built on a matching machine: native dependencies install for the host, so a cross-architecture build produces an archive that packs cleanly and only fails on users' machines. The build refuses to run on a mismatched host.
+
+| Target | Build on |
+| --- | --- |
+| `mac-arm64` | Apple Silicon mac |
+| `mac-x64` | Intel mac |
+| `win-x64` | Windows 10 1803+ (ships `tar.exe`) |
+
+Run these on that machine, substituting the target:
+
+```bash
+# 1. Build (applies the pinned patches, prunes to ~160 MB)
+npm run dsh:runtime:mac-arm64
+
+# 2. Pack; prints the sha256 and size
+npm run dsh:runtime:pack mac-arm64
+
+# 3. Upload vendor/dsh-dist/dsh-runtime-<version>-mac-arm64.tar.gz to the CDN,
+#    then record where it landed. Digest and size come from the local manifest,
+#    so they cannot drift from the bytes that were packed.
+npm run dsh:runtime:url mac-arm64 "https://cdn.example.com/<uploaded>"
+
+# 4. Confirm the URL serves exactly those bytes
+npm run dsh:runtime:verify-urls mac-arm64
+```
+
+Step 3 writes `dsh.runtimes[target]` into `package.json`; commit that hunk so every platform's descriptor ships in one build. Each target holds one absolute URL and nothing is appended to it, so a CDN that mints an unrelated URL per file needs no shared directory.
+
+</details>
+
+<details>
+<summary>Update to a newer dsh version</summary>
+
+1. Bump `dsh.version` in `package.json`.
+2. Copy the patch directory to the new version: `cp -R scripts/dsh-patches/<old> scripts/dsh-patches/<new>`. Patches are found by version, and a missing directory applies **no** patches without failing — the Windows console-hiding and directory-picker fixes would vanish silently. After copying, the build's sentinels re-verify each patch still lands, and fail if upstream moved the code.
+3. Empty `dsh.runtimes`. A descriptor left pointing at the previous archive still passes its digest check, so the old runtime would install under the new version's name.
+4. Rebuild, upload, and record all three targets as above.
+5. Re-run `npm run dsh:runtime:verify-urls` and `npm run dsh:e2e`.
+
+Known gap: existing users keep the runtime they already installed. `ensureRuntimeInstalled` returns early whenever any runtime is present and never compares it with the pinned version, so only fresh installs pick up a new dsh. Selection among installed versions is also a lexical sort, which puts `rc.6` ahead of `rc.10`.
+
+</details>
+
 ## Packaging
 
 <details>
