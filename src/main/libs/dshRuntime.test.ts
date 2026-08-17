@@ -1,10 +1,11 @@
 import * as path from 'path';
 import { describe, expect, test } from 'vitest';
 
-import { DshInstallStage } from '../../shared/dshEngine/constants';
+import { DshEngineErrorCode, DshInstallStage } from '../../shared/dshEngine/constants';
 import {
   buildDshSpawnEnv,
   buildDshWebArgs,
+  classifyDshStartupError,
   DSH_NODE_EXEC_ARGV,
   DSH_RUNTIME_ENTRY_RELPATH,
   dshInstallPercent,
@@ -30,6 +31,25 @@ describe('parseDshRuntimeBuildInfo', () => {
 
   test('rejects invalid JSON', () => {
     expect(parseDshRuntimeBuildInfo('{oops')).toBeNull();
+  });
+});
+
+describe('classifyDshStartupError', () => {
+  test('identifies a Cordis plugin resolution failure', () => {
+    const output = [
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@dsh-external/dsh-ui-whale' imported from",
+      '/runtime/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js',
+    ].join('\n');
+
+    expect(classifyDshStartupError(output, DshEngineErrorCode.CrashedEarly)).toBe(
+      DshEngineErrorCode.PluginLoadFailed
+    );
+  });
+
+  test('preserves the original startup error for unrelated crashes', () => {
+    expect(classifyDshStartupError('SyntaxError: unexpected token', DshEngineErrorCode.CrashedEarly)).toBe(
+      DshEngineErrorCode.CrashedEarly
+    );
   });
 });
 

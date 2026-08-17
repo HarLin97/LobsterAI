@@ -4,6 +4,7 @@
 //   compile -> build runtime -> pack archive -> serve it from an opaque URL
 //   (the shape a per-file CDN hands out) -> install into a fresh base
 //   -> render LobsterAI provider settings -> boot the INSTALLED runtime
+//   -> load a profile-local external ESM plugin through the production launcher
 //   -> RPC-assert the provider/model are live (form A surface)
 //   -> boot again with a mock OpenAI upstream and drive the dsh_code_task MCP
 //      server through a real MCP client (form B delegation loop)
@@ -15,7 +16,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 
 const { removeTree } = require('./dsh-remove-tree.cjs');
 
@@ -105,16 +106,18 @@ function startMockLlmServer(answerText) {
   });
 }
 
-// Boots the installed runtime with Electron as Node and resolves once the web
-// server answers; the caller owns the returned child.
+// Boots through the same launcher used by DshEngineManager and resolves once
+// the web server answers; the caller owns the returned child.
 function bootDsh(installedRoot, dshHome, extraEnv) {
   const electronPath = require('electron');
+  const { spawnDshProcess } = require(path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshProcessLauncher.js'));
   const entry = path.join(installedRoot, 'lib', 'bin.js');
   const port = 31400 + Math.floor(Math.random() * 400);
-  const child = spawn(electronPath, ['--expose-internals', entry, 'web', '--port', String(port)], {
+  const child = spawnDshProcess({
+    executablePath: electronPath,
+    args: [entry, 'web', '--port', String(port)],
     cwd: installedRoot,
-    env: { ...process.env, ...extraEnv, ELECTRON_RUN_AS_NODE: '1', DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ...extraEnv, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1' },
   });
   let output = '';
   for (const stream of [child.stdout, child.stderr]) {
@@ -202,6 +205,85 @@ function countFiles(dir) {
   return total;
 }
 
+const E2E_EXTERNAL_PLUGIN_NAME = '@dsh-external/dsh-e2e-loader-probe';
+
+// Build the smallest realistic out-of-tree profile plugin: it is ESM, lives
+// under the profile's own node_modules, and is enabled from cordis.patch.yml.
+// Importing it writes a marker that records the Node switches/environment, so
+// a passing HTTP probe cannot hide a loader that skipped the external row.
+function prepareExternalPluginProfile(dshHome) {
+  const profileDir = path.join(dshHome, 'profiles', 'web');
+  const pluginDir = path.join(profileDir, 'node_modules', '@dsh-external', 'dsh-e2e-loader-probe');
+  const markerPath = path.join(dshHome, 'e2e-external-plugin-loaded.json');
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(profileDir, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: 'dsh-profile-web',
+        private: true,
+        dependencies: { [E2E_EXTERNAL_PLUGIN_NAME]: '0.0.0-e2e' },
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
+      },
+      null,
+      2
+    )}\n`
+  );
+  fs.writeFileSync(
+    path.join(profileDir, 'cordis.patch.yml'),
+    `- insert:\n    - id: dsh-e2e-loader-probe\n      name: '${E2E_EXTERNAL_PLUGIN_NAME}'\n`
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: E2E_EXTERNAL_PLUGIN_NAME,
+        version: '0.0.0-e2e',
+        private: true,
+        type: 'module',
+        exports: './index.js',
+      },
+      null,
+      2
+    )}\n`
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, 'index.js'),
+    `import { writeFileSync } from 'node:fs';\n\n` +
+      `const markerPath = process.env.DSH_E2E_PLUGIN_MARKER;\n` +
+      `if (!markerPath) throw new Error('DSH_E2E_PLUGIN_MARKER is required');\n` +
+      `writeFileSync(markerPath, JSON.stringify({\n` +
+      `  plugin: '${E2E_EXTERNAL_PLUGIN_NAME}',\n` +
+      `  execArgv: process.execArgv,\n` +
+      `  electronRunAsNode: process.env.ELECTRON_RUN_AS_NODE ?? null,\n` +
+      `}) + '\\n');\n\n` +
+      `export function apply() {}\n`
+  );
+  return markerPath;
+}
+
+function assertExternalPluginMarker(markerPath, launcher) {
+  if (!fs.existsSync(markerPath)) {
+    fail(`${launcher} reached dsh readiness without importing ${E2E_EXTERNAL_PLUGIN_NAME}`);
+  }
+  let marker;
+  try {
+    marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+  } catch (error) {
+    fail(`${launcher} wrote an invalid external-plugin marker: ${error.message}`);
+  }
+  if (marker.plugin !== E2E_EXTERNAL_PLUGIN_NAME) {
+    fail(`${launcher} loaded the wrong external plugin: ${JSON.stringify(marker)}`);
+  }
+  if (!Array.isArray(marker.execArgv) || !marker.execArgv.includes('--expose-internals')) {
+    fail(`${launcher} omitted --expose-internals: ${JSON.stringify(marker.execArgv)}`);
+  }
+  if (marker.electronRunAsNode !== '1') {
+    fail(`${launcher} did not run Electron as Node: ${JSON.stringify(marker.electronRunAsNode)}`);
+  }
+  log(`   ${launcher} imported external ESM plugin with Electron Node mode`);
+}
+
 // The failure this covers: the picker spawns a child process that blocks inside
 // the modal `Show`, and any breakage there (a missing worker file, a runtime
 // that cannot load koffi, a child that is not run as Node) surfaces as an
@@ -241,10 +323,10 @@ async function main() {
   const targetId = resolveHostTargetId();
   if (!targetId) fail(`Unsupported host platform: ${process.platform}`);
 
-  // [1/8] Fresh compiled modules — installer/client/MCP server run from dist-electron.
+  // [1/9] Fresh compiled modules — installer/client/MCP server run from dist-electron.
   step('compile electron main', 'npm', ['run', 'compile:electron']);
 
-  // [2/8] Build (idempotent via runtime-build-info cache) and pack when stale.
+  // [2/9] Build (idempotent via runtime-build-info cache) and pack when stale.
   step(`build runtime ${targetId}`, process.execPath, [path.join(rootDir, 'scripts', 'build-dsh-runtime.cjs'), targetId]);
 
   const buildInfo = JSON.parse(
@@ -268,7 +350,7 @@ async function main() {
     log(`>> pack skipped (manifest current: ${manifestName})`);
   }
 
-  // [3/8] Install exactly like a shipped app does: one absolute URL plus the
+  // [3/9] Install exactly like a shipped app does: one absolute URL plus the
   // digest the app itself carries, verified before extraction.
   const { installDshRuntime, resolveDshArtifactFromConfig, resolveDshArtifactFromManifest } = require(
     path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshRuntimeInstaller.js')
@@ -334,7 +416,7 @@ async function main() {
   const fromManifest = resolveDshArtifactFromManifest(distDir, manifestName);
   if (fromManifest.sha256 !== artifact.sha256) fail('manifest and config descriptors disagree');
 
-  // [4/8] Start the mock LLM upstream, then render a LobsterAI provider that
+  // [4/9] Start the mock LLM upstream, then render a LobsterAI provider that
   // points at it — settings.yaml on disk, the API key only in the child env.
   const ANSWER = 'E2E delegation OK: the mock coding agent finished the task.';
   const mock = await startMockLlmServer(ANSWER);
@@ -344,6 +426,8 @@ async function main() {
     path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshConfigSync.js')
   );
   const dshHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2e-home-'));
+  const externalPluginMarker = prepareExternalPluginProfile(dshHome);
+  log(`>> external ESM plugin profile prepared: ${E2E_EXTERNAL_PLUGIN_NAME}`);
   const managed = renderDshManagedSettings(
     {
       'E2E Fake': {
@@ -364,7 +448,7 @@ async function main() {
   const written = await writeDshManagedSettings(dshHome, managed);
   log(`>> provider settings rendered at ${written.settingsPath}`);
 
-  // [5/8] Boot the installed runtime and assert provider + model over RPC.
+  // [5/9] Boot the installed runtime and assert provider + model over RPC.
   step(
     'boot installed runtime (web smoke + provider RPC assertions)',
     process.execPath,
@@ -379,16 +463,27 @@ async function main() {
       '--expect-model',
       'e2e-model',
     ],
-    { env: { ...process.env, ...managed.envVars } }
+    { env: { ...process.env, ...managed.envVars, DSH_E2E_PLUGIN_MARKER: externalPluginMarker } }
   );
+  assertExternalPluginMarker(externalPluginMarker, 'runtime smoke launcher');
 
-  // [6/8] Boot again for the delegation loop (the verify step owns its own
-  // child and exits; the MCP test needs a live host).
+  // [6/9] Boot again through the production launcher for the delegation loop
+  // (the verify step owns its own child and exits; the MCP test needs a live
+  // host). Requiring a fresh marker proves this second child loaded the plugin.
+  fs.rmSync(externalPluginMarker, { force: true });
   log('>> boot installed runtime for form-B delegation');
-  const booted = await bootDsh(installed.root, dshHome, managed.envVars);
+  const booted = await bootDsh(installed.root, dshHome, {
+    ...managed.envVars,
+    DSH_E2E_PLUGIN_MARKER: externalPluginMarker,
+  });
+  await delay(750);
+  if (booted.child.exitCode !== null) {
+    fail(`production launcher dsh child exited during readiness settle (code=${booted.child.exitCode})`);
+  }
+  assertExternalPluginMarker(externalPluginMarker, 'production launcher');
   log(`   dsh live at ${booted.url}`);
 
-  // [7/8] Drive the dsh_code_task MCP server through a real MCP client.
+  // [7/9] Drive the dsh_code_task MCP server through a real MCP client.
   const { DshCodeMcpServer } = require(path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshCodeMcpServer.js'));
   const taskCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2e-task-'));
   const mcpServer = new DshCodeMcpServer({

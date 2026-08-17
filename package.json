@@ -75,6 +75,11 @@
         "sha256": "100ed169e9198d5407f2a9245f6ab828dfc1e40a20a773a6468a5ee77d3ebe0e",
         "size": 36237167
       },
+      "mac-x64": {
+        "url": "https://ydhardwarecommon.nosdn.127.net/3bc244c97aaa62b1c29dfcb3ddaa7041.gz",
+        "sha256": "7eb610ea438ad0d045434f807eafb8970208985e0eaf8d3cfcae70b5ee059084",
+        "size": 33251784
+      },
       "win-x64": {
         "url": "https://ydhardwarecommon.nosdn.127.net/c3701c796579c3dc2d145593329a9d3c.gz",
         "sha256": "b36c3b4fec05761259da662e0f2ca1b70c2910b7e7594725cb98e1d8db2bff15",

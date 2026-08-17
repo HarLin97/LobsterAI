@@ -2,7 +2,7 @@
 // Harness (dsh) runtime. No Electron imports here so the logic stays unit
 // testable; dshEngineManager.ts owns process/Electron concerns.
 
-import { DshInstallProgressState } from '../../shared/dshEngine/constants';
+import { DshEngineErrorCode, type DshInstallProgressState } from '../../shared/dshEngine/constants';
 
 export const DSH_RUNTIME_ENTRY_RELPATH = 'lib/bin.js';
 
@@ -10,9 +10,12 @@ export const DSH_RUNTIME_ENTRY_RELPATH = 'lib/bin.js';
 // preferred supply (the node-addon-require-builtin native addon) loads but
 // fails under Electron's Node build ("no compatible
 // GetAlignedPointerFromEmbedderData symbol"), so every dsh child we spawn must
-// carry this flag: utilityProcess passes it via execArgv, the Windows
-// child_process path inserts it before the entry script.
+// carry this flag. dshProcessLauncher inserts it before the entry script while
+// running Electron in Node mode on every platform.
 export const DSH_NODE_EXEC_ARGV = ['--expose-internals'];
+
+const DSH_PLUGIN_LOAD_FAILURE_PATTERN =
+  /(?:Cannot find package|ERR_MODULE_NOT_FOUND)[\s\S]{0,500}cordis-plugin-loader/i;
 
 export interface DshRuntimeBuildInfo {
   target: string;
@@ -49,6 +52,10 @@ export function parseDshRuntimeBuildInfo(raw: string): DshRuntimeBuildInfo | nul
   } catch {
     return null;
   }
+}
+
+export function classifyDshStartupError(output: string, fallback: DshEngineErrorCode): DshEngineErrorCode {
+  return DSH_PLUGIN_LOAD_FAILURE_PATTERN.test(output) ? DshEngineErrorCode.PluginLoadFailed : fallback;
 }
 
 export interface DshRuntimeCandidateContext {
@@ -106,9 +113,9 @@ export interface DshSpawnEnvOptions {
   timeZone?: string;
 }
 
-// Environment for the dsh child process. ELECTRON_RUN_AS_NODE is intentionally
-// not set here: utilityProcess children are already plain Node, and only the
-// Windows child_process path needs the flag (the spawn site adds it).
+// Environment shared with the dsh child process. The process launcher adds
+// ELECTRON_RUN_AS_NODE because that flag is part of how Electron itself is
+// invoked, not dsh's application environment.
 export function buildDshSpawnEnv(options: DshSpawnEnvOptions): Record<string, string> {
   const { baseEnv, dshHome, telemetryDisabled = true, timeZone } = options;
   const env: Record<string, string> = {};

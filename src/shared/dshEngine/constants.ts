@@ -15,6 +15,7 @@ export const DshEngineErrorCode = {
   SpawnFailed: 'spawn_failed',
   ReadyTimeout: 'ready_timeout',
   CrashedEarly: 'crashed_early',
+  PluginLoadFailed: 'plugin_load_failed',
 } as const;
 export type DshEngineErrorCode = typeof DshEngineErrorCode[keyof typeof DshEngineErrorCode];
 

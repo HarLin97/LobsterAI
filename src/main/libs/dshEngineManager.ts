@@ -1,12 +1,11 @@
 // Manages the bundled DeepSeek Harness (dsh) runtime as a child process:
 // resolve the vendored runtime, spawn `web` on a loopback port, poll for
-// readiness, and stop it with the app. Mirrors the OpenClaw engine manager's
-// spawn split (utilityProcess on macOS/Linux, ELECTRON_RUN_AS_NODE
-// child_process on Windows) at skeleton scale; config sync, downloads, and
-// crash self-healing land with the kit integration.
+// readiness, and stop it with the app. The runtime always uses Electron's
+// Node mode because its Cordis plugin loader needs a Node switch that packaged
+// Electron utility processes filter out.
 
-import { ChildProcess,spawn } from 'child_process';
-import { app, utilityProcess } from 'electron';
+import { type ChildProcess } from 'child_process';
+import { app } from 'electron';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as net from 'net';
@@ -20,10 +19,11 @@ import {
   DshInstallStage,
 } from '../../shared/dshEngine/constants';
 import { DshManagedSettings, writeDshManagedSettings } from './dshConfigSync';
+import { spawnDshProcess } from './dshProcessLauncher';
 import {
   buildDshSpawnEnv,
   buildDshWebArgs,
-  DSH_NODE_EXEC_ARGV,
+  classifyDshStartupError,
   DSH_RUNTIME_ENTRY_RELPATH,
   dshInstallPercent,
   DshRuntimeBuildInfo,
@@ -36,8 +36,11 @@ import {
 import {
   DshInstallProgress,
   installDshRuntime,
+  installedDshRuntimeRoot,
+  markInstalledDshRuntimeReady,
+  pruneInstalledDshRuntimes,
   resolveDshArtifactFromConfig,
-  resolveNewestInstalledDshRuntime,
+  resolveInstalledDshRuntime,
 } from './dshRuntimeInstaller';
 
 // The pinned version and the per-target archive descriptors travel inside the
@@ -75,6 +78,21 @@ function resolveHostDshTargetId(): string {
   if (process.platform === 'darwin') return process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64';
   if (process.platform === 'win32') return 'win-x64';
   return 'linux-x64';
+}
+
+interface DshPinnedRuntimeIdentity {
+  version: string;
+  target: string;
+  sha256?: string;
+}
+
+function resolvePinnedDshRuntimeIdentity(): DshPinnedRuntimeIdentity | null {
+  const meta = readDshPackageMeta();
+  const version = meta.version?.trim();
+  if (!version) return null;
+  const target = resolveHostDshTargetId();
+  const artifact = resolveDshArtifactFromConfig(meta.runtimes ?? null, target, version);
+  return { version, target, sha256: artifact?.sha256 };
 }
 
 // A first start on Windows pays for the whole runtime tree being read (and
@@ -118,7 +136,7 @@ export interface DshEngineState {
   install: DshInstallProgressState | null;
 }
 
-type DshChild = ChildProcess | Electron.UtilityProcess;
+type DshChild = ChildProcess;
 
 export class DshEngineManager {
   private child: DshChild | null = null;
@@ -190,8 +208,8 @@ export class DshEngineManager {
     return [...this.logRing];
   }
 
-  // Kit-installed runtimes (downloaded archives) live under userData and win
-  // over the vendored/bundled copy so upgrades don't require an app release.
+  // Kit-installed runtimes (downloaded archives) live under userData. The app's
+  // package metadata selects one exact version from this side-by-side store.
   getRuntimeInstallBaseDir(): string {
     return path.join(app.getPath('userData'), 'dsh-runtime');
   }
@@ -205,7 +223,12 @@ export class DshEngineManager {
     if (present) return present.root;
 
     const meta = readDshPackageMeta();
-    const artifact = resolveDshArtifactFromConfig(meta.runtimes ?? null, resolveHostDshTargetId(), meta.version ?? '');
+    const pinnedVersion = meta.version?.trim();
+    if (!pinnedVersion) {
+      console.warn('[DSH] No pinned runtime version configured');
+      return null;
+    }
+    const artifact = resolveDshArtifactFromConfig(meta.runtimes ?? null, resolveHostDshTargetId(), pinnedVersion);
     if (!artifact) {
       console.warn(`[DSH] No runtime artifact configured for ${resolveHostDshTargetId()}`);
       return null;
@@ -251,17 +274,24 @@ export class DshEngineManager {
   }
 
   resolveRuntime(): DshResolvedRuntime | null {
-    const installed = resolveNewestInstalledDshRuntime(this.getRuntimeInstallBaseDir());
-    if (installed) {
-      const layout = validateDshRuntimeLayout(installed.root, fs.existsSync, path.join);
-      if (layout.ok) {
-        return {
-          root: installed.root,
-          entry: path.join(installed.root, ...DSH_RUNTIME_ENTRY_RELPATH.split('/')),
-          buildInfo: readBuildInfo(installed.root),
-        };
-      }
+    const pinned = resolvePinnedDshRuntimeIdentity();
+    if (!pinned) {
+      console.warn('[DSH] Cannot resolve a runtime without package.json dsh.version');
+      return null;
     }
+
+    const installedRoot = resolveInstalledDshRuntime(this.getRuntimeInstallBaseDir(), pinned.version, {
+      target: pinned.target,
+      sha256: pinned.sha256,
+    });
+    if (installedRoot) {
+      return {
+        root: installedRoot,
+        entry: path.join(installedRoot, ...DSH_RUNTIME_ENTRY_RELPATH.split('/')),
+        buildInfo: readBuildInfo(installedRoot),
+      };
+    }
+
     const candidates = resolveDshRuntimeCandidates({
       isPackaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
@@ -274,12 +304,20 @@ export class DshEngineManager {
       // Resolve the vendor/dsh-runtime/current symlink; dsh path checks reject
       // paths that traverse unresolved links.
       const root = fs.realpathSync(candidate);
+      const buildInfo = readBuildInfo(root);
+      if (!buildInfo || buildInfo.dshVersion !== pinned.version || buildInfo.target !== pinned.target) {
+        console.warn(
+          `[DSH] Ignoring runtime at ${root}: expected ${pinned.version}/${pinned.target}, ` +
+            `got ${buildInfo ? `${buildInfo.dshVersion}/${buildInfo.target}` : 'missing build info'}`
+        );
+        continue;
+      }
       const layout = validateDshRuntimeLayout(root, fs.existsSync, path.join);
       if (!layout.ok) {
         console.warn(`[DSH] Runtime at ${root} is incomplete, missing: ${layout.missing.join(', ')}`);
         continue;
       }
-      return { root, entry: path.join(root, ...DSH_RUNTIME_ENTRY_RELPATH.split('/')), buildInfo: readBuildInfo(root) };
+      return { root, entry: path.join(root, ...DSH_RUNTIME_ENTRY_RELPATH.split('/')), buildInfo };
     }
     return null;
   }
@@ -316,12 +354,13 @@ export class DshEngineManager {
 
   private async doStart(): Promise<DshEngineState> {
     // A start can be requested before Electron finishes booting (an early MCP
-    // tool call, an autostart hook): utilityProcess.fork and app.getPath both
-    // throw until the app is ready, so wait rather than fail the request.
+    // tool call or an autostart hook). app.getPath throws until the app is
+    // ready, so wait rather than fail the request.
     if (!app.isReady()) {
       await app.whenReady();
     }
     await this.stop();
+    this.logRing.length = 0;
     const generation = this.generation;
 
     const runtime = this.resolveRuntime();
@@ -368,22 +407,12 @@ export class DshEngineManager {
     );
     let child: DshChild;
     try {
-      if (process.platform === 'win32') {
-        child = spawn(process.execPath, [...DSH_NODE_EXEC_ARGV, ...args], {
-          cwd: workingDirectory,
-          env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-        });
-      } else {
-        child = utilityProcess.fork(args[0], args.slice(1), {
-          cwd: workingDirectory,
-          execArgv: [...DSH_NODE_EXEC_ARGV],
-          env,
-          stdio: 'pipe',
-          serviceName: 'DSH Runtime',
-        });
-      }
+      child = spawnDshProcess({
+        executablePath: process.execPath,
+        args,
+        cwd: workingDirectory,
+        env,
+      });
     } catch (error) {
       console.error('[DSH] Failed to spawn runtime', error);
       this.setState({ phase: DshEnginePhase.Failed, port: null, errorCode: DshEngineErrorCode.SpawnFailed });
@@ -398,18 +427,41 @@ export class DshEngineManager {
     const readyError = await this.waitForReady(port, generation);
     if (this.generation !== generation) return this.getState();
     if (readyError) {
+      const startupError = classifyDshStartupError(this.logRing.slice(-40).join('\n'), readyError);
       // A child that already exited dumped its output from the exit handler; a
       // wedged one is still running and has not, so carry the tail here.
       const tail = this.child ? `. Recent output:\n${this.logRing.slice(-20).join('\n')}` : '';
-      console.error(`[DSH] Runtime did not become ready: ${readyError}${tail}`);
+      console.error(`[DSH] Runtime did not become ready: ${startupError}${tail}`);
       await this.stop();
-      this.setState({ phase: DshEnginePhase.Failed, port: null, errorCode: readyError });
+      this.setState({ phase: DshEnginePhase.Failed, port: null, errorCode: startupError });
       return this.getState();
     }
 
     console.log(`[DSH] Ready at http://127.0.0.1:${port}`);
     this.setState({ phase: DshEnginePhase.Ready, port, errorCode: null });
+    this.pruneSupersededInstalledRuntimes(runtime);
     return this.getState();
+  }
+
+  private pruneSupersededInstalledRuntimes(runtime: DshResolvedRuntime): void {
+    const pinned = resolvePinnedDshRuntimeIdentity();
+    if (!pinned) return;
+    const installBase = this.getRuntimeInstallBaseDir();
+    if (path.resolve(runtime.root) !== path.resolve(installedDshRuntimeRoot(installBase, pinned.version))) return;
+    const markedReady = markInstalledDshRuntimeReady(installBase, pinned.version, {
+      target: pinned.target,
+      sha256: pinned.sha256,
+    });
+    if (!markedReady) {
+      console.warn(`[DSH] Could not mark runtime ${pinned.version} as ready; keeping prior runtimes`);
+      return;
+    }
+
+    void pruneInstalledDshRuntimes(installBase, pinned.version, 1)
+      .then(({ removed }) => {
+        if (removed.length > 0) console.log(`[DSH] Removed superseded runtimes: ${removed.join(', ')}`);
+      })
+      .catch((error) => console.warn('[DSH] Could not prune superseded runtimes', error));
   }
 
   private wireChildStreams(child: DshChild, generation: number): void {
