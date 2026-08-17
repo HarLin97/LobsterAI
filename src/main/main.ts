@@ -152,6 +152,7 @@ import {
   OpenClawGatewayRepairErrorCode,
 } from '../shared/openclawEngine/constants';
 import { PlatformRegistry } from '../shared/platform';
+import type { ProviderConfig } from '../shared/providers';
 import {
   ModelRuntimeProfile,
   OpenClawProviderId,
@@ -225,6 +226,7 @@ import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
+import { ensureDshEngineReady, registerDshHandlers } from './ipcHandlers/dsh/handlers';
 import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
 import { registerKitHandlers } from './ipcHandlers/kits';
 import { registerMcpHandlers } from './ipcHandlers/mcp';
@@ -406,7 +408,11 @@ import {
   OpenClawPluginInstallMigrationStatus,
 } from './libs/openclawPluginInstallMigration';
 import { collectReferencedEnvVarNames, pickReferencedSecretEnvVars } from './libs/openclawSecretEnv';
-import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
+import {
+  getOpenClawTokenProxyPort,
+  startOpenClawTokenProxy,
+  stopOpenClawTokenProxy,
+} from './libs/openclawTokenProxy';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
@@ -8286,6 +8292,51 @@ if (!gotTheLock) {
 
   registerMcpHandlers({ getMcpRuntime, syncOpenClawConfig });
 
+  registerDshHandlers({
+    getStore: () => getStore(),
+    getProviders: () => {
+      const appConfig = getStore().get<{ providers?: Record<string, ProviderConfig> }>('app_config');
+      const providers = { ...(appConfig?.providers ?? {}) };
+      // The billed built-in provider authenticates through the token proxy;
+      // syncing its raw key/baseUrl into dsh would produce a dead route.
+      delete providers[ProviderName.LobsteraiServer];
+      return providers;
+    },
+    getPlanProvider: () => {
+      // The billed plan has no user-supplied key: requests go to the local
+      // token proxy, which swaps in the account's access token. Without a
+      // running proxy there is nothing usable to hand dsh.
+      const proxyPort = getOpenClawTokenProxyPort();
+      if (!proxyPort) return null;
+      const planModels = getAllServerModelMetadata();
+      if (planModels.length === 0) return null;
+      return {
+        baseUrl: `http://127.0.0.1:${proxyPort}/v1`,
+        displayName: t('dshPlanProviderName'),
+        models: planModels.map(model => ({
+          modelId: model.modelId,
+          modelName: model.modelName,
+          apiFormat: model.apiFormat,
+          supportsImage: model.supportsImage,
+          contextWindow: model.contextWindow,
+          maxTokens: model.maxTokens,
+        })),
+      };
+    },
+    getDefaultCwd: () => {
+      try {
+        const workingDirectory = getCoworkStore().getConfig().workingDirectory?.trim();
+        if (workingDirectory) return workingDirectory;
+      } catch {
+        // Cowork store may not be ready yet; fall through to the home dir.
+      }
+      return app.getPath('home');
+    },
+    getWorkbenchTitle: () => t('dshWorkbenchTitle'),
+    syncOpenClawConfig,
+  });
+
+
   // Cowork IPC handlers
   ipcMain.handle(
     'cowork:session:start',
@@ -13283,6 +13334,16 @@ if (!gotTheLock) {
     store = await initStore();
     profiler.measure('initStore');
     console.log('[Main] initApp: store initialized');
+
+    // Dev/E2E convenience: boot the dsh engine once the app is ready and the
+    // store can answer provider queries, so app-level checks can assert
+    // readiness from logs without driving the settings UI.
+    if (process.env.LOBSTERAI_DSH_AUTOSTART === '1') {
+      ensureDshEngineReady()
+        .then(url => console.log(`[DSH] Autostart ready at ${url}`))
+        .catch(error => console.error('[DSH] Autostart failed', error));
+    }
+
     initializeKeyfromAttribution(store);
     refreshEndpointsTestMode(store);
     sqliteBackupManager = new SqliteBackupManager(app.getPath('userData'));

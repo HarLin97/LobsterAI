@@ -16,6 +16,10 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    // DeepSeek Harness (experimental)
+    dshWorkbenchTitle: 'DeepSeek Harness 工作台（实验）',
+    dshPlanProviderName: '套餐',
+
     // Tray menu
     trayShowWindow: '打开 LobsterAI',
     trayNewTask: '新建任务',
@@ -343,6 +347,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    // DeepSeek Harness (experimental)
+    dshWorkbenchTitle: 'DeepSeek Harness Workbench (Experimental)',
+    dshPlanProviderName: 'Plan',
+
     // Tray menu
     trayShowWindow: 'Open LobsterAI',
     trayNewTask: 'New Task',
