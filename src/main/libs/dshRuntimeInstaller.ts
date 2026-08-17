@@ -94,6 +94,22 @@ export function isHttpSource(base: string): boolean {
   return /^https?:\/\//i.test(base);
 }
 
+// Windows ships bsdtar as %SystemRoot%\System32\tar.exe. Naming it outright
+// keeps the extract off whatever `tar` happens to come first on PATH: GNU tar
+// (Git for Windows, MSYS2, Cygwin — all common on dev machines) reads an
+// archive path like `C:\Users\...` as `host:file` and fails the install with
+// "Cannot connect to C: resolve failed". Elsewhere, and if the system copy is
+// missing, PATH lookup is the right answer.
+export function resolveTarCommand(
+  platform: NodeJS.Platform,
+  exists: (absolutePath: string) => boolean,
+  systemRoot: string | undefined
+): string {
+  if (platform !== 'win32') return 'tar';
+  const systemTar = path.join(systemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  return exists(systemTar) ? systemTar : 'tar';
+}
+
 export function installedDshRuntimeRoot(baseDir: string, version: string): string {
   return path.join(baseDir, version);
 }
@@ -206,10 +222,15 @@ export async function installDshRuntime(options: {
     onProgress?.({ phase: 'extract' });
     fs.rmSync(stagingRoot, { recursive: true, force: true });
     fs.mkdirSync(stagingRoot, { recursive: true });
-    const tarResult = spawnSync('tar', ['-xzf', archiveTempPath, '-C', stagingRoot], {
+    // No shell: the paths below are absolute and may contain spaces, which a
+    // shell would re-split.
+    const tarCommand = resolveTarCommand(process.platform, fs.existsSync, process.env.SystemRoot);
+    const tarResult = spawnSync(tarCommand, ['-xzf', archiveTempPath, '-C', stagingRoot], {
       stdio: ['ignore', 'ignore', 'pipe'],
-      shell: process.platform === 'win32',
     });
+    if (tarResult.error) {
+      throw new Error(`tar extract could not start (${tarCommand}): ${tarResult.error.message}`);
+    }
     if (tarResult.status !== 0) {
       throw new Error(`tar extract failed: ${String(tarResult.stderr ?? '').slice(0, 500)}`);
     }

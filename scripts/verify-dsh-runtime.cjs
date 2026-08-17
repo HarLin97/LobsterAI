@@ -18,6 +18,8 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
+const { removeTree } = require('./dsh-remove-tree.cjs');
+
 const LOG_TAG = '[verify-dsh-runtime]';
 const READY_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 500;
@@ -101,7 +103,8 @@ function cleanupAndExit(code) {
   const finish = () => {
     if (!keepHome) {
       try {
-        fs.rmSync(dshHome, { recursive: true, force: true });
+        // Never `fs.rm` a dsh home: it is full of links into the runtime.
+        removeTree(dshHome);
       } catch {
         // Best-effort cleanup.
       }

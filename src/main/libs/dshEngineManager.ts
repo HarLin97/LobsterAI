@@ -35,16 +35,33 @@ import {
 // The pinned version and the per-target archive descriptors travel inside the
 // app, so the digest we verify against is one we shipped rather than one
 // fetched from the same host as the archive.
-const dshPackageMeta = (() => {
+//
+// Read through app.getAppPath() rather than a path relative to this file: the
+// main process ships as one bundle (dist-electron/main.js), where a relative
+// `require('../../../package.json')` lands outside the app entirely. That miss
+// is silent — every target reads as unconfigured, so a packaged app never
+// downloads a runtime and the feature dies with "No runtime artifact
+// configured". getAppPath() is the app root in dev and the asar root when
+// packaged, and package.json sits at both.
+interface DshPackageMeta {
+  version?: string;
+  runtimes?: unknown;
+}
+
+let dshPackageMetaCache: DshPackageMeta | null = null;
+
+function readDshPackageMeta(): DshPackageMeta {
+  if (dshPackageMetaCache) return dshPackageMetaCache;
+  let meta: DshPackageMeta = {};
   try {
-    const pkg = require('../../../package.json') as { dsh?: { version?: string; runtimes?: unknown } };
-    return pkg.dsh ?? {};
-  } catch {
-    return {} as { version?: string; runtimes?: unknown };
+    const raw = fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8');
+    meta = (JSON.parse(raw) as { dsh?: DshPackageMeta }).dsh ?? {};
+  } catch (error) {
+    console.warn('[DSH] Could not read the pinned runtime metadata from package.json', error);
   }
-})();
-const DSH_PINNED_VERSION = dshPackageMeta.version ?? '';
-const DSH_RUNTIME_ARTIFACTS = dshPackageMeta.runtimes ?? null;
+  dshPackageMetaCache = meta;
+  return meta;
+}
 
 function resolveHostDshTargetId(): string {
   if (process.platform === 'darwin') return process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64';
@@ -52,8 +69,14 @@ function resolveHostDshTargetId(): string {
   return 'linux-x64';
 }
 
-const READY_TIMEOUT_MS = 60_000;
+// A first start on Windows pays for the whole runtime tree being read (and
+// virus-scanned) once: measured 74s cold on a Win11 dev box against 2.5s warm.
+// A 60s budget turned that into a spurious "engine failed to start" that a
+// second click then fixed, so the cap is for a wedged child, not a slow one —
+// a child that dies is caught by the liveness check, not by this.
+const READY_TIMEOUT_MS = 180_000;
 const READY_POLL_INTERVAL_MS = 250;
+const READY_PROGRESS_LOG_INTERVAL_MS = 15_000;
 const STOP_GRACE_MS = 5_000;
 const LOG_RING_MAX_LINES = 400;
 
@@ -161,7 +184,8 @@ export class DshEngineManager {
   ): Promise<string | null> {
     if (this.resolveRuntime()) return this.resolveRuntime()?.root ?? null;
 
-    const artifact = resolveDshArtifactFromConfig(DSH_RUNTIME_ARTIFACTS, resolveHostDshTargetId(), DSH_PINNED_VERSION);
+    const meta = readDshPackageMeta();
+    const artifact = resolveDshArtifactFromConfig(meta.runtimes ?? null, resolveHostDshTargetId(), meta.version ?? '');
     if (!artifact) {
       console.warn(`[DSH] No runtime artifact configured for ${resolveHostDshTargetId()}`);
       return null;
@@ -358,11 +382,17 @@ export class DshEngineManager {
 
   // Resolves null once the web server answers, or the error code on failure.
   private async waitForReady(port: number, generation: number): Promise<DshEngineErrorCode | null> {
-    const deadline = Date.now() + READY_TIMEOUT_MS;
+    const startedAt = Date.now();
+    const deadline = startedAt + READY_TIMEOUT_MS;
+    let nextProgressLog = startedAt + READY_PROGRESS_LOG_INTERVAL_MS;
     while (Date.now() < deadline) {
       if (this.generation !== generation || !this.child) return DshEngineErrorCode.CrashedEarly;
       const status = await probeHttpStatus(port);
       if (status === 200) return null;
+      if (Date.now() >= nextProgressLog) {
+        console.log(`[DSH] Still waiting for the runtime on 127.0.0.1:${port} (${Math.round((Date.now() - startedAt) / 1000)}s)`);
+        nextProgressLog = Date.now() + READY_PROGRESS_LOG_INTERVAL_MS;
+      }
       await delay(READY_POLL_INTERVAL_MS);
     }
     return DshEngineErrorCode.ReadyTimeout;

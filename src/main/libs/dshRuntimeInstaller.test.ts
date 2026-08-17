@@ -12,6 +12,7 @@ import {
   resolveDshArtifactFromConfig,
   resolveDshArtifactFromManifest,
   resolveInstalledDshRuntime,
+  resolveTarCommand,
 } from './dshRuntimeInstaller';
 
 const tempRoots: string[] = [];
@@ -40,7 +41,10 @@ function writeFakeRuntime(dir: string): void {
 function packFakeRuntime(runtimeDir: string, distDir: string, version: string, target: string): string {
   const archiveName = `dsh-runtime-${version}-${target}.tar.gz`;
   const archivePath = path.join(distDir, archiveName);
-  const result = spawnSync('tar', ['-czf', archivePath, '-C', runtimeDir, '.']);
+  // Same reason the installer resolves it: a GNU tar on PATH would read the
+  // absolute archive path as `host:file` and refuse to write it.
+  const tar = resolveTarCommand(process.platform, fs.existsSync, process.env.SystemRoot);
+  const result = spawnSync(tar, ['-czf', archivePath, '-C', runtimeDir, '.']);
   expect(result.status).toBe(0);
   const bytes = fs.readFileSync(archivePath);
   const manifestName = `dsh-runtime-${version}-${target}.manifest.json`;
@@ -82,6 +86,24 @@ describe('isHttpSource', () => {
     expect(isHttpSource('http://127.0.0.1:8080')).toBe(true);
     expect(isHttpSource('/Users/me/vendor/dsh-dist')).toBe(false);
     expect(isHttpSource('C:\\dist')).toBe(false);
+  });
+});
+
+describe('resolveTarCommand', () => {
+  // GNU tar on PATH reads `-xzf C:\...` as `host:file`; the system bsdtar does
+  // not, so Windows extracts must name it instead of trusting PATH order.
+  test('names the system bsdtar on Windows and falls back to PATH', () => {
+    const systemTar = path.join('C:\\WINDOWS', 'System32', 'tar.exe');
+    expect(resolveTarCommand('win32', (p) => p === systemTar, 'C:\\WINDOWS')).toBe(systemTar);
+    expect(resolveTarCommand('win32', () => false, 'C:\\WINDOWS')).toBe('tar');
+    expect(resolveTarCommand('win32', (p) => p === 'C:\\Windows\\System32\\tar.exe', undefined)).toBe(
+      'C:\\Windows\\System32\\tar.exe'
+    );
+  });
+
+  test('uses PATH on macOS and Linux', () => {
+    expect(resolveTarCommand('darwin', () => true, undefined)).toBe('tar');
+    expect(resolveTarCommand('linux', () => true, '/usr')).toBe('tar');
   });
 });
 

@@ -16,6 +16,8 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+const { resolveTarCommand } = require('./dsh-tar.cjs');
+
 const LOG_TAG = '[build-dsh-runtime]';
 
 function log(message) {
@@ -74,6 +76,14 @@ const PATCH_SENTINELS = [
     expect: 'wShowWindow: 0,',
     occurrences: 2,
   },
+  {
+    patch: '02-picker-electron-safe-path-read.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-host-directory-picker-native/lib/worker.cjs',
+    // koffi.view() over native memory aborts under Electron's sandboxed V8, so
+    // the picked path must come back through koffi's own string marshalling.
+    expect: '_Out_ str16 *name',
+    occurrences: 1,
+  },
 ];
 
 const TARGETS = {
@@ -105,7 +115,8 @@ const buildInfoPath = path.join(outDir, 'runtime-build-info.json');
 const patchesDir = path.join(rootDir, 'scripts', 'dsh-patches', dshVersion);
 
 function runOrFail(command, args, options, description) {
-  const useShell = process.platform === 'win32' && (command === 'npm' || command === 'tar' || command === 'git');
+  // `tar` is resolved to an absolute path by the caller, so it never needs a shell.
+  const useShell = process.platform === 'win32' && (command === 'npm' || command === 'git');
   const result = spawnSync(command, args, {
     stdio: 'inherit',
     shell: useShell,
@@ -198,7 +209,7 @@ if (!tarball) {
 }
 
 // [2/6] Extract. npm tarballs always wrap contents in a "package/" directory.
-runOrFail('tar', ['-xzf', path.join(stagingDir, tarball), '-C', stagingDir], {}, 'tar extract');
+runOrFail(resolveTarCommand(), ['-xzf', path.join(stagingDir, tarball), '-C', stagingDir], {}, 'tar extract');
 const extractedDir = path.join(stagingDir, 'package');
 if (!fs.existsSync(path.join(extractedDir, 'package.json'))) {
   fail(`Extracted tarball has no package.json at ${extractedDir}`);

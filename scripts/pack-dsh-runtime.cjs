@@ -15,6 +15,8 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+const { resolveTarCommand } = require('./dsh-tar.cjs');
+
 const LOG_TAG = '[pack-dsh-runtime]';
 
 function log(message) {
@@ -53,8 +55,12 @@ const manifestPath = path.join(outDir, `${baseName}.manifest.json`);
 // the install destination. --no-xattrs keeps macOS metadata out of the archive.
 log(`Archiving ${path.relative(rootDir, runtimeDir)} ...`);
 fs.rmSync(archivePath, { force: true });
-const tarArgs = ['-czf', archivePath, '-C', runtimeDir, '.'];
-const result = spawnSync('tar', tarArgs, { stdio: 'inherit', shell: process.platform === 'win32' });
+// No shell: these paths are absolute and may contain spaces.
+const tarCommand = resolveTarCommand();
+const result = spawnSync(tarCommand, ['-czf', archivePath, '-C', runtimeDir, '.'], { stdio: 'inherit' });
+if (result.error) {
+  fail(`tar could not start (${tarCommand}): ${result.error.message}`);
+}
 if (result.status !== 0) {
   fail(`tar exited with code ${result.status}`);
 }

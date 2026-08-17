@@ -6,7 +6,9 @@
 //   -> render LobsterAI provider settings -> boot the INSTALLED runtime
 //   -> RPC-assert the provider/model are live (form A surface)
 //   -> boot again with a mock OpenAI upstream and drive the dsh_code_task MCP
-//      server through a real MCP client (form B delegation loop).
+//      server through a real MCP client (form B delegation loop)
+//   -> open the native directory picker and assert the OS dialog really shows
+//      (win32 only) -> tear the home down and assert the runtime survived it.
 // Every step is a hard assertion; exit 0 means the whole flow works.
 
 const fs = require('fs');
@@ -15,8 +17,13 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
+const { removeTree } = require('./dsh-remove-tree.cjs');
+
 const LOG_TAG = '[e2e-dsh]';
 const rootDir = path.resolve(__dirname, '..');
+// The title dsh gives the win32 folder dialog, and our handle on it: the
+// worker process owns that window while `IFileOpenDialog::Show` blocks.
+const PICKER_DIALOG_TITLE = 'Select Workspace Directory';
 
 function log(message) {
   console.log(`${LOG_TAG} ${message}`);
@@ -139,6 +146,95 @@ function bootDsh(installedRoot, dshHome, extraEnv) {
     };
     setTimeout(poll, 400);
   });
+}
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Fires a unary RPC without waiting for it: the picker call stays open for as
+// long as the operator stares at the dialog, so the test needs the live request
+// object to abort it.
+function startRpc(port, method, timeoutMs) {
+  const body = JSON.stringify({ type: 'client-request', rpcId: `e2e-${method}`, method, payload: {} });
+  const request = http.request({
+    host: '127.0.0.1',
+    port,
+    path: `/api/${method}`,
+    method: 'POST',
+    timeout: timeoutMs,
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+  });
+  const settled = new Promise((resolve) => {
+    request.on('response', (response) => {
+      let raw = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => (raw += chunk));
+      response.on('end', () => resolve({ kind: 'response', raw }));
+    });
+    request.on('error', (error) => resolve({ kind: 'error', raw: error.message }));
+  });
+  request.end(body);
+  return { request, settled };
+}
+
+// How many top-level windows currently carry the dialog's title. The dialog is
+// a real OS window owned by a child process, so this is the only way to prove
+// from outside that it actually opened.
+function countPickerDialogs() {
+  const result = spawnSync(
+    'powershell',
+    [
+      '-NoProfile',
+      '-Command',
+      `(Get-Process | Where-Object { $_.MainWindowTitle -eq '${PICKER_DIALOG_TITLE}' } | Measure-Object).Count`,
+    ],
+    { encoding: 'utf8' }
+  );
+  const count = Number(String(result.stdout).trim());
+  return Number.isInteger(count) ? count : 0;
+}
+
+function countFiles(dir) {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) continue;
+    total += entry.isDirectory() ? countFiles(path.join(dir, entry.name)) : 1;
+  }
+  return total;
+}
+
+// The failure this covers: the picker spawns a child process that blocks inside
+// the modal `Show`, and any breakage there (a missing worker file, a runtime
+// that cannot load koffi, a child that is not run as Node) surfaces as an
+// instant "worker exited before reporting a result" instead of a dialog.
+async function assertNativeDirectoryPicker(port) {
+  const baseline = countPickerDialogs();
+  log('   a folder dialog will appear for a few seconds — the test closes it');
+
+  const pick = startRpc(port, 'host.pickDirectory', 60_000);
+  let settled = null;
+  void pick.settled.then((outcome) => (settled = outcome));
+
+  await delay(4_000);
+  if (settled) {
+    fail(`host.pickDirectory answered instead of opening a dialog: ${String(settled.raw).slice(0, 400)}`);
+  }
+  const whileOpen = countPickerDialogs();
+  if (whileOpen !== baseline + 1) {
+    fail(`expected one "${PICKER_DIALOG_TITLE}" window while the pick is pending, saw ${whileOpen} (baseline ${baseline})`);
+  }
+  log('   native folder dialog is open on the host display');
+
+  // Dropping the caller closes the dialog: the driver posts WM_CLOSE until the
+  // worker unwinds. A dialog left behind would strand a modal window on screen.
+  pick.request.destroy();
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await delay(1_000);
+    if (countPickerDialogs() === baseline) {
+      log('   abort closed the dialog and released the worker');
+      return;
+    }
+  }
+  fail('the folder dialog stayed open 10s after the caller aborted');
 }
 
 async function main() {
@@ -335,7 +431,33 @@ async function main() {
   }
   log('   dsh_code_task delegation loop OK (mock answer + session footer present)');
 
-  // [8/8] Cleanup.
+  // [8/9] Native workspace picker. Only win32 drives a spawned dialog worker;
+  // the mac/linux backends shell out to osascript/zenity, which this step does
+  // not cover.
+  if (process.platform === 'win32') {
+    log('>> native directory picker (win32 folder dialog)');
+    // Opening the dialog exercises everything except reading the answer back,
+    // and reading it back is what aborted the worker under Electron. Assert
+    // that separately: driving a real selection needs a human or a UI robot.
+    step(
+      'picker reads native paths safely under Electron',
+      require('electron'),
+      [path.join(rootDir, 'scripts', 'verify-dsh-picker-path-read.cjs'), installed.root],
+      { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }
+    );
+    await assertNativeDirectoryPicker(booted.port);
+  } else {
+    log(`>> directory picker step skipped: no spawned-dialog backend on ${process.platform}`);
+  }
+
+  // The home teardown below only proves anything on the binary that runs it,
+  // and the trap it guards is Electron's: assert it there too, since that is
+  // the Node the app tears homes down with.
+  step('home teardown is link-safe under Electron', require('electron'), [
+    path.join(rootDir, 'scripts', 'verify-dsh-remove-tree.cjs'),
+  ], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+
+  // [9/9] Cleanup.
   await mcpClient.close();
   await mcpServer.stop();
   booted.child.kill('SIGTERM');
@@ -347,9 +469,26 @@ async function main() {
     }, 5_000).unref();
   });
   mock.server.close();
-  fs.rmSync(installBase, { recursive: true, force: true });
-  fs.rmSync(dshHome, { recursive: true, force: true });
-  fs.rmSync(taskCwd, { recursive: true, force: true });
+
+  // dsh fills the home with links into the runtime (`profiles/**` ->
+  // `<runtime>/node_modules/<pkg>`), and on Windows those are junctions that
+  // Electron's Node walks straight through when it removes a tree. Tearing the
+  // home down must leave the runtime byte-for-byte intact — the alternative is
+  // a runtime that still boots with pieces missing, which is exactly how the
+  // directory picker's worker went absent.
+  const runtimeFilesBefore = countFiles(installed.root);
+  removeTree(dshHome);
+  const runtimeFilesAfter = countFiles(installed.root);
+  if (runtimeFilesAfter !== runtimeFilesBefore) {
+    fail(
+      `removing the dsh home deleted ${runtimeFilesBefore - runtimeFilesAfter} runtime files ` +
+        `(${runtimeFilesBefore} -> ${runtimeFilesAfter}); it followed the profile links into ${installed.root}`
+    );
+  }
+  log(`   home teardown left the runtime intact (${runtimeFilesAfter} files)`);
+
+  removeTree(installBase);
+  removeTree(taskCwd);
   log('E2E foundation + delegation flow passed.');
   process.exit(0);
 }

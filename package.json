@@ -74,6 +74,11 @@
         "url": "https://ydhardwarecommon.nosdn.127.net/909dad43b314b850b54cfecf55c8d85f.gz",
         "sha256": "100ed169e9198d5407f2a9245f6ab828dfc1e40a20a773a6468a5ee77d3ebe0e",
         "size": 36237167
+      },
+      "win-x64": {
+        "url": "https://ydhardwarecommon.nosdn.127.net/c3701c796579c3dc2d145593329a9d3c.gz",
+        "sha256": "b36c3b4fec05761259da662e0f2ca1b70c2910b7e7594725cb98e1d8db2bff15",
+        "size": 32858920
       }
     }
   },
