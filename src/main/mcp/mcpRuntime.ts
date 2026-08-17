@@ -7,6 +7,7 @@ import { McpIpcChannel } from '../../shared/mcp/constants';
 import { isComputerUseKitInstalled } from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
 import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
+import { resolveDshCodeMcpServerForConfig } from '../ipcHandlers/dsh/handlers';
 import { getElectronNodeRuntimePath } from '../libs/coworkUtil';
 import {
   type AskUserRequest,
@@ -334,6 +335,16 @@ export class McpRuntime {
     if (computerUseServer) {
       resolved.push(computerUseServer);
       builtInCount++;
+    }
+
+    try {
+      const dshCodeServer = await resolveDshCodeMcpServerForConfig(this.deps.getStore());
+      if (dshCodeServer) {
+        resolved.push(dshCodeServer);
+        builtInCount++;
+      }
+    } catch (err) {
+      console.warn('[MCP] failed to resolve built-in dsh-code server (non-fatal):', err);
     }
 
     console.log(

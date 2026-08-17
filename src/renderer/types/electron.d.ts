@@ -785,6 +785,20 @@ interface IElectronAPI {
   saveApiConfig: (config: CoworkApiConfig) => Promise<{ success: boolean; error?: string }>;
   generateSessionTitle: (userInput: string | null) => Promise<string>;
   getRecentCwds: (limit?: number) => Promise<string[]>;
+  dsh: {
+    getState: () => Promise<{
+      phase: string;
+      port: number | null;
+      version: string | null;
+      errorCode: string | null;
+      sessionStoreShared?: boolean;
+      install?: { stage: string; receivedBytes: number; totalBytes: number } | null;
+    }>;
+    getConfig: () => Promise<{ enabled: boolean }>;
+    setEnabled: (enabled: boolean) => Promise<{ enabled: boolean }>;
+    openWorkbench: () => Promise<{ url: string }>;
+    stop: () => Promise<{ phase: string; port: number | null; version: string | null; errorCode: string | null }>;
+  };
   openclaw: {
     engine: {
       getStatus: () => Promise<{ success: boolean; status?: OpenClawEngineStatus; error?: string }>;
