@@ -579,6 +579,175 @@ describe('quota checks', () => {
   });
 });
 
+describe('server model loading', () => {
+  const serverModel = {
+    modelId: 'qwen3.7-plus',
+    modelName: 'Qwen3.7 Plus',
+    provider: 'LobsterAI',
+    apiFormat: 'openai',
+    accessible: true,
+  };
+
+  const signIn = (ownerAccountKey = 'personal:tester') => {
+    store.dispatch(setLoggedIn({
+      user: { yid: 'tester', nickname: 'Tester', avatarUrl: null },
+      quota: null,
+      ownerAccountKey,
+    }));
+  };
+
+  const planModelIds = (): string[] => store.getState().model.availableModels
+    .filter(model => model.isServerModel)
+    .map(model => model.id);
+
+  test('retries in the background after a transient failure', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const getModels = vi.fn()
+      .mockRejectedValueOnce(new Error('net::ERR_INTERNET_DISCONNECTED'))
+      .mockResolvedValueOnce({ success: true, models: [serverModel] });
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getModels },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    signIn();
+
+    // The first attempt settles immediately so startup never waits on backoff.
+    await expect(authService.refreshServerModels()).resolves.toBe(false);
+    expect(planModelIds()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(getModels).toHaveBeenCalledTimes(2);
+    expect(planModelIds()).toEqual(['qwen3.7-plus']);
+  });
+
+  test('gives up after the configured attempts and warns once', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fromRenderer = vi.fn();
+    const getModels = vi.fn().mockResolvedValue({ success: false });
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getModels },
+        log: { fromRenderer },
+      },
+    });
+    signIn();
+
+    await expect(authService.refreshServerModels()).resolves.toBe(false);
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(getModels).toHaveBeenCalledTimes(4);
+    expect(fromRenderer).toHaveBeenCalledWith(
+      'warn',
+      'AuthService',
+      expect.stringContaining('server model load failed after 4 attempts'),
+    );
+  });
+
+  test('stops retrying once the account changes', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const getModels = vi.fn().mockRejectedValue(new Error('offline'));
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getModels },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    signIn('personal:first');
+
+    await expect(authService.refreshServerModels()).resolves.toBe(false);
+    signIn('personal:second');
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(getModels).toHaveBeenCalledOnce();
+  });
+
+  test('joins a running load instead of starting a second chain', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const getModels = vi.fn().mockRejectedValue(new Error('offline'));
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getModels },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    signIn();
+
+    const [first, second] = await Promise.all([
+      authService.refreshServerModels(),
+      authService.refreshServerModels(),
+    ]);
+
+    expect(first).toBe(false);
+    expect(second).toBe(false);
+    expect(getModels).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(12_000);
+  });
+
+  test('keeps the loaded plan models when a same-account reload fails', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const getModels = vi.fn()
+      .mockResolvedValueOnce({ success: true, models: [serverModel] })
+      .mockRejectedValue(new Error('offline'));
+    const getUser = vi.fn().mockResolvedValue({
+      success: true,
+      user: { yid: 'tester', nickname: 'Tester', avatarUrl: null },
+      quota: null,
+      enterpriseContext: null,
+    });
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getModels, getUser, getProfileSummary: vi.fn().mockResolvedValue({ success: false }) },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    signIn();
+
+    await expect(authService.refreshServerModels()).resolves.toBe(true);
+    expect(planModelIds()).toEqual(['qwen3.7-plus']);
+
+    await authService.refreshAuthState();
+
+    // The reload failed, but the previously loaded list must survive rather
+    // than collapsing the plan model group to empty.
+    expect(planModelIds()).toEqual(['qwen3.7-plus']);
+
+    await vi.advanceTimersByTimeAsync(12_000);
+  });
+
+  test('still loads plan models when the quota refresh fails', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const getModels = vi.fn().mockResolvedValue({ success: true, models: [serverModel] });
+    const getQuota = vi.fn().mockResolvedValue({ success: false });
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getModels, getQuota, getProfileSummary: vi.fn() },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    signIn();
+
+    await expect(authService.checkQuota()).resolves.toEqual({
+      success: false,
+      enterpriseQuotaAvailable: false,
+    });
+
+    expect(getModels).toHaveBeenCalledOnce();
+    expect(planModelIds()).toEqual(['qwen3.7-plus']);
+  });
+});
+
 describe('enterprise quota period boundary refresh', () => {
   const context = (endExclusive: string): EnterpriseAccountContext => ({
     accountMode: 'enterprise',

@@ -573,6 +573,8 @@ const App: React.FC = () => {
     const handleOnline = () => {
       console.log('[Renderer] Network online');
       window.electron.networkStatus.send('online');
+      // A startup load that failed while offline has no other retry trigger.
+      void authService.refreshServerModels();
     };
 
     const handleOffline = () => {
