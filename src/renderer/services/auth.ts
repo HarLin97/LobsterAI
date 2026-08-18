@@ -243,6 +243,20 @@ export function mapAvailableServerModelsToModels(
   });
 }
 
+/**
+ * Backoff between server model load attempts. A single transient failure
+ * (offline at launch, token refresh hiccup, server blip) must not leave the
+ * plan model group empty until the next app launch.
+ */
+const SERVER_MODEL_LOAD_RETRY_DELAYS_MS = [1_000, 3_000, 8_000] as const;
+
+const ServerModelLoadOutcome = {
+  Loaded: 'loaded',
+  Retryable: 'retryable',
+  Abandoned: 'abandoned',
+} as const;
+type ServerModelLoadOutcome = typeof ServerModelLoadOutcome[keyof typeof ServerModelLoadOutcome];
+
 class AuthService {
   private unsubCallback: (() => void) | null = null;
   private unsubLifecycleEvent: (() => void) | null = null;
@@ -254,6 +268,11 @@ class AuthService {
     requestSnapshot: AuthAccountRequestSnapshot;
     promise: Promise<AuthQuotaCheckResult>;
   } | null = null;
+  private pendingServerModelLoad: {
+    requestSnapshot: AuthAccountRequestSnapshot;
+    promise: Promise<boolean>;
+  } | null = null;
+  private serverModelLoadSequence = 0;
   private lastRefreshTime = 0;
   private loginAttemptSequence = 0;
   private enterpriseQuotaBoundaryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -289,8 +308,11 @@ class AuthService {
     }
     if (store.getState().auth.ownerAccountKey !== ownerAccountKey) {
       store.dispatch(clearMediaAccountState());
+      // Only drop the current list when the account actually changed. Clearing
+      // on every refresh turns a failed reload into an empty plan model group,
+      // while setServerModels replaces the list atomically on success.
+      store.dispatch(clearServerModels());
     }
-    store.dispatch(clearServerModels());
     store.dispatch(setLoggedIn({
       user,
       quota: quota ?? null,
@@ -639,7 +661,12 @@ class AuthService {
   ): Promise<AuthQuotaCheckResult> {
     writeAuthRendererLog('debug', 'quota check started');
     try {
-      const refreshed = await this.refreshQuota();
+      // The model list and the quota come from independent endpoints, so a
+      // failing quota refresh must not block a plan model recovery.
+      const [refreshed] = await Promise.all([
+        this.refreshQuota(),
+        this.loadServerModels(),
+      ]);
       if (!refreshed) {
         writeAuthRendererLog('warn', 'quota check could not refresh quota state');
         return {
@@ -647,10 +674,7 @@ class AuthService {
           enterpriseQuotaAvailable: false,
         };
       }
-      await Promise.all([
-        this.fetchProfileSummary(),
-        this.loadServerModels(),
-      ]);
+      await this.fetchProfileSummary();
       if (!isAuthAccountRequestCurrent(requestSnapshot, store.getState().auth)) {
         writeAuthRendererLog('debug', 'discarded quota check result after auth state changed');
         return {
@@ -735,6 +759,8 @@ class AuthService {
 
   destroy() {
     this.pendingQuotaCheck = null;
+    this.pendingServerModelLoad = null;
+    this.serverModelLoadSequence += 1;
     this.clearEnterpriseQuotaBoundaryTimer();
     this.unsubCallback?.();
     this.unsubCallback = null;
@@ -837,31 +863,117 @@ class AuthService {
   }
 
   /**
-   * Load available models from server and dispatch to store.
+   * Re-fetch the plan model list after a recoverable outage (network restored,
+   * manual refresh). Safe to call when logged out: it is a no-op then.
    */
-  private async loadServerModels() {
-    const authStateAtStart = store.getState().auth;
+  async refreshServerModels(): Promise<boolean> {
+    return this.loadServerModels();
+  }
+
+  /**
+   * Load available models from server and dispatch to store.
+   *
+   * Resolves as soon as the first attempt settles so startup never waits on the
+   * backoff, while remaining attempts continue in the background. Without those
+   * retries a single failed attempt leaves the plan model group empty for the
+   * whole app session, because nothing else re-runs this until the next launch.
+   */
+  private loadServerModels(): Promise<boolean> {
+    const requestSnapshot = store.getState().auth;
     if (
-      !authStateAtStart.isLoggedIn
-      || !authStateAtStart.ownerAccountKey
+      !requestSnapshot.isLoggedIn
+      || !requestSnapshot.ownerAccountKey
     ) {
-      return;
+      return Promise.resolve(false);
     }
-    try {
-      const modelsResult = await window.electron.auth.getModels();
-      if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
-        writeAuthRendererLog('debug', 'discarded stale server model response after auth state changed');
+    if (
+      this.pendingServerModelLoad
+      && isAuthAccountRequestCurrent(
+        this.pendingServerModelLoad.requestSnapshot,
+        requestSnapshot,
+      )
+    ) {
+      writeAuthRendererLog('debug', 'joining the in-flight server model load');
+      return this.pendingServerModelLoad.promise;
+    }
+
+    let settleFirstAttempt!: (loaded: boolean) => void;
+    const firstAttempt = new Promise<boolean>(resolve => {
+      settleFirstAttempt = resolve;
+    });
+    this.pendingServerModelLoad = { requestSnapshot, promise: firstAttempt };
+    void this.runServerModelLoad(requestSnapshot, settleFirstAttempt)
+      .catch((error) => {
+        writeAuthRendererLog('warn', 'server model load chain failed unexpectedly', error);
+        settleFirstAttempt(false);
+      })
+      .finally(() => {
+        if (this.pendingServerModelLoad?.promise === firstAttempt) {
+          this.pendingServerModelLoad = null;
+        }
+      });
+    return firstAttempt;
+  }
+
+  private async runServerModelLoad(
+    requestSnapshot: AuthAccountRequestSnapshot,
+    settleFirstAttempt: (loaded: boolean) => void,
+  ): Promise<void> {
+    const loadSequence = this.serverModelLoadSequence;
+    const totalAttempts = SERVER_MODEL_LOAD_RETRY_DELAYS_MS.length + 1;
+    for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+      const outcome = await this.requestServerModels(requestSnapshot);
+      if (attempt === 1) {
+        settleFirstAttempt(outcome === ServerModelLoadOutcome.Loaded);
+      }
+      if (outcome !== ServerModelLoadOutcome.Retryable) return;
+      if (attempt === totalAttempts) break;
+
+      const delayMs = SERVER_MODEL_LOAD_RETRY_DELAYS_MS[attempt - 1];
+      writeAuthRendererLog(
+        'debug',
+        `retrying the server model load in ${delayMs}ms (attempt ${attempt + 1}/${totalAttempts})`,
+      );
+      await new Promise<void>(resolve => { setTimeout(resolve, delayMs); });
+      if (this.serverModelLoadSequence !== loadSequence) {
+        writeAuthRendererLog('debug', 'abandoned the server model retry after the service restarted');
         return;
       }
-      if (modelsResult.success && modelsResult.models) {
+      if (!isAuthAccountRequestCurrent(requestSnapshot, store.getState().auth)) {
+        writeAuthRendererLog('debug', 'abandoned the server model retry after auth state changed');
+        return;
+      }
+    }
+    writeAuthRendererLog(
+      'warn',
+      `server model load failed after ${totalAttempts} attempts; `
+      + 'plan models stay unavailable until the next refresh',
+    );
+  }
+
+  private async requestServerModels(
+    requestSnapshot: AuthAccountRequestSnapshot,
+  ): Promise<ServerModelLoadOutcome> {
+    try {
+      const modelsResult = await window.electron.auth.getModels();
+      if (!isAuthAccountRequestCurrent(requestSnapshot, store.getState().auth)) {
+        writeAuthRendererLog('debug', 'discarded stale server model response after auth state changed');
+        return ServerModelLoadOutcome.Abandoned;
+      }
+      if (modelsResult.success && Array.isArray(modelsResult.models)) {
         const serverModels = mapAvailableServerModelsToModels(modelsResult.models);
         store.dispatch(setServerModels(serverModels));
-        console.debug(`[Auth] loaded ${serverModels.length} server model(s) into renderer state`);
-      } else {
-        console.debug('[Auth] server model load returned no models');
+        writeAuthRendererLog(
+          'debug',
+          `loaded ${serverModels.length} server model(s) into renderer state`,
+        );
+        return ServerModelLoadOutcome.Loaded;
       }
+      writeAuthRendererLog('debug', 'server model load returned no models');
+      return ServerModelLoadOutcome.Retryable;
     } catch (error) {
-      console.warn('[Auth] failed to load server models:', error);
+      writeAuthRendererLog('warn', 'failed to load server models', error);
+      return ServerModelLoadOutcome.Retryable;
     }
   }
 

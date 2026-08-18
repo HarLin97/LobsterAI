@@ -648,6 +648,13 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
     if (upgradeState?.isActive || !skill.url) return;
     const installedSkill = skills.find(item => item.id === skill.id);
     setSkillActionError('');
+    console.log('[SkillsManager] upgrade started', {
+      skillId: skill.id,
+      skillName: skill.name,
+      installedVersion: installedSkill?.version ?? null,
+      targetVersion: skill.version ?? null,
+      activeTab,
+    });
     reportSkillAction('upgrade_submit', {
       source: 'skills_manager',
       activeTab,
@@ -665,6 +672,14 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
       if (!result.success) {
         setSkillActionError(result.error || i18nService.t('skillUpgradeFailed'));
         setUpgradeState(null);
+        console.warn('[SkillsManager] upgrade failed', {
+          skillId: skill.id,
+          skillName: skill.name,
+          installedVersion: installedSkill?.version ?? null,
+          targetVersion: skill.version ?? null,
+          activeTab,
+          error: result.error ?? null,
+        });
         reportSkillAction('upgrade_failed', {
           source: 'skills_manager',
           activeTab,
@@ -676,6 +691,14 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
       }
       if (result.auditReport && result.pendingInstallId) {
         setUpgradeState(null);
+        console.log('[SkillsManager] upgrade requires security confirmation', {
+          skillId: skill.id,
+          skillName: skill.name,
+          installedVersion: installedSkill?.version ?? null,
+          targetVersion: skill.version ?? null,
+          activeTab,
+          riskLevel: result.auditReport.riskLevel,
+        });
         setSecurityReport(result.auditReport);
         setPendingInstallId(result.pendingInstallId);
         setPendingImportSource(null);
@@ -690,8 +713,23 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
         result: 'success',
         ...getMarketplaceSkillAnalyticsParams(skill, installedSkill),
       });
-    } catch {
+      console.log('[SkillsManager] upgrade finished', {
+        skillId: skill.id,
+        skillName: skill.name,
+        installedVersion: installedSkill?.version ?? null,
+        targetVersion: skill.version ?? null,
+        activeTab,
+        result: 'success',
+      });
+    } catch (error) {
       setSkillActionError(i18nService.t('skillUpgradeFailed'));
+      console.error('[SkillsManager] upgrade threw', {
+        skillId: skill.id,
+        skillName: skill.name,
+        installedVersion: installedSkill?.version ?? null,
+        targetVersion: skill.version ?? null,
+        activeTab,
+      }, error);
       reportSkillAction('upgrade_failed', {
         source: 'skills_manager',
         activeTab,
@@ -715,6 +753,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
     });
 
     const toUpdate = [...updatableSkills];
+    console.log('[SkillsManager] upgrade all started', {
+      total: toUpdate.length,
+      activeTab,
+      skillIds: toUpdate.map(skill => skill.id),
+    });
     setUpgradeState({
       isActive: true,
       total: toUpdate.length,
@@ -733,15 +776,40 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
         currentSkillName: skill.name,
         currentSkillVersion: skill.version,
       });
+      console.log('[SkillsManager] upgrade all item started', {
+        skillId: skill.id,
+        skillName: skill.name,
+        targetVersion: skill.version ?? null,
+        index: i + 1,
+        total: toUpdate.length,
+        activeTab,
+      });
 
       try {
         const result = await skillService.upgradeSkill(skill.id, skill.url);
         if (!result.success) {
-          console.warn('[SkillsManager] upgrade failed for', skill.id, result.error);
+          console.warn('[SkillsManager] upgrade all item failed', {
+            skillId: skill.id,
+            skillName: skill.name,
+            targetVersion: skill.version ?? null,
+            index: i + 1,
+            total: toUpdate.length,
+            activeTab,
+            error: result.error ?? null,
+          });
           continue;
         }
         if (result.auditReport && result.pendingInstallId) {
           setUpgradeState(null);
+          console.log('[SkillsManager] upgrade all paused for security confirmation', {
+            skillId: skill.id,
+            skillName: skill.name,
+            targetVersion: skill.version ?? null,
+            index: i + 1,
+            total: toUpdate.length,
+            activeTab,
+            riskLevel: result.auditReport.riskLevel,
+          });
           setSecurityReport(result.auditReport);
           setPendingInstallId(result.pendingInstallId);
           return;
@@ -750,11 +818,23 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
           dispatch(setSkills(result.skills));
         }
       } catch (error) {
-        console.warn('[SkillsManager] upgrade threw for', skill.id, error);
+        console.error('[SkillsManager] upgrade all item threw', {
+          skillId: skill.id,
+          skillName: skill.name,
+          targetVersion: skill.version ?? null,
+          index: i + 1,
+          total: toUpdate.length,
+          activeTab,
+        }, error);
       }
     }
 
     setUpgradeState(null);
+    console.log('[SkillsManager] upgrade all finished', {
+      total: toUpdate.length,
+      activeTab,
+      result: upgradeCancelledRef.current ? 'cancel' : 'success',
+    });
     reportSkillAction('upgrade_all_finished', {
       source: 'skills_manager',
       activeTab,
@@ -1976,7 +2056,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
         />
       )}
 
-      {upgradeState?.isActive && (
+      {upgradeState?.isActive && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="w-full max-w-sm mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6">
             <div className="text-center">
@@ -2002,7 +2082,14 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               {upgradeState.total > 1 && (
                 <button
                   type="button"
-                  onClick={() => { upgradeCancelledRef.current = true; }}
+                  onClick={() => {
+                    console.log('[SkillsManager] upgrade cancellation requested', {
+                      current: upgradeState.current,
+                      total: upgradeState.total,
+                      currentSkillName: upgradeState.currentSkillName,
+                    });
+                    upgradeCancelledRef.current = true;
+                  }}
                   className="px-4 py-1.5 text-xs rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
                 >
                   {i18nService.t('skillUpgradeCancel')}
@@ -2011,7 +2098,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* OpenClaw Skill Sync - Loading Overlay */}
       {isSyncingFromOpenClaw && (

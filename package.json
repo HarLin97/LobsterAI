@@ -66,6 +66,27 @@
       }
     ]
   },
+  "dsh": {
+    "version": "0.1.0-rc.7",
+    "npm": "@deepseek-ai/dsh",
+    "runtimes": {
+      "mac-arm64": {
+        "url": "https://ydhardwarecommon.nosdn.127.net/f98e65727ad1b86b8ae33539237d6daf.gz",
+        "sha256": "15c7aa70d096b29851be5a94acbbdfed8f1bfff9b65056deec52d54b637b446e",
+        "size": 35985994
+      },
+      "mac-x64": {
+        "url": "https://ydhardwarecommon.nosdn.127.net/162f955ac7e01d72440737dc0dd0c35f.gz",
+        "sha256": "9b1845d1dff57e4aa15d3b9b442ee53eeac3561fe609bd48dee23a4988c484e1",
+        "size": 33261196
+      },
+      "win-x64": {
+        "url": "https://ydhardwarecommon.nosdn.127.net/6ec5e09f5b3fcfb2f995f27a2e136b2f.gz",
+        "sha256": "02a99234c2749d132d4d8c4fa47dff87ebb175c65cceef1609247b059ce60852",
+        "size": 32134168
+      }
+    }
+  },
   "main": "dist-electron/main.js",
   "engines": {
     "node": ">=24.15.0 <25"
@@ -124,6 +145,16 @@
     "openclaw:runtime:win-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs win-arm64 && node scripts/sync-openclaw-runtime-current.cjs win-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
     "openclaw:runtime:linux-x64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs linux-x64 && node scripts/sync-openclaw-runtime-current.cjs linux-x64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
     "openclaw:runtime:linux-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs linux-arm64 && node scripts/sync-openclaw-runtime-current.cjs linux-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
+    "dsh:runtime:host": "node scripts/dsh-runtime-host.cjs",
+    "dsh:runtime:mac-arm64": "node scripts/build-dsh-runtime.cjs mac-arm64 && node scripts/sync-dsh-runtime-current.cjs mac-arm64",
+    "dsh:runtime:mac-x64": "node scripts/build-dsh-runtime.cjs mac-x64 && node scripts/sync-dsh-runtime-current.cjs mac-x64",
+    "dsh:runtime:win-x64": "node scripts/build-dsh-runtime.cjs win-x64 && node scripts/sync-dsh-runtime-current.cjs win-x64",
+    "dsh:runtime:linux-x64": "node scripts/build-dsh-runtime.cjs linux-x64 && node scripts/sync-dsh-runtime-current.cjs linux-x64",
+    "dsh:runtime:verify": "node scripts/verify-dsh-runtime.cjs",
+    "dsh:runtime:pack": "node scripts/pack-dsh-runtime.cjs",
+    "dsh:runtime:url": "node scripts/set-dsh-runtime-url.cjs",
+    "dsh:runtime:verify-urls": "node scripts/verify-dsh-runtime-urls.cjs",
+    "dsh:e2e": "node scripts/e2e-dsh-foundation.cjs",
     "regenerate:icon": "bash scripts/regenerate-mac-icon.sh",
     "fix:mac-icon": "bash scripts/fix-mac-icon-display.sh"
   },

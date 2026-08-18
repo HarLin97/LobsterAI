@@ -1270,6 +1270,19 @@ export const getTurnAnswerStartIndex = (chunks: ConsolidatedRenderChunk[]): numb
   return index;
 };
 
+/**
+ * Whether a non-streaming turn's process may fold behind the duration line.
+ * Folding requires both a process to hide and a visible trailing answer —
+ * a turn that still ends with work items (e.g. waiting for subagents to
+ * hand control back, or the gap before the parent run resumes afterwards)
+ * has produced no result yet, and folding it would leave only an empty
+ * duration line that reads as a failure.
+ */
+export const canFoldTurnProcess = (
+  chunks: ConsolidatedRenderChunk[],
+  answerStartIndex: number,
+): boolean => answerStartIndex > 0 && answerStartIndex < chunks.length;
+
 export type ActivityGroupSummary = {
   stepCount: number;
 };

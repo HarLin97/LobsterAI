@@ -16,6 +16,10 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    // DeepSeek Harness (experimental)
+    dshWorkbenchTitle: 'DeepSeek Harness 工作台（实验）',
+    dshPlanProviderName: '套餐',
+
     // Tray menu
     trayShowWindow: '打开 LobsterAI',
     trayNewTask: '新建任务',
@@ -31,6 +35,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     permissionNotificationBodyGeneric: 'Agent 请求执行操作，等待你的确认',
     questionNotificationTitle: '等待你的回答',
     questionNotificationBody: '需要你回答问题后才能继续',
+    contextMenuCut: '剪切',
+    contextMenuCopy: '复制',
+    contextMenuPaste: '粘贴',
+    contextMenuSelectAll: '全选',
 
     // Session titles (created by ChannelSessionSync)
     coworkDefaultSessionTitle: '新对话',
@@ -343,6 +351,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    // DeepSeek Harness (experimental)
+    dshWorkbenchTitle: 'DeepSeek Harness Workbench (Experimental)',
+    dshPlanProviderName: 'Plan',
+
     // Tray menu
     trayShowWindow: 'Open LobsterAI',
     trayNewTask: 'New Task',
@@ -358,6 +370,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     permissionNotificationBodyGeneric: 'The agent requests to run an action and is waiting for your confirmation.',
     questionNotificationTitle: 'Waiting for Your Answer',
     questionNotificationBody: 'Waiting for your answer to continue.',
+    contextMenuCut: 'Cut',
+    contextMenuCopy: 'Copy',
+    contextMenuPaste: 'Paste',
+    contextMenuSelectAll: 'Select All',
 
     // Session titles
     coworkDefaultSessionTitle: 'New Chat',
