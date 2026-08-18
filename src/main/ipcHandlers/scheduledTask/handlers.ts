@@ -300,6 +300,17 @@ function applyLocalAnnounceDeliveryNormalization(
   return { platform, rawTo, parsedConversation };
 }
 
+function describeRunFilter(
+  filter?: import('../../../scheduledTask/types').RunFilter,
+): Record<string, string | undefined> | null {
+  if (!filter) return null;
+  return {
+    startDate: filter.startDate,
+    endDate: filter.endDate,
+    status: filter.status,
+  };
+}
+
 async function restoreAnnounceDeliveryHintsFromGateway(
   normalizedInput: Record<string, any>,
   context: AnnounceNormalizationContext,
@@ -675,9 +686,28 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
       filter?: import('../../../scheduledTask/types').RunFilter,
     ) => {
       try {
+        console.debug('[ScheduledTask] list job run history request:', JSON.stringify({
+          taskId,
+          limit,
+          offset,
+          filter: describeRunFilter(filter),
+        }));
         const runs = await getCronJobService().listRuns(taskId, limit, offset, filter);
+        console.debug('[ScheduledTask] list job run history result:', JSON.stringify({
+          taskId,
+          limit,
+          offset,
+          returnedCount: runs.length,
+        }));
         return { success: true, runs };
       } catch (error) {
+        console.warn('[ScheduledTask] list job run history failed:', JSON.stringify({
+          taskId,
+          limit,
+          offset,
+          filter: describeRunFilter(filter),
+          error: error instanceof Error ? error.message : String(error),
+        }));
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to list runs',
@@ -707,12 +737,29 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
       filter?: import('../../../scheduledTask/types').RunFilter,
     ) => {
       try {
+        console.debug('[ScheduledTask] list all run history request:', JSON.stringify({
+          limit,
+          offset,
+          filter: describeRunFilter(filter),
+        }));
         if (!(await ensureScheduledTaskGatewayClient(getOpenClawRuntimeAdapter))) {
+          console.debug('[ScheduledTask] list all run history deferred; gateway is not ready.');
           return { success: true, ready: false, runs: [] };
         }
         const runs = await getCronJobService().listAllRuns(limit, offset, filter);
+        console.debug('[ScheduledTask] list all run history result:', JSON.stringify({
+          limit,
+          offset,
+          returnedCount: runs.length,
+        }));
         return { success: true, ready: true, runs };
       } catch (error) {
+        console.warn('[ScheduledTask] list all run history failed:', JSON.stringify({
+          limit,
+          offset,
+          filter: describeRunFilter(filter),
+          error: error instanceof Error ? error.message : String(error),
+        }));
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to list all runs',
