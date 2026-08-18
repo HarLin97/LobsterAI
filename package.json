@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.8.18",
+  "version": "2026.8.19",
   "openclaw": {
     "version": "v2026.6.1",
     "repo": "https://github.com/openclaw/openclaw.git",
@@ -81,9 +81,9 @@
         "size": 33261196
       },
       "win-x64": {
-        "url": "https://ydhardwarecommon.nosdn.127.net/6ec5e09f5b3fcfb2f995f27a2e136b2f.gz",
-        "sha256": "02a99234c2749d132d4d8c4fa47dff87ebb175c65cceef1609247b059ce60852",
-        "size": 32134168
+        "url": "https://ydhardwarecommon.nosdn.127.net/f4f729fb3a1ef245d54dc4bc20d225f7.gz",
+        "sha256": "19fa2a2b1dcbf63aa66864fcbef78481a0ab878d98e7b12a29b613c426755155",
+        "size": 32136332
       }
     }
   },
