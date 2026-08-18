@@ -126,6 +126,41 @@ interface GatewayRunLogEntry {
   deliveryError?: string;
 }
 
+const CRON_RUNS_MIN_PAGE_SIZE = 50;
+const CRON_RUNS_MAX_PAGE_SIZE = 200;
+
+function normalizeRunPageNumber(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.floor(value));
+}
+
+function getGatewayRunPageSize(visibleLimit: number): number {
+  if (visibleLimit <= 0) return 0;
+  return Math.min(
+    Math.max(visibleLimit, CRON_RUNS_MIN_PAGE_SIZE),
+    CRON_RUNS_MAX_PAGE_SIZE,
+  );
+}
+
+function getGatewayRunRequestLimit(pageSize: number, remainingVisible: number): number {
+  return Math.min(
+    pageSize,
+    Math.max(remainingVisible, CRON_RUNS_MIN_PAGE_SIZE),
+  );
+}
+
+function logGatewayRunPageClamp(
+  scope: 'job' | 'all',
+  visibleLimit: number,
+  visibleOffset: number,
+  pageSize: number,
+): void {
+  if (visibleLimit <= CRON_RUNS_MAX_PAGE_SIZE) return;
+  console.debug(
+    `[CronJobService] paginating ${scope} run history within gateway limit: requestedLimit=${visibleLimit}, offset=${visibleOffset}, gatewayPageSize=${pageSize}.`,
+  );
+}
+
 interface CronJobServiceDeps {
   getGatewayClient: () => GatewayClientLike | null;
   ensureGatewayReady: () => Promise<void>;
@@ -713,20 +748,22 @@ export class CronJobService {
     if (job && isInternalScheduledTaskJob(job)) return [];
 
     const client = await this.client();
-    const visibleLimit = Math.max(0, limit);
-    const visibleOffset = Math.max(0, offset);
+    const visibleLimit = normalizeRunPageNumber(limit);
+    const visibleOffset = normalizeRunPageNumber(offset);
     if (visibleLimit === 0) return [];
 
     const visibleRuns: ScheduledTaskRun[] = [];
     let skippedVisible = 0;
     let rawOffset = 0;
-    const pageSize = Math.max(visibleLimit, 50);
+    const pageSize = getGatewayRunPageSize(visibleLimit);
+    logGatewayRunPageClamp('job', visibleLimit, visibleOffset, pageSize);
 
     while (visibleRuns.length < visibleLimit) {
+      const requestLimit = getGatewayRunRequestLimit(pageSize, visibleLimit - visibleRuns.length);
       const result = await client.request<{ entries?: GatewayRunLogEntry[] }>('cron.runs', {
         scope: 'job',
         id: jobId,
-        limit: pageSize,
+        limit: requestLimit,
         offset: rawOffset,
         sortDir: 'desc',
         ...(filter?.startDate && { startMs: new Date(filter.startDate + 'T00:00:00').getTime() }),
@@ -747,7 +784,7 @@ export class CronJobService {
       }
 
       rawOffset += entries.length;
-      if (entries.length < pageSize) break;
+      if (entries.length < requestLimit) break;
     }
 
     return visibleRuns;
@@ -772,8 +809,8 @@ export class CronJobService {
     filter?: RunFilter,
   ): Promise<ScheduledTaskRunWithName[]> {
     const client = await this.client();
-    const visibleLimit = Math.max(0, limit);
-    const visibleOffset = Math.max(0, offset);
+    const visibleLimit = normalizeRunPageNumber(limit);
+    const visibleOffset = normalizeRunPageNumber(offset);
     if (visibleLimit === 0) return [];
 
     let jobs: GatewayJob[] = [];
@@ -790,12 +827,14 @@ export class CronJobService {
     const visibleRuns: Array<{ entry: GatewayRunLogEntry; run: ScheduledTaskRun }> = [];
     let skippedVisible = 0;
     let rawOffset = 0;
-    const pageSize = Math.max(visibleLimit, 50);
+    const pageSize = getGatewayRunPageSize(visibleLimit);
+    logGatewayRunPageClamp('all', visibleLimit, visibleOffset, pageSize);
 
     while (visibleRuns.length < visibleLimit) {
+      const requestLimit = getGatewayRunRequestLimit(pageSize, visibleLimit - visibleRuns.length);
       const result = await client.request<{ entries?: GatewayRunLogEntry[] }>('cron.runs', {
         scope: 'all',
-        limit: pageSize,
+        limit: requestLimit,
         offset: rawOffset,
         sortDir: 'desc',
         ...(filter?.startDate && { startMs: new Date(filter.startDate + 'T00:00:00').getTime() }),
@@ -817,7 +856,7 @@ export class CronJobService {
       }
 
       rawOffset += entries.length;
-      if (entries.length < pageSize) break;
+      if (entries.length < requestLimit) break;
     }
 
     return visibleRuns.map(({ entry, run }) => ({

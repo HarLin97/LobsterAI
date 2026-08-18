@@ -269,6 +269,76 @@ describe('CronJobService run history filtering', () => {
       true,
     );
   });
+
+  test('paginates large global run requests within the gateway limit', async () => {
+    const job = makeGatewayJob({ id: 'job-1', name: 'User task' });
+    const entries = Array.from({ length: 450 }, (_, index) => ({
+      ts: 1_000 - index,
+      jobId: 'job-1',
+      status: GatewayStatus.Ok,
+      runAtMs: 1_000 - index,
+    }));
+    const runRequests: unknown[] = [];
+    const service = new CronJobService({
+      getGatewayClient: () => ({
+        request: async <T>(method: string, params?: unknown) => {
+          if (method === 'cron.list') {
+            return { jobs: [job] } as T;
+          }
+          if (method === 'cron.runs') {
+            runRequests.push(params);
+            const runParams = params as { offset?: number; limit?: number } | undefined;
+            const start = runParams?.offset ?? 0;
+            const end = start + (runParams?.limit ?? entries.length);
+            return { entries: entries.slice(start, end) } as T;
+          }
+          return {} as T;
+        },
+      }),
+      ensureGatewayReady: async () => {},
+    });
+
+    const runs = await service.listAllRuns(450, 0);
+
+    expect(runs).toHaveLength(450);
+    expect(runRequests.map(params => (params as { limit?: number }).limit)).toEqual([200, 200, 50]);
+    expect(runRequests.every(params => (params as { limit?: number }).limit! <= 200)).toBe(true);
+  });
+
+  test('paginates large job run requests within the gateway limit', async () => {
+    const job = makeGatewayJob({ id: 'job-1', name: 'User task' });
+    const entries = Array.from({ length: 450 }, (_, index) => ({
+      ts: 1_000 - index,
+      jobId: 'job-1',
+      status: GatewayStatus.Ok,
+      runAtMs: 1_000 - index,
+    }));
+    const runRequests: unknown[] = [];
+    const service = new CronJobService({
+      getGatewayClient: () => ({
+        request: async <T>(method: string, params?: unknown) => {
+          if (method === 'cron.list') {
+            return { jobs: [job] } as T;
+          }
+          if (method === 'cron.runs') {
+            runRequests.push(params);
+            const runParams = params as { offset?: number; limit?: number } | undefined;
+            const start = runParams?.offset ?? 0;
+            const end = start + (runParams?.limit ?? entries.length);
+            return { entries: entries.slice(start, end) } as T;
+          }
+          return {} as T;
+        },
+      }),
+      ensureGatewayReady: async () => {},
+    });
+
+    const runs = await service.listRuns('job-1', 450, 0);
+
+    expect(runs).toHaveLength(450);
+    expect(runRequests.map(params => (params as { limit?: number }).limit)).toEqual([200, 200, 50]);
+    expect(runRequests.every(params => (params as { limit?: number }).limit! <= 200)).toBe(true);
+  });
 });
 
 describe('CronJobService delivery cache', () => {
