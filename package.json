@@ -76,9 +76,9 @@
         "size": 32011089
       },
       "mac-x64": {
-        "url": "https://ydhardwarecommon.nosdn.127.net/162f955ac7e01d72440737dc0dd0c35f.gz",
-        "sha256": "9b1845d1dff57e4aa15d3b9b442ee53eeac3561fe609bd48dee23a4988c484e1",
-        "size": 33261196
+        "url": "https://ydschool-video.nosdn.127.net/1787307267457dsh-runtime-0.1.1-rc.1-mac-x64.tar.gz",
+        "sha256": "89869b9e323bb14e2c31c533e93d7220b79631778651ba674e2fd53999e18874",
+        "size": 29270091
       },
       "win-x64": {
         "url": "https://ydhardwarecommon.nosdn.127.net/f4f729fb3a1ef245d54dc4bc20d225f7.gz",
