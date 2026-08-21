@@ -1083,6 +1083,43 @@ export const LogReporterActionPrefix = {
   - 不上传 IM 消息正文、prompt hash、会话 ID、session key、run ID、群 ID、用户 ID、账号 ID、实例 ID、Agent 名称、附件内容、文件名、本地路径或错误详情。
   - 只上传平台、会话状态和 Agent 路由等结构化摘要。
 
+#### 2.4.42 `lobsterai_experimental_setting_changed`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 实验功能」切换 DeepSeek Harness（dsh）开关，主进程 `dsh:setEnabled` 写入配置成功后发送。写入失败不发送；新值与旧值相同（例如重复点击）不发送。
+- 事件含义：统计主动试用实验功能的用户规模。开启事件的去重安装数即"主动试用过 dsh 的人数"，关闭事件用于观察试用后的放弃比例。
+- 业务参数：
+  - `settingKey`：string，变更的实验功能设置项 key。当前取值为 `dshEnabled`。
+  - `settingValue`：boolean，变更后的值。
+  - `previousValue`：boolean，变更前的值。
+  - `source`：string，触发来源。当前固定为 `settings_experimental`。
+- 发送与容错口径：
+  - 事件由主进程直接发送，与 `lobsterai_im_prompt_submit` 共用同一 `MainLogReporter`、使用统计开关和通用参数。
+  - 上报调用包在 try/catch 中，任何上报异常只写警告日志，不影响开关写入、运行时停止或 OpenClaw 配置同步。
+- 隐私边界：不上传 dsh home 路径、runtime 路径、provider 配置或模型信息。
+
+#### 2.4.43 `lobsterai_dsh_action`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 实验功能」点击「打开工作台」，主进程 `dsh:openWorkbench` 处理完成后发送一次。引擎就绪并成功打开或聚焦工作台窗口时发送 `success`；功能未开启、runtime 安装失败、引擎启动失败或窗口打开异常时发送 `failed`。首次打开包含 runtime 下载和解包，仍只在最终结果产生后发送一次，下载进度不单独上报。
+- 事件含义：统计 dsh 工作台的实际使用情况。`result=success` 的当日去重安装数除以当日任意事件的去重安装数即工作台日渗透率；该口径只统计用户主动打开工作台，不统计主 Agent 通过 `dsh_code_task` 的自动委托。
+- 业务参数：
+  - `actionType`：string，动作类型。当前取值为 `open_workbench`。
+  - `source`：string，触发来源。当前固定为 `settings_experimental`。
+  - `phaseBefore`：string，点击时的引擎状态。当前取值包括 `not_installed`、`stopped`、`installing`、`starting`、`ready`、`failed`，用于区分首次安装打开和热打开。
+  - `result`：string，动作结果。当前取值为 `success` 或 `failed`。
+  - `errorCode`：string，失败分类；仅失败时发送。取值来自引擎状态机的 `DshEngineErrorCode`（`runtime_missing`、`runtime_invalid`、`install_failed`、`spawn_failed`、`ready_timeout`、`crashed_early`、`plugin_load_failed`），另有 `not_enabled`（功能未开启时被调用）和 `unknown`（引擎状态未携带本次失败的分类）。
+  - `errorDetail`：string，脱敏后的错误摘要；仅失败且存在错误对象时发送。用于区分 `install_failed` 背后的具体原因（校验和不匹配、HTTP 状态码、tar 不可用、解包不完整等）。
+- 错误摘要脱敏规则（`sanitizeDshErrorDetail`）：
+  - 当前用户 home 目录替换为 `~`，同时识别正斜杠和反斜杠写法，保留其后的相对路径便于定位。
+  - 其他绝对路径（两段以上的 POSIX 路径、带盘符的 Windows 路径）替换为 `<path>`。
+  - URL 去掉 query 和 fragment，只保留 origin 和 path。
+  - 连续空白折叠为单个空格，超过 200 字符截断并以 `…` 结尾。
+  - 引擎启动失败时主进程只把子进程日志尾巴写入本地日志，`errorDetail` 不包含子进程输出。
+- 隐私边界：
+  - 该事件是本文"不上传错误详情"约定的明确例外：只上传经上述规则脱敏和截断后的错误摘要，不上传完整文件路径、完整 URL、子进程日志、provider 配置、API Key 或工作台 URL。
+  - 不上传工作台内的会话内容、prompt 或文件内容。
+
 ### 2.5 请求流程
 
 ```text
