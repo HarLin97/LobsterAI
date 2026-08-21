@@ -40,10 +40,12 @@ export const LogReporterAction = {
   ConversationMessageAction: 'lobsterai_conversation_message_action',
   ConversationNavigationAction: 'lobsterai_conversation_navigation_action',
   DreamingSettingChanged: 'lobsterai_dreaming_setting_changed',
+  DshAction: 'lobsterai_dsh_action',
   EmailSkillConnectionTested: 'lobsterai_email_skill_connection_tested',
   EmailSkillSettingsSaved: 'lobsterai_email_skill_settings_saved',
   ExpertKitAction: 'lobsterai_expert_kit_action',
   ExpertKitSelected: 'lobsterai_expert_kit_selected',
+  ExperimentalSettingChanged: 'lobsterai_experimental_setting_changed',
   GeneralSettingChanged: 'lobsterai_general_setting_changed',
   ImConnectionTested: 'lobsterai_im_connection_tested',
   ImGatewayToggled: 'lobsterai_im_gateway_toggled',
@@ -78,6 +80,7 @@ export const LogReporterEntry = {
 
 export const LogReporterSource = {
   OpenClawChannel: 'openclaw_channel',
+  SettingsExperimental: 'settings_experimental',
 } as const;
 
 export const PromptAnalyticsSurface = {

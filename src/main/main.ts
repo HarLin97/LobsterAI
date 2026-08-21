@@ -8380,6 +8380,9 @@ if (!gotTheLock) {
     },
     getWorkbenchTitle: () => t('dshWorkbenchTitle'),
     syncOpenClawConfig,
+    reportEvent: params => {
+      void getMainLogReporter().report(params);
+    },
   });
 
 
