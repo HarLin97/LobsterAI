@@ -1086,7 +1086,7 @@ export const LogReporterActionPrefix = {
 #### 2.4.42 `lobsterai_experimental_setting_changed`
 
 - 状态：已实现。
-- 触发时机：用户在「设置 -> 实验功能」切换 DeepSeek Harness（dsh）开关，主进程 `dsh:setEnabled` 写入配置成功后发送。写入失败不发送；新值与旧值相同（例如重复点击）不发送。
+- 触发时机：用户在「设置 -> 实验功能」切换 DeepSeek Harness（dsh）开关，Renderer 等待 `dsh:setEnabled` IPC 成功返回后发送。IPC 失败不发送；新值与旧值相同（例如重复点击）不发送。
 - 事件含义：统计主动试用实验功能的用户规模。开启事件的去重安装数即"主动试用过 dsh 的人数"，关闭事件用于观察试用后的放弃比例。
 - 业务参数：
   - `settingKey`：string，变更的实验功能设置项 key。当前取值为 `dshEnabled`。
@@ -1094,28 +1094,33 @@ export const LogReporterActionPrefix = {
   - `previousValue`：boolean，变更前的值。
   - `source`：string，触发来源。当前固定为 `settings_experimental`。
 - 发送与容错口径：
-  - 事件由主进程直接发送，与 `lobsterai_im_prompt_submit` 共用同一 `MainLogReporter`、使用统计开关和通用参数。
-  - 上报调用包在 try/catch 中，任何上报异常只写警告日志，不影响开关写入、运行时停止或 OpenClaw 配置同步。
+  - 事件由 Renderer 通过 `reportYdAnalyzer()` 发送，与其他设置页事件走同一条 `api:fetch` 链路、使用统计开关和通用参数；本地主日志中只有 `[Renderer][LogReporter] sending/sent event …` 的 debug 行可用于核对。
+  - 采用 fire-and-forget，上报失败只写警告日志，不影响开关写入、运行时停止或 OpenClaw 配置同步。
+  - 实现位于 `src/renderer/services/dshAnalytics.ts`，由 `DshExperimentalSettings` 调用。
 - 隐私边界：不上传 dsh home 路径、runtime 路径、provider 配置或模型信息。
 
 #### 2.4.43 `lobsterai_dsh_action`
 
 - 状态：已实现。
-- 触发时机：用户在「设置 -> 实验功能」点击「打开工作台」，主进程 `dsh:openWorkbench` 处理完成后发送一次。引擎就绪并成功打开或聚焦工作台窗口时发送 `success`；功能未开启、runtime 安装失败、引擎启动失败或窗口打开异常时发送 `failed`。首次打开包含 runtime 下载和解包，仍只在最终结果产生后发送一次，下载进度不单独上报。
+- 触发时机：用户在「设置 -> 实验功能」点击「打开工作台」，Renderer 等待 `dsh:openWorkbench` IPC 返回后发送一次。引擎就绪并成功打开或聚焦工作台窗口时发送 `success`；功能未开启、runtime 安装失败、引擎启动失败或窗口打开异常时发送 `failed`。首次打开包含 runtime 下载和解包，仍只在最终结果产生后发送一次，下载进度不单独上报。
 - 事件含义：统计 dsh 工作台的实际使用情况。`result=success` 的当日去重安装数除以当日任意事件的去重安装数即工作台日渗透率；该口径只统计用户主动打开工作台，不统计主 Agent 通过 `dsh_code_task` 的自动委托。
 - 业务参数：
   - `actionType`：string，动作类型。当前取值为 `open_workbench`。
   - `source`：string，触发来源。当前固定为 `settings_experimental`。
-  - `phaseBefore`：string，点击时的引擎状态。当前取值包括 `not_installed`、`stopped`、`installing`、`starting`、`ready`、`failed`，用于区分首次安装打开和热打开。
+  - `phaseBefore`：string，点击时的引擎状态，点击后通过 `dsh:getState` 即时读取（读取失败时退回卡片轮询到的状态）。当前取值包括 `not_installed`、`stopped`、`installing`、`starting`、`ready`、`failed`，用于区分首次安装打开和热打开。
   - `result`：string，动作结果。当前取值为 `success` 或 `failed`。
-  - `errorCode`：string，失败分类；仅失败时发送。取值来自引擎状态机的 `DshEngineErrorCode`（`runtime_missing`、`runtime_invalid`、`install_failed`、`spawn_failed`、`ready_timeout`、`crashed_early`、`plugin_load_failed`），另有 `not_enabled`（功能未开启时被调用）和 `unknown`（引擎状态未携带本次失败的分类）。
+  - `errorCode`：string，失败分类；仅失败时发送。失败后 Renderer 通过 `dsh:getState` 读取引擎状态，仅当状态处于 `failed` / `not_installed` 终态时采用其 `DshEngineErrorCode`（`runtime_missing`、`runtime_invalid`、`install_failed`、`spawn_failed`、`ready_timeout`、`crashed_early`、`plugin_load_failed`）；主进程以"功能未开启"拒绝时为 `not_enabled`；其余情况为 `unknown`。
   - `errorDetail`：string，脱敏后的错误摘要；仅失败且存在错误对象时发送。用于区分 `install_failed` 背后的具体原因（校验和不匹配、HTTP 状态码、tar 不可用、解包不完整等）。
-- 错误摘要脱敏规则（`sanitizeDshErrorDetail`）：
-  - 当前用户 home 目录替换为 `~`，同时识别正斜杠和反斜杠写法，保留其后的相对路径便于定位。
+- 错误摘要脱敏规则（`src/renderer/services/dshAnalytics.ts` 的 `sanitizeDshErrorDetail`）：
+  - 去掉 Electron IPC 包装前缀 `Error invoking remote method 'dsh:openWorkbench': `。
+  - 按平台惯例识别 home 目录（`/Users/<name>`、`/home/<name>`、`<盘符>:\Users\<name>`，用户名允许包含空格，正反斜杠均识别）并替换为 `~`，保留其后的相对路径便于定位。
   - 其他绝对路径（两段以上的 POSIX 路径、带盘符的 Windows 路径）替换为 `<path>`。
   - URL 去掉 query 和 fragment，只保留 origin 和 path。
   - 连续空白折叠为单个空格，超过 200 字符截断并以 `…` 结尾。
-  - 引擎启动失败时主进程只把子进程日志尾巴写入本地日志，`errorDetail` 不包含子进程输出。
+  - 引擎启动失败时主进程只把子进程日志尾巴写入本地日志，IPC 错误信息中不含子进程输出，因此 `errorDetail` 也不包含。
+- 发送与容错口径：
+  - 事件由 Renderer 通过 `reportYdAnalyzer()` 发送，与开关事件相同，走 `api:fetch` 链路，本地主日志中只有 `[Renderer][LogReporter]` 的 debug 行可用于核对。
+  - 采用 fire-and-forget，上报失败不影响工作台打开流程或错误提示展示。
 - 隐私边界：
   - 该事件是本文"不上传错误详情"约定的明确例外：只上传经上述规则脱敏和截断后的错误摘要，不上传完整文件路径、完整 URL、子进程日志、provider 配置、API Key 或工作台 URL。
   - 不上传工作台内的会话内容、prompt 或文件内容。
@@ -1138,7 +1143,7 @@ export const LogReporterActionPrefix = {
 
 日志请求失败时只记录警告并返回 `false`，不会向调用方抛出异常，也不会阻断原业务流程。主进程请求设置 10 秒超时、20 个并发上限且不重试，避免网络长期无响应或 IM 短时高流量时积累未完成请求。
 
-Renderer 调试日志只记录事件 `action` 和请求结果，不记录完整请求地址或事件参数。主进程的通用 API 请求日志会移除 URL query 和 fragment 后再写入本地日志，避免 `log_Usid` 和事件参数进入本地日志文件。
+Renderer 调试日志只记录事件 `action` 和请求结果，不记录完整请求地址或事件参数。主进程的通用 `api:fetch` 请求日志对日志服务地址（`isAnalyticsEndpointUrl()`）不再记录请求和响应行，避免每个事件在本地主日志中额外产生流水；其他请求仍会在移除 URL query 和 fragment 后写入本地日志，`log_Usid` 和事件参数不会进入本地日志文件。网络异常仍按原有 `[api:fetch] … -> ERROR` 记录，便于排查。
 
 主进程事件不经过 Renderer 或 `api:fetch` IPC，流程如下：
 

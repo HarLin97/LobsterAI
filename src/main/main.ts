@@ -417,7 +417,7 @@ import {
 } from './libs/openclawTokenProxy';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
-import { sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
+import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { packageNodeServiceDeployment } from './libs/shareDeployment/nodeServiceDeploymentPackager';
 import {
   analyzeNodeServiceProjectDirectory,
@@ -8380,9 +8380,6 @@ if (!gotTheLock) {
     },
     getWorkbenchTitle: () => t('dshWorkbenchTitle'),
     syncOpenClawConfig,
-    reportEvent: params => {
-      void getMainLogReporter().report(params);
-    },
   });
 
 
@@ -12399,9 +12396,14 @@ if (!gotTheLock) {
       },
     ) => {
       const sanitizedUrl = sanitizeUrlForLog(options.url);
-      console.log(
-        `[api:fetch] ${options.method} ${sanitizedUrl}, headers: ${serializeForLog(options.headers)}, body: ${options.body}`,
-      );
+      // Analytics beacons are traced by the reporter itself ([LogReporter]
+      // lines); logging them here again would only add noise.
+      const logTraffic = !isAnalyticsEndpointUrl(options.url);
+      if (logTraffic) {
+        console.log(
+          `[api:fetch] ${options.method} ${sanitizedUrl}, headers: ${serializeForLog(options.headers)}, body: ${options.body}`,
+        );
+      }
 
       const doFetch = async (headers: Record<string, string>) => {
         const response = await session.defaultSession.fetch(options.url, {
@@ -12432,10 +12434,12 @@ if (!gotTheLock) {
 
       try {
         let result = await doFetch(options.headers);
-        console.log(
-          `[api:fetch] ${options.method} ${sanitizedUrl} -> ${result.status} ${result.statusText}`,
-          typeof result.data === 'object' ? JSON.stringify(result.data) : result.data,
-        );
+        if (logTraffic) {
+          console.log(
+            `[api:fetch] ${options.method} ${sanitizedUrl} -> ${result.status} ${result.statusText}`,
+            typeof result.data === 'object' ? JSON.stringify(result.data) : result.data,
+          );
+        }
 
         // Auto-retry once for Copilot 401/403
         if (

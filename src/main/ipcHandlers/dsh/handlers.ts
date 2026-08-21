@@ -24,15 +24,7 @@ import {
   resolveSharedDataHome,
   writeWriterLock,
 } from '../../libs/dshSharedHome';
-import type { MainLogEventParams } from '../../libs/mainLogReporter';
 import type { ResolvedMcpServer } from '../../libs/openclawConfigSync';
-import {
-  buildDshEnabledChangedEvent,
-  buildDshOpenWorkbenchEvent,
-  DshAnalyticsErrorCode,
-  DshAnalyticsResult,
-  resolveDshEngineErrorCode,
-} from './analytics';
 
 export interface DshStoreLike {
   get<T>(key: string): T | undefined;
@@ -47,8 +39,6 @@ export interface DshHandlerDeps {
   getDefaultCwd: () => string;
   getWorkbenchTitle: () => string;
   syncOpenClawConfig: (options: { reason: string; restartGatewayIfRunning?: boolean }) => Promise<unknown>;
-  /** Fire-and-forget usage analytics; must never throw into the caller. */
-  reportEvent: (params: MainLogEventParams) => void;
 }
 
 let moduleDeps: DshHandlerDeps | null = null;
@@ -84,16 +74,6 @@ function readDshFeatureConfig(store: DshStoreLike): DshFeatureConfig {
 
 export function isDshFeatureEnabled(store: DshStoreLike): boolean {
   return readDshFeatureConfig(store).enabled;
-}
-
-// Analytics is best-effort: a reporter failure must not fail the IPC call.
-function reportDshEvent(params: MainLogEventParams | null): void {
-  if (!params || !moduleDeps) return;
-  try {
-    moduleDeps.reportEvent(params);
-  } catch (error) {
-    console.warn('[DSH] Failed to report a usage analytics event', error);
-  }
 }
 
 function computeManagedSettings(): DshManagedSettings | null {
@@ -221,9 +201,7 @@ export function registerDshHandlers(deps: DshHandlerDeps): void {
   ipcMain.handle(DshIpcChannel.SetEnabled, async (_event, enabled: unknown) => {
     const store = deps.getStore();
     const next = enabled === true;
-    const previous = isDshFeatureEnabled(store);
     store.set(DSH_CONFIG_STORE_KEY, { enabled: next } satisfies DshFeatureConfig);
-    reportDshEvent(buildDshEnabledChangedEvent(previous, next));
     if (!next) {
       await stopDshFeatureRuntimes();
     }
@@ -243,32 +221,11 @@ export function registerDshHandlers(deps: DshHandlerDeps): void {
   });
 
   ipcMain.handle(DshIpcChannel.OpenWorkbench, async () => {
-    const manager = getDshEngineManager();
-    // Captured before anything runs so a failure can be read against the
-    // state the user clicked from (first install vs. warm start).
-    const phaseBefore = manager.getState().phase;
     if (!isDshFeatureEnabled(deps.getStore())) {
-      reportDshEvent(buildDshOpenWorkbenchEvent({
-        phaseBefore,
-        result: DshAnalyticsResult.Failed,
-        errorCode: DshAnalyticsErrorCode.NotEnabled,
-      }));
       throw new Error('DeepSeek Harness is not enabled');
     }
-    try {
-      const url = await ensureDshEngineReady();
-      openOrFocusWorkbench(url, deps.getWorkbenchTitle());
-      reportDshEvent(buildDshOpenWorkbenchEvent({ phaseBefore, result: DshAnalyticsResult.Success }));
-      return { url };
-    } catch (error) {
-      reportDshEvent(buildDshOpenWorkbenchEvent({
-        phaseBefore,
-        result: DshAnalyticsResult.Failed,
-        errorCode: resolveDshEngineErrorCode(manager.getState()),
-        error,
-        homeDir: os.homedir(),
-      }));
-      throw error;
-    }
+    const url = await ensureDshEngineReady();
+    openOrFocusWorkbench(url, deps.getWorkbenchTitle());
+    return { url };
   });
 }
