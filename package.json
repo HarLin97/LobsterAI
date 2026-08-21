@@ -67,23 +67,23 @@
     ]
   },
   "dsh": {
-    "version": "0.1.0-rc.7",
+    "version": "0.1.1-rc.1",
     "npm": "@deepseek-ai/dsh",
     "runtimes": {
       "mac-arm64": {
-        "url": "https://ydhardwarecommon.nosdn.127.net/f98e65727ad1b86b8ae33539237d6daf.gz",
-        "sha256": "15c7aa70d096b29851be5a94acbbdfed8f1bfff9b65056deec52d54b637b446e",
-        "size": 35985994
+        "url": "https://ydschool-video.nosdn.127.net/1787305922372dsh-runtime-0.1.1-rc.1-mac-arm64.tar.gz",
+        "sha256": "90e2b7dcb0d20a9ddc322ce4a681761676ca67194dbfdf6ccfac7409fca3a3aa",
+        "size": 32011089
       },
       "mac-x64": {
-        "url": "https://ydhardwarecommon.nosdn.127.net/162f955ac7e01d72440737dc0dd0c35f.gz",
-        "sha256": "9b1845d1dff57e4aa15d3b9b442ee53eeac3561fe609bd48dee23a4988c484e1",
-        "size": 33261196
+        "url": "https://ydschool-video.nosdn.127.net/1787307267457dsh-runtime-0.1.1-rc.1-mac-x64.tar.gz",
+        "sha256": "89869b9e323bb14e2c31c533e93d7220b79631778651ba674e2fd53999e18874",
+        "size": 29270091
       },
       "win-x64": {
-        "url": "https://ydhardwarecommon.nosdn.127.net/f4f729fb3a1ef245d54dc4bc20d225f7.gz",
-        "sha256": "19fa2a2b1dcbf63aa66864fcbef78481a0ab878d98e7b12a29b613c426755155",
-        "size": 32136332
+        "url": "https://ydschool-video.nosdn.127.net/1787307929467dsh-runtime-0.1.1-rc.1-win-x64.tar.gz",
+        "sha256": "492d9f7b4827def4cfee7be4ee8ee53e4c5aadcd4d90d63359b363408b297d6c",
+        "size": 28402933
       }
     }
   },
